@@ -124,7 +124,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 #livecard #liveerr,#livecard #livewhy{min-height:0;margin-top:8px}#livecard #liveerr:empty,#livecard #livewhy:empty{display:none}
 .livesrv{font-size:12px;margin-top:3px}.liveup{margin-left:16px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.liveup small{font-size:13px;font-weight:400;color:var(--muted)}
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
-.autolbl{display:block;margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
+.autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}.helpbtn{width:22px;height:22px;padding:0;border-radius:50%;font-size:13px;line-height:1;background:transparent;color:var(--muted);border:1px solid var(--line);cursor:pointer;vertical-align:middle}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
 </style>
@@ -139,7 +139,8 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <div class="row" style="justify-content:flex-start"><span class="big" id="livestate">–</span><span id="liveup" class="liveup" hidden title="Gesamter Upload über die gewählten Netze"></span></div>
       <div class="actions"><button id="live_go" type="button" class="warnbtn">Live gehen</button><button id="live_stop" type="button" class="sec" hidden>Live beenden</button> <button type="button" class="sec" id="sm_btn2" title="Blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird">Sendemodus: aus</button></div>
       <div id="livewhy" class="ph"></div>
-      <label class="autolbl" title="Gilt nur nach dem Hochfahren der Box, einmal pro Start. Die Box wartet bis zu 10 Minuten auf eine sendende Kamera. Es werden Mobilfunkdaten verbraucht."><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen<span class="unit" style="display:block;margin-left:22px">Einmal pro Start der Box, sobald eine Kamera sendet (wartet bis zu 10 Minuten). Verbraucht Mobilfunkdaten.</span></label>
+      <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
+      <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
       <div id="autostatus" class="ph" hidden></div>
       <div id="livepending" class="pending" hidden><span id="livepending_t"></span> <button type="button" id="live_restart" class="warnbtn">Stream neu starten</button><button type="button" id="live_ignore" class="sec">Später</button></div>
       <div id="liveerr" class="err"></div>
@@ -887,6 +888,7 @@ async function restartNow(){
   try{ await srtlaCall("POST","/api/send",{action:"restart",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
   sendLoad();
 }
+$("auto_help_btn").addEventListener("click",()=>{ const h=$("auto_help"); h.hidden=!h.hidden; $("auto_help_btn").setAttribute("aria-expanded",String(!h.hidden)); });
 $("auto_on").addEventListener("change",async e=>{
   try{ await srtlaCall("POST","/api/autostart",{enabled:e.target.checked}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; e.target.checked=!e.target.checked; }
   sendLoad();
