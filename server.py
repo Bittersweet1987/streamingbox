@@ -706,8 +706,7 @@ class PipelineStore:
                  "queue max-size-time=500000000 max-size-buffers=4 leaky=downstream !\n")
         else:
             v = (f"demux.video !\n{q} !\nidentity name=v_delay signal-handoffs=TRUE ! h264parse ! mppvideodec !\n"
-                 "videorate ! video/x-raw,framerate=30/1,format=NV12 !\n"
-                 "textoverlay text='' valignment=top halignment=right font-desc=\"Monospace, 5\" name=overlay ! queue !\n")
+                 "videorate ! video/x-raw,framerate=30/1,format=NV12 ! queue !\n")
         v += ("mpph265enc zero-copy-pkt=0 qp-max=51 gop=60 name=venc_bps !\n"
               f"h265parse config-interval=-1 ! {q} ! mux.\n")
         out.append(v)

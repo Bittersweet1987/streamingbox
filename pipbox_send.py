@@ -148,8 +148,10 @@ class Failover:
         self.layout = tuple(layout)
         self.up, self.down = {}, {}
 
-    def step(self, now, live):
-        """live: Menge der sendenden Kameras oder None (unbekannt). Gibt die neue Anordnung zurück, wenn sie sich ändert."""
+    def step(self, now, live, gone=False):
+        """live: Menge der sendenden Kameras oder None (unbekannt). Gibt die neue Anordnung zurück, wenn sie sich ändert.
+        gone=True: der Encoder ist gerade beendet worden; eine genutzte Kamera, die nicht sendet, fällt dann sofort weg
+        (ohne die Wartezeit DOWN_S), denn mit unveränderter Anordnung liefe der Encoder ins Leere."""
         if live is None:
             return None
         for k in self.keys:
@@ -163,7 +165,7 @@ class Failover:
         use = set()
         for k in self.keys:
             if k in self.layout:
-                if k in live or now - self.down[k] < DOWN_S:
+                if k in live or (not gone and now - self.down[k] < DOWN_S):
                     use.add(k)
             elif k in live and now - self.up[k] >= need:
                 use.add(k)
@@ -398,6 +400,23 @@ class Sender:
             self.state = "running"
         print(f"send: umgeschaltet auf {len(used)} Kamera(s): {', '.join(used)}", flush=True)
 
+    def encoder_died(self, env):
+        """belacoder ist beendet. Fehlt eine genutzte Kamera (der RTMP-Server hat sie entfernt), geht es gleich ohne sie
+        weiter, statt mit der alten Anordnung noch zweimal ins Leere zu starten. True, wenn umgeschaltet wurde."""
+        if self.fo is None:
+            return False
+        try:
+            new = self.fo.step(time.time(), live_keys(), gone=True)
+            if new is None:
+                return False
+            self.switch(new, env)
+        except Exception as e:           # die Umschaltung darf die Übertragung nie beenden
+            print(f"send: Sofort-Umschaltung nicht möglich ({type(e).__name__})", flush=True)
+            return False
+        with self.lock:
+            self.state = "running"
+        return True
+
     def run(self):
         env = dict(os.environ, GST_PLUGIN_PATH=PLUGIN_DIR)
         senv = None
@@ -434,6 +453,8 @@ class Sender:
                         n = self.restarts[name]
                         self.state = "restarting"
                     print(f"send: {name} beendet (Code {p.returncode}), Neustart {n}", flush=True)
+                    if name == "belacoder" and self.encoder_died(env):
+                        continue
                     if self.stop_ev.wait(2):
                         break
                     self.spawn(name, self.args(name), env=env if name == "belacoder" else self.senv)

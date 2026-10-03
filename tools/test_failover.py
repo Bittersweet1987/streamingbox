@@ -114,6 +114,29 @@ class FailoverSteps(unittest.TestCase):
         self.assertEqual(sw[0], (15, ()))
         self.assertEqual(sw[1], (105, ("cam-q",)))
 
+    def test_encoder_exit_drops_missing_camera_at_once(self):
+        fo = ps.Failover(CFG, ps.effective_cfg(CFG, ALL)[1])
+        self.assertIsNone(fo.step(0, ALL))
+        # Kamera fällt weg, der Encoder endet gleich danach: ohne Wartezeit weiter mit den übrigen
+        self.assertEqual(fo.step(2, ALL - {"cam-p"}, gone=True), ("cam-m", "cam-q"))
+        # kommt später erst nach 60 s stabilem Signal zurück
+        self.assertIsNone(fo.step(3, ALL))
+        self.assertIsNone(fo.step(62, ALL))
+        self.assertEqual(fo.step(63, ALL), ("cam-m", "cam-p", "cam-q"))
+
+    def test_encoder_exit_with_all_cameras_present_changes_nothing(self):
+        fo = ps.Failover(CFG, ps.effective_cfg(CFG, ALL)[1])
+        self.assertIsNone(fo.step(0, ALL))
+        self.assertIsNone(fo.step(1, ALL, gone=True))
+
+    def test_encoder_exit_with_unknown_statistics_changes_nothing(self):
+        fo = ps.Failover(CFG, ps.effective_cfg(CFG, ALL)[1])
+        self.assertIsNone(fo.step(1, None, gone=True))
+
+    def test_encoder_exit_without_any_camera_waits(self):
+        fo = ps.Failover(CFG, ps.effective_cfg(CFG, ALL)[1])
+        self.assertEqual(fo.step(1, set(), gone=True), ())
+
     def test_unknown_statistics_change_nothing(self):
         fo = ps.Failover(CFG, ps.effective_cfg(CFG, ALL)[1])
         self.assertIsNone(fo.step(0, ALL))
@@ -199,6 +222,41 @@ class SenderSwitch(unittest.TestCase):
             import json
             st = json.load(open(os.path.join(d, "status.json")))
             self.assertTrue(st["failover"]["waiting"] and st["failover"]["degraded"])
+
+class SenderEncoderDied(unittest.TestCase):
+    def make(self):
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"],
+                      {"cfg": CFG, "layout": ("cam-m", "cam-p", "cam-q"), "auto": True})
+        s.calls = []
+        s.stop_proc = lambda n: s.calls.append(("stop", n)) or s.procs.__setitem__(n, None)
+        s.spawn = lambda n, a, env=None: s.calls.append(("spawn", n))
+        return s
+
+    def test_missing_camera_switches_without_waiting(self):
+        s = self.make()
+        with mock.patch.object(ps, "write_pipeline", lambda cfg: "pipeline-text"), \
+                mock.patch.object(ps, "live_keys", lambda: {"cam-m", "cam-q"}):
+            self.assertTrue(s.encoder_died({}))
+        self.assertEqual(s.calls, [("stop", "belacoder"), ("spawn", "belacoder")])
+        self.assertEqual((s.layout, s.state), (("cam-m", "cam-q"), "running"))
+
+    def test_all_cameras_present_leaves_restart_to_the_loop(self):
+        s = self.make()
+        with mock.patch.object(ps, "live_keys", lambda: ALL):
+            self.assertFalse(s.encoder_died({}))
+        self.assertEqual(s.calls, [])
+
+    def test_unreadable_statistics_leave_restart_to_the_loop(self):
+        s = self.make()
+        with mock.patch.object(ps, "live_keys", lambda: None):
+            self.assertFalse(s.encoder_died({}))
+        self.assertEqual(s.calls, [])
+
+    def test_no_failover_no_switch(self):
+        s = self.make()
+        s.fo = None
+        self.assertFalse(s.encoder_died({}))
+
 
 class LiveUplinks(unittest.TestCase):
     def setUp(self):

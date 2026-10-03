@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.9.18 (Beta)
+- Behoben: **Kurze Aussetzer einer Kamera warfen sie aus dem Bild und der Encoder startete mehrfach neu.** Der RTMP-Server der BELABOX entfernt eine
+  Kamera, die 4 s lang nichts schickt (`drop_idle_publisher 4s`); DJI-Kameras setzen im WLAN gelegentlich 4 bis 10 s aus (gemessen: 15 Rauswürfe in
+  rund 90 Minuten bei einer Kamera). Jedes Mal startete der Encoder zweimal vergeblich neu, bevor die Kamera aus dem Bild genommen wurde, rund 10 s ohne Bild.
+  Neu: `install.sh` setzt die Grenze auf 15 s. Das ist die einzige Änderung an einer BELABOX-Datei (`99-belabox-rtmp.conf`); Sicherung als
+  `99-belabox-rtmp.conf.vor-pipbox`, `install.sh uninstall` stellt sie wieder her. Beim ersten Einspielen lädt nginx neu und die Kameras
+  verbinden sich kurz neu. Nach einem Update des BELABOX-Pakets `belabox-rtmp-server` kann die Datei wieder auf 4 s stehen; dann `install.sh` erneut ausführen.
+  Fehlt eine Kamera wirklich, schaltet die Box nach dem Ende des Encoders sofort um (vorher erst nach 5 s und zwei Fehlstarts).
+- Behoben: Mit nur einer sendenden Kamera blendete der Encoder seine Regelwerte (`b:`, `rtt:`, `bs:`) oben rechts ins Bild ein. Die Einblendung ist entfernt.
+- Tests: Sofort-Umschaltung nach Encoder-Ende (fehlende Kamera, alle da, Statistik unlesbar, keine Kamera, Rückkehr nach 60 s).
+
 ## 0.9.17 (Beta)
 - Doku: Hinweis zum Empfänger in README und Änderungsliste gekürzt. Keine Änderung am Programm.
 
