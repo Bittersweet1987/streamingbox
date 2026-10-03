@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.17 (Beta)
+- Doku: Hinweis zum Empfänger in README und Änderungsliste gekürzt. Keine Änderung am Programm.
+
 ## 0.9.16 (Beta)
 - Geändert: Der Hilfetext zum Schalter "Automatisch live gehen" steht nicht mehr dauerhaft in der Live-Karte, sondern erscheint nach einem Tipp auf das kleine "?"
   neben dem Schalter. Die Zeile bleibt so schlank.
@@ -20,11 +23,8 @@
      `ccce9ca`): 30 ms Mindestabstand bei der RTT-Schwelle, kleinere Senkungsschritte bei niedriger Bitrate, mehr Toleranz beim Erhöhen. Die
      Schnellbremse bei echtem Stau bleibt unverändert. `install.sh` baut ihn nach `/opt/pipbox/bin/belacoder`; die Sendekette nimmt ihn, wenn er
      da ist, sonst das Original aus dem BELABOX-Paket (schlägt der Bau fehl, ändert sich nichts).
-  2. **Empfänger:** Wartet der SRT-Empfänger zu lange mit der Verlustmeldung (Einstellung `SRTO_LOSSMAXTTL`, bei einem eigenen Empfänger zum
-     Beispiel 600 Pakete), bleibt die Bestätigung 3 bis 5 Sekunden aus, der Sendepuffer läuft voll und der Encoder senkt die Bitrate; bei niedriger
-     Bitrate dauert die Wartezeit länger, es entsteht eine Falle. Empfehlung für den Empfänger: Wartegrenze klein halten (BELABOX empfiehlt 10 bis 50;
-     gemessen gut mit 150 bei diesem Sender). Gemessen mit Empfänger 150 plus Patch: Mittel 7,8 Mbit/s über 13 Minuten, nie unter 3, keine
-     Stillstände; mit Empfänger 600 und Original-Regler: 13 Stillstand-Sekunden in 4 Minuten und Bitrate lange bei 1 bis 3 Mbit/s.
+  2. **Empfänger:** Auch die Einstellungen des SRT-Empfängers (Wartezeit bei Verlustmeldungen) beeinflussen die Bitrate; zu große Werte lassen die
+     Bestätigungen ausbleiben, und der Encoder senkt die Bitrate.
 - Doku: NOTICE (belacoder-Patch, GPL-3.0), README (Empfänger-Hinweis).
 
 ## 0.9.13 (Beta)
