@@ -288,7 +288,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="ph" style="margin-top:0">Wie das gesendete Bild aufgebaut ist: Hauptbild und bis zu drei kleine Bilder (Bild-in-Bild) mit Position, Größe und Verzögerung. Die kleinen Bilder lassen sich unten in der Vorschau verschieben. Ohne gespeicherten Bildaufbau kann nicht gesendet werden.</div>
     <div class="add">
       <label class="muted">Art<select id="p_type" style="width:100%"><option value="single">Eine Kamera</option><option value="pip">Bild-in-Bild</option></select></label>
-      <label class="muted piponly">Größe der kleinen Bilder (% der Breite)<input id="p_size" type="number" min="15" max="40" step="1" style="width:100%"></label>
       <label class="muted piponly">Ton von<select id="p_audio" style="width:100%"><option value="main">Hauptbild</option><option value="pip">Kleinem Bild 1</option><option value="pip2">Kleinem Bild 2</option><option value="pip3">Kleinem Bild 3</option></select></label>
     </div>
     <div class="camcols">
@@ -303,6 +302,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 1</h3>
         <label class="muted">Kamera<select id="p_pip" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner" style="width:100%"></select></label>
+        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size1" type="number" min="15" max="40" step="1" style="width:100%"></label>
         <label class="muted dl" title="Zusätzliche Wartezeit nur für das erste kleine Bild."><span>Verzögerung: <b id="v_delay1">0</b> ms</span>
           <span class="dlrow"><input id="p_delay1" type="range" min="0" max="3000" step="10"><input id="n_delay1" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="1"></details>
@@ -311,6 +311,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 2 <span class="opt">(optional)</span></h3>
         <label class="muted">Kamera<select id="p_pip2" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner2" style="width:100%"></select></label>
+        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size2" type="number" min="15" max="40" step="1" style="width:100%"></label>
         <label class="muted dl" id="dl2" title="Zusätzliche Wartezeit nur für das zweite kleine Bild."><span>Verzögerung: <b id="v_delay2">0</b> ms</span>
           <span class="dlrow"><input id="p_delay2" type="range" min="0" max="3000" step="10"><input id="n_delay2" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="2"></details>
@@ -319,6 +320,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 3 <span class="opt">(optional)</span></h3>
         <label class="muted">Kamera<select id="p_pip3" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner3" style="width:100%"></select></label>
+        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size3" type="number" min="15" max="40" step="1" style="width:100%"></label>
         <label class="muted dl" id="dl3" title="Zusätzliche Wartezeit nur für das dritte kleine Bild."><span>Verzögerung: <b id="v_delay3">0</b> ms</span>
           <span class="dlrow"><input id="p_delay3" type="range" min="0" max="3000" step="10"><input id="n_delay3" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="3"></details>
@@ -376,9 +378,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </div>
     <label class="muted" style="display:block;margin:8px 0"><input type="checkbox" id="w_hidden"> verstecktes Netz (Name wird nicht ausgesendet)</label>
     <div class="actions"><button id="w_scan" type="button" class="sec">Netze suchen</button> <button id="w_connect" type="button">Verbinden</button> <button id="w_disc" type="button" class="sec">Trennen</button></div>
+    <div id="wifimsg" class="ph" style="margin:8px 0" role="status"></div>
     <div id="wifinets" class="ph"></div>
     <div id="wifisaved" class="ph"></div>
-    <div id="wifimsg" class="ph"></div>
   </div></div>
     <div class="sech">Bluetooth (für DJI-Kameras)</div>
     <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
@@ -918,7 +920,7 @@ async function wifiLoad(){
   wifiSig=sig;
   const nets=(d.scan&&d.scan.nets)||[];
   const bars=p=>"▂▄▆█".split("").map((c,i)=>`<span style="color:${p>=(i+1)*25-12?"var(--ok)":"var(--line)"}">${c}</span>`).join("");
-  $("wifinets").innerHTML=nets.length?`<div class="muted" style="margin-bottom:4px">Gefundene Netze – Zeile anklicken zum Übernehmen:</div><div class="wlist">`+nets.map(n=>
+  $("wifinets").innerHTML=nets.length?`<div class="muted" style="margin-bottom:4px">Gefundene Netze von <b>${esc((d.scan&&d.scan.iface)||"")}</b>${(d.scan&&d.scan.iface&&$("w_if").value&&d.scan.iface!==$("w_if").value)?` (nicht von ${esc($("w_if").value)}: dafür „Netze suchen“ drücken)`:""} – Zeile anklicken zum Übernehmen:</div><div class="wlist">`+nets.map(n=>
     `<a href="#" class="wrow${n.in_use?" cur":""}" data-ssid="${esc(n.ssid)}"><span class="wname">${esc(n.ssid)}</span><span class="wsig">${bars(n.signal)} ${n.signal} %</span><span class="wsec">${n.security&&n.security!=="offen"?"🔒 "+esc(n.security):"offen"}${(d.saved||[]).includes(n.ssid)?" · gespeichert":""}</span>${n.in_use?'<span class="wuse">verbunden</span>':""}</a>`).join("")+"</div>":"";
   // Ein gespeichertes Netz lässt sich hier anklicken (übernimmt den Namen) und mit leerem Passwort verbinden: es gilt dann das gespeicherte Passwort
   $("wifisaved").innerHTML=(d.saved||[]).length?"Gespeicherte Netze (Name anklicken, Passwort leer lassen und „Verbinden“): "+d.saved.map(s=>`<a href="#" data-ssid="${esc(s)}">${esc(s)}</a> <a href="#" data-forget="${esc(s)}" class="muted">vergessen</a>`).join(" · "):"";
@@ -965,7 +967,7 @@ const FREE_ID="5";
 let posFree={1:{x:500,y:500},2:{x:500,y:500},3:{x:500,y:500}};
 // ---- Aussehen der kleinen Bilder: Deckkraft, Beschnitt, Rahmen (je Stelle 1 bis 3). Beschnitt in Pixeln eines Bildes von 1920 x 1080 (Bezugsgröße
 // jeder Kamera), Rahmendicke und Rundung in Pixeln eines 1920 Pixel breiten Hauptbildes; der Rahmen liegt innen auf dem Bild.
-const STYLE_DEF=()=>({visible:true,opacity:100,crop:{l:0,r:0,t:0,b:0},border:{enabled:false,width:6,color:"#ffffff",opacity:100,radius:12}});
+const STYLE_DEF=()=>({visible:true,opacity:100,crop:{l:0,r:0,t:0,b:0},radius:0,border:{enabled:false,width:6,color:"#ffffff",opacity:100}});
 const CROP_W=1920, CROP_H=1080, CROP_KEEP=32;
 let pipStyles={1:STYLE_DEF(),2:STYLE_DEF(),3:STYLE_DEF()};
 const styleOf=k=>pipStyles[k]||(pipStyles[k]=STYLE_DEF());
@@ -975,26 +977,26 @@ function styleBlockHtml(){
   const num=(f,l,min,max,step)=>`<label class="muted">${l}<input type="number" data-f="${f}" min="${min}" max="${max}" step="${step||1}"></label>`;
   return `<summary>Aussehen <span class="pvs-sum"></span></summary>
     <label class="muted" style="display:block;margin-top:6px"><input type="checkbox" data-f="vis"> Bild einblenden</label>
-    <label class="muted dl"><span>Deckkraft: <b data-o="op">100</b> %</span><span class="dlrow"><input type="range" data-f="op" min="0" max="100" step="1"></span></label>
+    <div class="sech">Ecken</div>
+    <div class="pvs-grid">${num("rd","Eckenrundung (Pixel)",0,60)}</div>
     <div class="sech">Beschneiden</div>
     <div class="pvs-info muted">Pixel, die links, rechts, oben und unten abgeschnitten werden, wie bei einem Bild von 1920 × 1080.</div>
     <div class="pvs-grid">${num("cl","Links",0,1888,2)}${num("cr","Rechts",0,1888,2)}${num("ct","Oben",0,1048,2)}${num("cb","Unten",0,1048,2)}</div>
     <div class="pvs-info muted" data-o="cropinfo"></div>
     <div class="sech">Rahmen</div>
     <label class="muted"><input type="checkbox" data-f="be"> Rahmen um dieses Bild</label>
-    <div class="pvs-grid" data-o="bopts">${num("bw","Dicke (Pixel)",1,40)}<label class="muted">Farbe<input type="color" data-f="bc"></label>${num("bo","Deckkraft (%)",10,100)}${num("br","Eckenrundung (Pixel)",0,60)}</div>`;
+    <div class="pvs-grid" data-o="bopts">${num("bw","Dicke (Pixel)",1,40)}<label class="muted">Farbe<input type="color" data-f="bc"></label>${num("bo","Deckkraft (%)",10,100)}</div>`;
 }
 function styleFill(k,force){
   const st=styleOf(k), box=document.querySelector(`.pvs[data-k="${k}"]`); if(!box) return;
   const put=(f,v)=>{ const e=box.querySelector(`[data-f="${f}"]`); if(!e||(!force&&document.activeElement===e)) return; if(e.type==="checkbox") e.checked=!!v; else e.value=v; };
-  put("vis",st.visible); put("op",st.opacity); put("cl",st.crop.l); put("cr",st.crop.r); put("ct",st.crop.t); put("cb",st.crop.b);
-  put("be",st.border.enabled); put("bw",st.border.width); put("bc",st.border.color); put("bo",st.border.opacity); put("br",st.border.radius);
-  box.querySelector('[data-o="op"]').textContent=st.opacity;
+  put("vis",st.visible); put("rd",st.radius); put("cl",st.crop.l); put("cr",st.crop.r); put("ct",st.crop.t); put("cb",st.crop.b);
+  put("be",st.border.enabled); put("bw",st.border.width); put("bc",st.border.color); put("bo",st.border.opacity);
   const c=st.crop, cropped=c.l||c.r||c.t||c.b;
   box.querySelector('[data-o="cropinfo"]').textContent=cropped?`Bild nach dem Beschneiden: ${CROP_W-c.l-c.r} × ${CROP_H-c.t-c.b} Pixel. Der Maßstab bleibt, es wird nur abgeschnitten.`:"Nicht beschnitten.";
   box.querySelector('[data-o="bopts"]').style.opacity=st.border.enabled?1:.5;
   box.querySelectorAll('[data-o="bopts"] input').forEach(e=>e.disabled=!st.border.enabled);
-  const parts=[st.visible?"":"ausgeblendet",st.visible&&st.opacity<100?st.opacity+" %":"",cropped?"beschnitten":"",st.border.enabled?"Rahmen "+st.border.width+" px":""].filter(Boolean);
+  const parts=[st.visible?"":"ausgeblendet",cropped?"beschnitten":"",st.radius?"Ecken "+st.radius+" px":"",st.border.enabled?"Rahmen "+st.border.width+" px":""].filter(Boolean);
   box.querySelector(".pvs-sum").textContent=parts.length?"· "+parts.join(", "):"· Standard";
 }
 document.querySelectorAll(".pvs").forEach(box=>{
@@ -1003,7 +1005,7 @@ document.querySelectorAll(".pvs").forEach(box=>{
     const el=ev.target, f=el.dataset&&el.dataset.f; if(!f) return;
     const st=styleOf(k);
     if(f==="vis") st.visible=el.checked;
-    else if(f==="op") st.opacity=clampN(el.value,0,100,100);
+    else if(f==="rd") st.radius=clampN(el.value,0,60,0);
     else if(f.length===2&&f[0]==="c"){               // Beschnitt: gerade Werte; links plus rechts und oben plus unten lassen mindestens 32 Pixel stehen
       const key=f[1], opp={l:"r",r:"l",t:"b",b:"t"}[key], total=(key==="l"||key==="r")?CROP_W:CROP_H;
       st.crop[key]=Math.floor(clampN(el.value,0,total-CROP_KEEP,0)/2)*2;
@@ -1013,7 +1015,6 @@ document.querySelectorAll(".pvs").forEach(box=>{
     else if(f==="bw") st.border.width=clampN(el.value,1,40,6);
     else if(f==="bc") st.border.color=/^#[0-9a-fA-F]{6}$/.test(el.value)?el.value.toLowerCase():"#ffffff";
     else if(f==="bo") st.border.opacity=clampN(el.value,10,100,100);
-    else if(f==="br") st.border.radius=clampN(el.value,0,60,12);
     styleFill(k,ev.type==="change"); renderPreview();
   };
   box.addEventListener("input",edit); box.addEventListener("change",edit);
@@ -1039,20 +1040,20 @@ const pipOpt=(k,sel)=>`<option value="${esc(k.key)}"${k.key===sel?" selected":""
 function renderPreview(){
   const box=$("pvbox"); if(!box) return;
   const W=box.clientWidth||520, H=Math.round(W*9/16); box.style.height=H+"px";
-  const size=Math.max(15,Math.min(40,+$("p_size").value||25));
-  const pw=W*size/100, ph=pw*9/16, m=W/60, canFree=pipCorners.length>5;
+  const m=W/60, canFree=pipCorners.length>5;
   const nm=k=>{ const x=pipCams.find(y=>y.key===k); return x?x.name:k; };
   let out='<div class="pvmain">Hauptbild: '+esc(nm($("p_main").value))+'</div>';
   [["p_pip","p_corner",1],["p_pip2","p_corner2",2],["p_pip3","p_corner3",3]].forEach(([cs,co,k])=>{
     const cam=$(cs).value; if(!cam) return;
+    const size=Math.max(15,Math.min(40,+$("p_size"+k).value||25)), pw=W*size/100, ph=pw*9/16;          // jedes kleine Bild hat seine eigene Größe
     // Ein beschnittenes Bild behält seinen Maßstab: nur der Ausschnitt (cw x ch) wird gezeichnet und danach positioniert (wie im Baustein)
     const st=styleOf(k), cr=st.crop, cw=pw*(CROP_W-cr.l-cr.r)/CROP_W, ch=ph*(CROP_H-cr.t-cr.b)/CROP_H, sc=W/1920;
-    const bw=st.border.enabled?Math.max(1,Math.round(st.border.width*sc)):0, rad=st.border.enabled?Math.min(Math.round(st.border.radius*sc),Math.min(cw,ch)/2):0;
+    const bw=st.border.enabled?Math.max(1,Math.round(st.border.width*sc)):0, rad=st.radius?Math.min(Math.round(st.radius*sc),Math.min(cw,ch)/2):0;     // die Rundung gilt für das Bild selbst, auch ohne Rahmen
     const c=+$(co).value, f=posFree[k]; let x,y;
     if(c===5){ x=f.x/1000*(W-cw); y=f.y/1000*(H-ch); }
     else if(c===4){ x=(W-cw)/2; y=H-ch-m; }
     else { x=(c&1)?W-cw-m:m; y=(c&2)?H-ch-m:m; }
-    out+=`<div class="pvpip pv${k}${st.visible?"":" off"}" data-k="${k}" data-co="${co}" style="left:${x}px;top:${y}px;width:${cw}px;height:${ch}px;opacity:${st.visible?st.opacity/100:.18};border-radius:${rad}px">`+
+    out+=`<div class="pvpip pv${k}${st.visible?"":" off"}" data-k="${k}" data-co="${co}" style="left:${x}px;top:${y}px;width:${cw}px;height:${ch}px;opacity:${st.visible?1:.18};border-radius:${rad}px">`+
       `<div class="pvin" style="left:${-pw*cr.l/CROP_W}px;top:${-ph*cr.t/CROP_H}px;width:${pw}px;height:${ph}px"></div><b>${k}</b><span>${esc(nm(cam))}${st.visible?"":" (ausgeblendet)"}</span>`+
       (bw?`<i class="pvrim" style="border:${bw}px solid ${hexRgba(st.border.color,st.border.opacity/100)};border-radius:${rad}px"></i>`:"")+`</div>`;
   });
@@ -1126,9 +1127,9 @@ async function pipeLoad(){
   if(document.activeElement.id!=="p_auto") $("p_auto").checked=c.auto_failover!==false;
   if(document.activeElement.id!=="p_swap") $("p_swap").value=String(c.swap_cams||0);
   posFree={1:{x:c.x??500,y:c.y??500},2:{x:c.x2??500,y:c.y2??500},3:{x:c.x3??500,y:c.y3??500}};
-  [1,2,3].forEach(k=>{ pipStyles[k]=Object.assign(STYLE_DEF(),(c.styles||{})[k]||{}); pipStyles[k].crop=Object.assign({l:0,r:0,t:0,b:0},pipStyles[k].crop); pipStyles[k].border=Object.assign(STYLE_DEF().border,pipStyles[k].border); styleFill(k); });
+  [1,2,3].forEach(k=>{ pipStyles[k]=Object.assign(STYLE_DEF(),(c.styles||{})[k]||{}); pipStyles[k].crop=Object.assign({l:0,r:0,t:0,b:0},pipStyles[k].crop); pipStyles[k].border=Object.assign(STYLE_DEF().border,pipStyles[k].border); pipStyles[k].opacity=100; delete pipStyles[k].border.radius; styleFill(k); });
   pipConstrain({main:c.main,pip:c.pip,pip2:c.pip2,pip3:c.pip3,c1:c.corner,c2:c.corner2??2,c3:c.corner3??0});
-  if(document.activeElement.id!=="p_size") $("p_size").value=c.size_pct;
+  [["p_size1",c.size_pct],["p_size2",c.size_pct2??c.size_pct],["p_size3",c.size_pct3??c.size_pct]].forEach(([id,v])=>{ if(document.activeElement.id!==id) $(id).value=v; });
   renderPreview();
   setDelays([c.main_delay_ms,c.pip_delay_ms,c.pip2_delay_ms,c.pip3_delay_ms]);
   pipLive=d.live||{};
@@ -1149,7 +1150,7 @@ async function pipeLoad(){
 $("p_type").addEventListener("change",()=>document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip"));
 $("pipecard").addEventListener("input",e=>{
   const id=e.target.id||"";
-  if(id==="p_size") renderPreview();
+  if(/^p_size\d$/.test(id)) renderPreview();
   if(isDelayCtl(id)){                       // Regler und Zahlenfeld synchron halten
     const row=DL.find(([r,n])=>id===r||id===n), val=Math.max(0,Math.min(3000,+e.target.value||0));
     $(row[0]).value=val; if(id!==row[1]) $(row[1]).value=val; $(row[2]).textContent=val;
@@ -1174,12 +1175,27 @@ $("pipecard").addEventListener("change",async e=>{
 });
 async function pipSave(){
   $("pipeerr").textContent="";
-  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,styles:pipStyles,...delayBody()};
-  try{ const r=await srtlaCall("POST","/api/pipeline",body); pipeDirty=false; pipDelayDirty=false; $("pipeerr").textContent=(r&&r.note)||"Gespeichert."; }catch(x){ $("pipeerr").textContent=x.message; }
+  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size1").value,size_pct2:+$("p_size2").value,size_pct3:+$("p_size3").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,styles:pipStyles,...delayBody()};
+  try{ const r=await srtlaCall("POST","/api/pipeline",body); pipeDirty=false; pipDelayDirty=false; $("pipeerr").textContent=(r&&r.note)||"Gespeichert."; if(r&&r.restarted) pipWatchRestart((r.note||"Gespeichert.")); }catch(x){ $("pipeerr").textContent=x.message; }
   pipeLoad();
 }
+// Nach dem Speichern startet eine laufende Übertragung kurz neu: Die Meldung zeigt, wie weit das ist, und sagt am Ende, dass sie wieder läuft.
+let pipWatchTok=0;
+async function pipWatchRestart(base){
+  const tok=++pipWatchTok, t0=Date.now(), el=$("pipeerr"); let seenOther=false;
+  for(let i=0;i<120&&tok===pipWatchTok;i++){
+    await new Promise(r=>setTimeout(r,1000));
+    let d; try{ d=await srtlaCall("GET","/api/send"); }catch(e){ continue; }
+    const sec=Math.round((Date.now()-t0)/1000);
+    if(d.state==="running"){
+      if(seenOther||sec>=4){ el.textContent="Gespeichert. Die Übertragung läuft wieder (nach "+sec+" Sekunden)."; el.style.color="var(--ok)"; setTimeout(()=>{ if(tok===pipWatchTok) el.style.color=""; },8000); return; }
+    }else if(d.state==="refused"||d.state==="stopped"){
+      el.textContent="Gespeichert, aber die Übertragung läuft nicht: "+(d.message||LIVE_LABEL[d.state]||d.state); return;
+    }else{ seenOther=true; el.textContent=base+" "+(LIVE_LABEL[d.state]||d.state)+" … ("+sec+" s)"; }
+  }
+}
 $("p_save").addEventListener("click",pipSave);
-pipeLoad(); setInterval(()=>{ if(due("pipe","pipecard",30000)&&!["p_main","p_pip","p_type","p_corner","p_pip2","p_corner2","p_pip3","p_corner3","p_size","p_auto","p_delay","n_delay","p_delay1","n_delay1","p_delay2","n_delay2","p_delay3","n_delay3","p_audio"].includes(document.activeElement.id)) pipeLoad(); },5000);
+pipeLoad(); setInterval(()=>{ if(due("pipe","pipecard",30000)&&!["p_main","p_pip","p_type","p_corner","p_pip2","p_corner2","p_pip3","p_corner3","p_size1","p_size2","p_size3","p_auto","p_delay","n_delay","p_delay1","n_delay1","p_delay2","n_delay2","p_delay3","n_delay3","p_audio"].includes(document.activeElement.id)) pipeLoad(); },5000);
 
 const LIVE_LABEL={stopped:"Nicht live",starting:"Startet…",running:"LIVE",restarting:"Verbindung wird neu aufgebaut…",stopping:"Wird beendet…",refused:"Nicht gestartet"};
 let sendData=null, pendIgnored="";

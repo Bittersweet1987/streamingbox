@@ -301,6 +301,52 @@ class HelperChecks(unittest.TestCase):
         calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": "", "hidden": True}, ["Heim"])
         self.assertEqual(calls[0][0], ("con", "delete", "id", "Heim"))
 
+    def scan(self, rescan_rc=0, reads=()):
+        """do_scan mit nachgebautem nmcli: reads = Antworten von "dev wifi list" nacheinander (die letzte wiederholt sich)."""
+        calls, status, seq = [], {}, list(reads)
+
+        def nm(*args, stdin=None, timeout=60):
+            calls.append(args)
+            if args[:3] == ("dev", "wifi", "rescan"):
+                return mock.Mock(returncode=rescan_rc, stdout="", stderr="")
+            if "list" in args and "wifi" in args:
+                out = seq.pop(0) if len(seq) > 1 else (seq[0] if seq else "")
+                return mock.Mock(returncode=0, stdout=out, stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "check_iface", lambda i: None), \
+                mock.patch.object(self.h.time, "sleep", lambda s: None), mock.patch.object(self.h, "write_status", lambda **kw: status.update(kw)), \
+                mock.patch.object(self.h, "SCAN_WAIT", 12):
+            clock = iter(range(0, 1000))
+            with mock.patch.object(self.h.time, "time", lambda: next(clock) * 3):
+                msg = self.h.do_scan("wlan1")
+        return calls, status, msg
+
+    NETS = " :Bittersweet 5G:80:WPA2\n*:Bittersweet_EXT:57:WPA2\n :Nighthawk:90:WPA2\n :Offen:30:\n"
+
+    def test_scan_waits_for_the_results_when_the_list_is_empty_at_first(self):
+        """Issue #8: Bei manchen Sticks (TP-Link) war die Liste direkt nach dem Suchlauf leer ("0 Netze gefunden"): Jetzt wird gewartet."""
+        calls, status, msg = self.scan(reads=["", "", self.NETS])
+        self.assertEqual(msg, "4 Netze gefunden")
+        self.assertEqual([n["ssid"] for n in status["scan"]["nets"]], ["Bittersweet_EXT", "Nighthawk", "Bittersweet 5G", "Offen"])      # verbunden zuerst, dann nach Signal
+        self.assertEqual(status["scan"]["iface"], "wlan1")
+        self.assertIn(("dev", "wifi", "rescan", "ifname", "wlan1"), calls)                       # der Suchlauf wird ausdrücklich angestoßen
+        self.assertTrue(all("--rescan" not in c or c[c.index("--rescan") + 1] == "no" for c in calls if "list" in c))
+
+    def test_scan_with_a_rescan_error_still_reads_the_list(self):
+        calls, status, msg = self.scan(rescan_rc=1, reads=[self.NETS])                          # "Suchlauf gerade nicht erlaubt"
+        self.assertEqual(msg, "4 Netze gefunden")
+
+    def test_scan_that_stays_empty_says_what_to_do(self):
+        calls, status, msg = self.scan(reads=[""])
+        self.assertIn("Keine Netze gefunden", msg)
+        self.assertIn("noch einmal", msg)
+        self.assertEqual(status["scan"]["nets"], [])
+        self.assertLess(len([c for c in calls if "list" in c]), 20)                            # es wird nicht endlos gefragt
+
+    def test_scan_merges_networks_that_appear_a_moment_later(self):
+        calls, status, msg = self.scan(reads=[" :Eins:50:WPA2\n", " :Eins:50:WPA2\n :Zwei:60:WPA2\n"])
+        self.assertEqual(msg, "2 Netze gefunden")
+
     def test_terse_split_unescapes(self):
         self.assertEqual(self.h.split_terse(r"*:Mein\:WLAN:80:WPA2"), ["*", "Mein:WLAN", "80", "WPA2"])
 
@@ -1177,49 +1223,40 @@ class HeaderControls(unittest.TestCase):
         self.assertIn("border-radius:${rad}px", h)
         self.assertIn("class=\"pvrim\"", h)
 
-    def test_each_small_picture_has_an_appearance_block_with_opacity_crop_and_border(self):
+    def test_each_small_picture_has_an_appearance_block_with_visibility_crop_corners_and_border(self):
         h = self.html
         for k in (1, 2, 3):
             self.assertIn('<details class="pvs" data-k="%d"></details>' % k, h)
-        block = h[h.index("function styleBlockHtml"):][:2600]
-        for f in ('data-f="vis"', 'data-f="op"', '"cl"', '"cr"', '"ct"', '"cb"', 'data-f="be"', '"bw"', 'data-f="bc"', '"bo"', '"br"'):
+        block = h[h.index("function styleBlockHtml"):][:2800]
+        for f in ('data-f="vis"', '"rd"', '"cl"', '"cr"', '"ct"', '"cb"', 'data-f="be"', '"bw"', 'data-f="bc"', '"bo"'):
             self.assertIn(f, block)
+        # Issue #7: kein Deckkraft-Regler für das Bild (sichtbar oder ausgeblendet); die Rundung ist ein eigenes Feld, nicht Teil des Rahmens
+        self.assertNotIn('data-f="op"', block)
+        self.assertNotIn('"br"', block)
+        self.assertIn("pipStyles[k].opacity=100", h)                           # ältere gespeicherte Deckkraft wird nicht mehr angewendet
+        self.assertIn("rad=st.radius?", h)                                      # Vorschau: Rundung auch ohne Rahmen
         self.assertIn("styles:pipStyles", h)                                   # wird mit dem Bildaufbau gespeichert
         self.assertIn("CROP_KEEP=32", h)                                       # wie auf dem Server: mindestens 32 Pixel bleiben
         self.assertIn("Math.floor(clampN(el.value,0,total-CROP_KEEP,0)/2)*2", h)   # gerade Werte
         self.assertIn('document.querySelectorAll(".pvs").forEach(e=>e.hidden=d.plugin_present&&d.plugin_style===false)', h)   # mit altem Baustein bleiben die Felder weg
         self.assertNotIn("pvstylenote", h)
 
-    def test_upload_rows_in_the_status_use_one_grid_with_fixed_number_columns(self):
-        """Die Upload-Zeilen im Status wackelten, weil sich die Breite der Zahlen änderte: jetzt ein gemeinsames Raster mit festen Spalten."""
+    def test_each_small_picture_has_its_own_size_field(self):
+        """Issue #7: Die Größe steht in jedem Block "Kleines Bild 1 bis 3"; das gemeinsame Feld oben entfällt."""
         h = self.html
-        self.assertIn("#net.hasrows{display:grid;grid-template-columns:minmax(0,1fr) minmax(3em,auto) auto .9em minmax(2.5em,auto) auto", h)
-        self.assertIn("font-variant-numeric:tabular-nums", h[h.index("#net.hasrows .row>.num"):][:120])
-        self.assertIn("#net.hasrows .row{display:contents}", h)
-        # jede Zeile (auch die Summe) hat dieselben sechs Zellen: Name, Zahl, Einheit, Punkt, Zahl, Pfeil
-        row = h[h.index("const upRow="):][:420]
-        for cell in ('class="nm"', 'class="num"', 'class="unit u">Mbit/s ↑', 'class="sep">·', 'class="unit u">↓'):
-            self.assertIn(cell, row)
-        self.assertIn('upRow(`<b title="Summe über ${nets.length} Netze">Summe</b> <span class="unit">(${nets.length})</span>`', h)     # kurz, damit es nicht umbricht
-        self.assertNotIn("#net.hasrows .sum>.nm{overflow:visible", h)                                         # die Summenzeile bricht nicht um (Auslassungspunkte wie die anderen Namen)
-        self.assertIn('$("net").classList.toggle("hasrows",!!netHtml)', h)
+        self.assertNotIn('id="p_size"', h)
+        for k in (1, 2, 3):
+            self.assertIn('id="p_size%d" type="number" min="15" max="40"' % k, h)
+        self.assertIn("size_pct2:+$(\"p_size2\").value,size_pct3:+$(\"p_size3\").value", h.replace("\\", ""))
+        self.assertIn('const size=Math.max(15,Math.min(40,+$("p_size"+k).value||25))', h)             # Vorschau: Größe je Bild
 
-    def test_adding_a_camera_has_no_role_choice_any_more(self):
-        """Issue #4: Hauptbild und Bild-in-Bild wählt man im Bildaufbau; beim Anlegen einer Kamera gibt es keine Rolle mehr."""
-        self.assertNotIn("f_role", self.html)
-        self.assertIn('body:JSON.stringify({name:$("f_name").value,key:$("f_key").value})', self.html)
-
-    def test_bluetooth_sticks_are_listed_below_the_wlan_section_and_the_ok_message_is_gone(self):
-        """Issue #6: Bluetooth als eigener Abschnitt nach der WLAN-Verbindung; die Meldung "Treiber ... ist eingerichtet" entfällt, wenn alles läuft."""
+    def test_saving_reports_when_the_restarted_transmission_runs_again(self):
+        """Issue #7: Nach "Die Übertragung wird jetzt kurz neu gestartet" meldet die Oberfläche, wann sie wieder läuft."""
         h = self.html
-        self.assertLess(h.index('id="wificard"'), h.index('<div class="sech">Bluetooth (für DJI-Kameras)</div>'))
-        self.assertLess(h.index('id="btcard"'), h.index('id="neterr"'))
-        self.assertIn("function btRender(d)", h)
-        self.assertIn("btRender(d);", h[h.index("function djiRender(d){"):][:140])          # bei jeder Antwort des Bluetooth-Dienstes
-        self.assertIn("nicht nutzbar", h[h.index("function btRender"):][:2200])              # ein Stick ohne Adapter wird mit seinem Hinweis gezeigt
-        dji_part = h[h.index("function djiRender(d){"):][:2500]
-        self.assertNotIn('"Bluetooth-Adapter: "', dji_part)                                      # die Zeile mit der Adapterliste in der DJI-Karte entfällt
-        self.assertNotIn('["working","waiting","failed","unsupported","ok"]', dji_part)          # Zustand "ok" wird nicht mehr als Text gezeigt
+        self.assertIn("async function pipWatchRestart(base)", h)
+        self.assertIn("if(r&&r.restarted) pipWatchRestart(", h)
+        self.assertIn("Die Übertragung läuft wieder (nach", h)
+        self.assertIn('d.state==="refused"||d.state==="stopped"', h[h.index("async function pipWatchRestart"):][:1400])        # ein Fehlschlag wird gemeldet
 
     def test_wlan_cards_show_the_name_of_the_stick(self):
         """Issue #6: Die Namen der WLAN-Sticks (z. B. 802.11ac NIC) stehen in der Übersicht und in der Auswahl der WLAN-Karte."""
@@ -1871,7 +1908,7 @@ class PictureStyle(unittest.TestCase):
         mix = [l for l in t.split("\n") if l.startswith("pbpipmix")][0]
         self.assertIn('width-pct=25 style1="op=50,cl=400,bw=6,bc=ff8800,bo=70,br=24"', mix)
         self.assertIn('slot2=1 corner2=2 style2="op=0"', mix)                         # nicht sichtbar: Deckkraft 0
-        self.assertIn('slot3=2 corner3=3 style3="bw=3,bc=ffffff,br=12"', mix)
+        self.assertIn('slot3=2 corner3=3 style3="bw=3,bc=ffffff"', mix)
         self.assertEqual(t.count("style1="), 1)
 
     def test_old_plugin_never_gets_the_property(self):
@@ -1889,6 +1926,55 @@ class PictureStyle(unittest.TestCase):
         self.assertIn("follow-tag=true", mix)
         self.assertIn('style1="op=50,cl=400,bw=6,bc=ff8800,bo=70,br=24"', mix)
         self.assertIn('style2="op=0"', mix)
+
+    def test_rounding_belongs_to_the_picture_not_to_the_border(self):
+        """Issue #7: Die Rundung gilt für das kleine Bild selbst, mit oder ohne Rahmen. Ältere Einstellungen (Rundung im Rahmen) werden übernommen."""
+        self.assertEqual(server.style_text(server.clean_style({"radius": 20}, strict=True)), "br=20")                       # ohne Rahmen
+        self.assertEqual(server.style_text(server.clean_style({"radius": 20, "border": {"enabled": True, "width": 4}}, strict=True)),
+                         "bw=4,bc=ffffff,br=20")
+        self.assertEqual(server.style_text(server.clean_style(None)), "")                                                  # Standard: eckig
+        self.assertEqual(server.clean_style(None)["radius"], 0)
+        # ältere Anfrage und ältere Datei: Die Rundung stand im Rahmen und wirkte nur mit ihm
+        self.assertEqual(server.clean_style({"border": {"enabled": True, "radius": 30}}, strict=True)["radius"], 30)
+        self.assertEqual(server.clean_style({"border": {"enabled": False, "radius": 30}}, strict=True)["radius"], 0)
+        old = {"visible": True, "opacity": 100, "crop": {"l": 0, "r": 0, "t": 0, "b": 0},
+               "border": {"enabled": False, "width": 6, "color": "#ffffff", "opacity": 100, "radius": 12}}              # so lagen die Standardwerte in 0.9.59 und 0.9.60 auf der Platte
+        st = server.clean_style(None, old)
+        self.assertEqual(st["radius"], 0)                                                                                 # nicht plötzlich rund
+        self.assertNotIn("radius", st["border"])
+        self.assertEqual(server.clean_style({"radius": 60}, strict=True)["radius"], 60)
+        with self.assertRaises(ValueError):
+            server.clean_style({"radius": 61}, strict=True)
+
+    def test_every_small_picture_has_its_own_size(self):
+        """Issue #7: Die Größe wird je kleinem Bild eingestellt (vorher galt eine Größe für alle)."""
+        cfg = dict(server.PipelineStore.DEFAULT, **dict(BASE, size_pct=20, size_pct2=30, size_pct3=40))
+        text = server.PipelineStore(os.devnull).build(cfg)
+        w1, h1 = server.pip_size(20)
+        w2, h2 = server.pip_size(30)
+        w3, h3 = server.pip_size(40)
+        self.assertEqual(len({(w1, h1), (w2, h2), (w3, h3)}), 3)
+        self.assertIn("rtmp://127.0.0.1:1935/publish/cam-b", text)
+        for pdemux, (w, h) in (("pdemux", (w1, h1)), ("p2demux", (w2, h2)), ("p3demux", (w3, h3))):
+            chain = text[text.index(pdemux + ".video"):].split("pbpipsink")[0]
+            self.assertIn("mppvideodec width=%d height=%d" % (w, h), chain, pdemux)
+        # Tausch ohne Unterbrechung: je Kamera die Größe der Stelle, an der sie beim Aufbau steht
+        dual = server.PipelineStore(os.devnull).build(dict(cfg, swap_cams=4))
+        for slot, (w, h) in ((0, (w1, h1)), (1, (w1, h1)), (2, (w2, h2)), (3, (w3, h3))):            # Kamera 0 (Hauptbild) bekommt die Größe von Stelle 1
+            self.assertIn("mppvideodec width=%d height=%d !" % (w, h), dual)
+        # Speichern: jeder Wert 15 bis 40, ältere Anfragen ohne Bild 2 und 3 geben allen die Größe von Bild 1
+        s = store()
+        s.set(dict(BASE, size_pct=22, size_pct2=33, size_pct3=38), KEYS)
+        self.assertEqual((s.cfg["size_pct"], s.cfg["size_pct2"], s.cfg["size_pct3"]), (22, 33, 38))
+        s.set(dict(BASE, size_pct=27), KEYS)
+        self.assertEqual((s.cfg["size_pct"], s.cfg["size_pct2"], s.cfg["size_pct3"]), (27, 27, 27))
+        for bad in (dict(BASE, size_pct2=14), dict(BASE, size_pct3=41), dict(BASE, size_pct2="gross")):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                s.set(bad, KEYS)
+        self.assertEqual(s.cfg["size_pct2"], 27)                                                       # abgelehnt: nichts geändert
+        old = server.PipelineStore._safe_cfg({"type": "pip", "size_pct": 31})                           # ältere Datei ohne die neuen Felder
+        self.assertEqual((old["size_pct2"], old["size_pct3"]), (31, 31))
+        self.assertEqual(server.PipelineStore._safe_cfg({"type": "pip", "size_pct": 20, "size_pct3": 9999})["size_pct3"], 40)
 
     def test_requests_are_checked(self):
         bad = ({"opacity": 101}, {"opacity": -1}, {"opacity": "viel"}, {"visible": "ja"}, {"crop": {"l": 2000}}, {"crop": {"l": 1000, "r": 900}},

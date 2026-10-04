@@ -113,10 +113,9 @@ def check_password(pw):
         raise ValueError("Passwort: 8 bis 63 Zeichen (nur ASCII) oder leer bei offenem Netz")
 
 
-def do_scan(iface):
-    check_iface(iface)
-    nm("radio", "wifi", "on")
-    r = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "yes", timeout=40)
+def read_nets(iface):
+    """Die Liste der gefundenen Netze einer Karte, wie NetworkManager sie gerade kennt: {SSID: Netz} (ohne neuen Suchlauf)."""
+    r = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no", timeout=15)
     best = {}
     for line in r.stdout.splitlines():
         p = split_terse(line)
@@ -126,8 +125,35 @@ def do_scan(iface):
         cur = best.get(p[1])
         if cur is None or sig > cur["signal"] or p[0] == "*":
             best[p[1]] = {"ssid": p[1], "signal": sig, "security": p[3] or "offen", "in_use": p[0] == "*" or bool(cur and cur["in_use"])}
+    return best
+
+
+SCAN_WAIT = 12        # so lange wird auf die Ergebnisse eines Suchlaufs gewartet (Sekunden)
+
+
+def do_scan(iface):
+    """Suchlauf auf der gewählten Karte. "--rescan yes" gibt bei manchen Sticks die Liste zurück, bevor der Suchlauf fertig ist (dann stand dort "0 Netze
+    gefunden", obwohl die Karte Netze sieht): Darum wird der Suchlauf angestoßen und danach gewartet, bis die Liste nicht mehr leer ist (und noch einen
+    Moment länger, damit sie vollständig wird)."""
+    check_iface(iface)
+    nm("radio", "wifi", "on")
+    try:
+        nm("dev", "wifi", "rescan", "ifname", iface, timeout=20)     # ein Fehler ("Suchlauf gerade nicht erlaubt") ist hier kein Problem: die Liste wird trotzdem gelesen
+    except subprocess.TimeoutExpired:
+        pass
+    deadline = time.time() + SCAN_WAIT
+    best = read_nets(iface)
+    while not best and time.time() < deadline:
+        time.sleep(1.5)
+        best = read_nets(iface)
+    if best:
+        time.sleep(2.0)                                              # der Suchlauf findet nach dem ersten Treffer meist noch weitere Netze
+        best.update({k: v for k, v in read_nets(iface).items()})
     nets = sorted(best.values(), key=lambda n: (not n["in_use"], -n["signal"]))
     write_status(scan={"iface": iface, "nets": nets[:40], "scanned": int(time.time())})
+    if not nets:
+        return ("Keine Netze gefunden. Manche Sticks brauchen einen zweiten Suchlauf: bitte noch einmal „Netze suchen“ drücken. "
+                "Bleibt es leer, ist die Karte nicht in Reichweite eines Netzes oder noch nicht bereit.")
     return f"{len(nets)} Netze gefunden"
 
 

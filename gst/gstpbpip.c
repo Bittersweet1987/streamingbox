@@ -232,7 +232,7 @@ typedef struct {
   gint bw;                 /* Rahmenbreite in Pixeln eines 1920 Pixel breiten Hauptbildes (0 bis 64); 0 = kein Rahmen */
   guint bc;                /* Rahmenfarbe 0xRRGGBB */
   gint bo;                 /* Deckkraft des Rahmens über dem Bild in Prozent (0 bis 100) */
-  gint br;                 /* Eckenradius in Pixeln eines 1920 Pixel breiten Hauptbildes (0 bis 200); wirkt nur bei bw > 0 */
+  gint br;                 /* Eckenradius in Pixeln eines 1920 Pixel breiten Hauptbildes (0 bis 200); gilt für das Bild selbst, mit oder ohne Rahmen */
 } PbStyle;
 
 /* Ort und Größe des (beschnittenen) kleinen Bildes: Ausschnitt (cx, cy, cw, ch) im kleinen Bild, Ziel (x, y) im Hauptbild */
@@ -404,14 +404,16 @@ typedef struct {
 } PbShape;
 
 /* Rahmenbreite und Eckenradius skalieren mit der Breite des Hauptbildes (Bezug 1920). Der Rahmen liegt innen im Ausschnitt;
- * Breite höchstens min(cw, ch) / 2, Radius ebenso. Der Radius wirkt nur mit Rahmen. */
+ * Breite höchstens min(cw, ch) / 2, Radius ebenso. Der Radius gilt für das Bild selbst, auch ohne Rahmen (dann sind nur die Ecken des Bildes
+ * abgerundet); mit Rahmen folgt die Innenkante des Rahmens der Rundung (Radius außen minus Rahmenbreite). */
 static void pb_shape_init(PbShape *s, const PbStyle *st, gint mw, gint cw, gint ch) {
   const gint lim = MIN(cw, ch) / 2;
   s->cw = cw;
   s->ch = ch;
   s->bw = s->ro = s->ri = 0;
-  if (st->bw > 0) {
+  if (st->bw > 0)
     s->bw = MIN(MAX((st->bw * mw + 960) / 1920, 1), lim);
+  if (st->br > 0) {
     s->ro = MIN((st->br * mw + 960) / 1920, lim);
     s->ri = MAX(s->ro - s->bw, 0);
   }
@@ -478,8 +480,11 @@ static gint pb_row_zone(const PbShape *s, gint y, gint *wb, gint *a) {
   gint zone = 0;
   *a = s->op;
   *wb = 0;
-  if (s->bw <= 0)
-    return 0;
+  if (s->bw <= 0) {                                  /* ohne Rahmen schneidet nur die Außenrundung an den Ecken */
+    if (fy < s->ro)
+      zone = s->ro;
+    return zone;
+  }
   if (fy < s->bw) {                                  /* Zeile liegt ganz im Rahmen, nur die Außenrundung schneidet an den Enden */
     *wb = s->bo;
     if (fy < s->ro)
@@ -629,7 +634,7 @@ static void pb_draw_picture(guint8 *dy, gint ystride, guint8 *duv, gint uvstride
   const guint8 *suv = src + (gsize) pw * ph;
   PbShape s;
   pb_shape_init(&s, st, mw, pl->cw & ~1, pl->ch & ~1);
-  if (st->op >= 100 && s.bw <= 0) {
+  if (st->op >= 100 && s.bw <= 0 && s.ro <= 0) {
     for (gint r = 0; r < pl->ch; r++)
       memcpy(dy + (gsize) (y + r) * ystride + x, src + (gsize) (cy + r) * pw + cx, (gsize) pl->cw);
     for (gint r = 0; r < pl->ch / 2; r++)

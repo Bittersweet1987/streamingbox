@@ -449,6 +449,7 @@ def _shape(style, mw, cw, ch):
     bw = ro = 0
     if style["bw"] > 0:
         bw = min(max((style["bw"] * mw + 960) // 1920, 1), lim)
+    if style["br"] > 0:                      # die Rundung gilt für das Bild selbst, mit oder ohne Rahmen
         ro = min((style["br"] * mw + 960) // 1920, lim)
     return bw, ro, max(ro - bw, 0)
 
@@ -676,7 +677,7 @@ class Crop(unittest.TestCase, ModelMixin):
 # ---------------------------------------------------------------- 3. Standardstil = bisheriger Schnellpfad
 
 class PlainPath(unittest.TestCase):
-    STYLES = ("", None, "op=100", "foo=bar", "op=100,bw=0,br=40,bo=20,bc=ff0000", "br=200", "bc=00ff00,bo=3",
+    STYLES = ("", None, "op=100", "foo=bar", "op=100,bw=0,bo=20,bc=ff0000", "bc=00ff00,bo=3",
               "cl=1900,cr=1900", "ct=1000,cb=1000", "cl=1,cr=1")              # die letzten: Beschnitt ungültig / ergibt 0
 
     def test_default_style_is_bitwise_the_old_memcpy(self):
@@ -920,10 +921,22 @@ class Rounding(unittest.TestCase, ModelMixin):
         self.assertEqual(render(sty(bw=4, br=24), mw=960, pic=pic, frame=Frame(960, 120, flat=main), at=(10, 6)).rect(),
                          render(sty(bw=2, br=12), mw=1920, pic=pic, frame=Frame(1920, 120, flat=main), at=(10, 6)).rect())
 
-    def test_radius_without_border_is_ignored(self):
+    def test_radius_without_border_rounds_the_picture_itself(self):
+        """Issue #7: Die Rundung gilt für das Bild selbst, auch ohne Rahmen (Ecken weg, sonst unverändert)."""
+        main = (235, 128, 128)
+        res = self.flat(sty(br=self.R), main)
+        for px, py in ((0, 0), (63, 0), (0, 39), (63, 39), (1, 1), (0, 2), (2, 0), (62, 1), (1, 38)):
+            self.assertEqual(res.Y(px, py), 235, (px, py))                    # Eckpixel außerhalb der Form: Hauptbild bleibt
+        for px, py in ((32, 0), (0, 20), (63, 20), (32, 39), (self.R, 0), (0, self.R), (32, 20)):
+            self.assertEqual(res.Y(px, py), 120, (px, py))                    # Kanten, Mitte: das Bild, ohne Rahmenfarbe
+        self.check_model(res)
+        # ohne Rundung bleibt es beim reinen Kopieren (kein Lesen des Hauptbildes)
         pic = Pic.pattern(64, 40)
-        self.assertEqual(render(sty(br=30), pic=pic, at=(10, 6)).rect(), render(sty(), pic=pic, at=(10, 6)).rect())
-        self.assertEqual(render(sty(br=30, op=60), pic=pic, at=(10, 6)).rect(), render(sty(op=60), pic=pic, at=(10, 6)).rect())
+        self.assertEqual(render(sty(), pic=pic, at=(10, 6)).reads, 0)
+        self.assertGreater(render(sty(br=30), pic=pic, at=(10, 6)).reads, 0)    # die weichen Kanten der Ecken lesen genau dort das Hauptbild
+        # mit Deckkraft zusammen und mit Beschnitt
+        self.check_model(render(sty(br=30, op=60), pic=pic, at=(10, 6)))
+        self.check_model(render(sty(br=30, cl=400, ct=100), pic=pic, at=(10, 6)))
 
     def test_soft_edges_exist_and_only_the_corners_depend_on_the_main_picture(self):
         a, b = (235, 128, 128), (16, 60, 200)

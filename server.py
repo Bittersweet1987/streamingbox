@@ -553,13 +553,17 @@ def plugin_style():
 # in Pixeln eines 1920 Pixel breiten Hauptbildes.
 STYLE_SLOTS = ("1", "2", "3")
 CROP_REF_W, CROP_REF_H, CROP_KEEP = 1920, 1080, 32          # Bezugsgröße des Beschnitts, so viele Pixel bleiben mindestens stehen
-STYLE_DEFAULT = {"visible": True, "opacity": 100, "crop": {"l": 0, "r": 0, "t": 0, "b": 0},
-                 "border": {"enabled": False, "width": 6, "color": "#ffffff", "opacity": 100, "radius": 12}}
+STYLE_DEFAULT = {"visible": True, "opacity": 100, "crop": {"l": 0, "r": 0, "t": 0, "b": 0}, "radius": 0,
+                 "border": {"enabled": False, "width": 6, "color": "#ffffff", "opacity": 100}}
 STYLE_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _style_copy(st):
-    return {"visible": st["visible"], "opacity": st["opacity"], "crop": dict(st["crop"]), "border": dict(st["border"])}
+    out = {"visible": st["visible"], "opacity": st["opacity"], "crop": dict(st["crop"]), "radius": st.get("radius", 0), "border": dict(st["border"])}
+    if "radius" not in st:                      # ältere Einstellung: Die Rundung gehörte zum Rahmen und wirkte nur mit ihm
+        out["radius"] = int(out["border"].get("radius", 0)) if out["border"].get("enabled") else 0
+    out["border"].pop("radius", None)
+    return out
 
 
 def clean_style(src, old=None, strict=False):
@@ -606,6 +610,8 @@ def clean_style(src, old=None, strict=False):
                                  f"(es bleiben mindestens {CROP_KEEP} Pixel stehen)")
             k = room / float(c[a] + c[b])
             c[a], c[b] = int(c[a] * k) // 2 * 2, int(c[b] * k) // 2 * 2
+    if "radius" in src:
+        st["radius"] = num(src["radius"], 0, 60, st["radius"], "Eckenrundung")
     border = src.get("border")
     if isinstance(border, dict):
         b = st["border"]
@@ -623,8 +629,10 @@ def clean_style(src, old=None, strict=False):
                 raise ValueError("Rahmenfarbe: Farbe wie #ffffff")
         if "opacity" in border:
             b["opacity"] = num(border["opacity"], 10, 100, b["opacity"], "Rahmendeckkraft")
-        if "radius" in border:
-            b["radius"] = num(border["radius"], 0, 60, b["radius"], "Eckenrundung")
+        if "radius" in border:                                                  # ältere Anfrage: die Rundung stand im Rahmen
+            legacy = num(border["radius"], 0, 60, st["radius"], "Eckenrundung")
+            if "radius" not in src and b["enabled"]:
+                st["radius"] = legacy
     elif border is not None and strict:
         raise ValueError("Rahmen: ungültige Angabe")
     return st
@@ -656,8 +664,8 @@ def style_text(st):
         parts.append(f"bc={b['color'][1:]}")
         if b["opacity"] != 100:
             parts.append(f"bo={int(b['opacity'])}")
-        if b["radius"]:
-            parts.append(f"br={int(b['radius'])}")
+    if st["radius"]:                                                     # die Rundung gilt für das Bild selbst, mit oder ohne Rahmen
+        parts.append(f"br={int(st['radius'])}")
     return ",".join(parts)
 
 
@@ -702,7 +710,7 @@ class PipelineStore:
     Hardware-Decoder selbst; unser Baustein schreibt es nur in das Hauptbild
     (lesen wäre auf diesem Chip zu langsam).
     """
-    DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "audio": "main",
+    DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
                "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0}
@@ -775,7 +783,7 @@ class PipelineStore:
         main = str(req.get("main", ""))
         if main not in camera_keys:
             raise ValueError("Hauptkamera: bitte eine vorhandene Kamera wählen")
-        cfg = {"type": t, "main": main, "pip": "", "corner": 3, "size_pct": 25, "audio": "main",
+        cfg = {"type": t, "main": main, "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
                "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False, "swap_cams": 0}
@@ -793,14 +801,16 @@ class PipelineStore:
                 raise ValueError("Kleines Bild: eine andere vorhandene Kamera wählen")
             try:
                 corner, pct = int(req.get("corner", 3)), int(req.get("size_pct", 25))
+                # Größe je kleinem Bild; eine Anfrage ohne die Werte für Bild 2 und 3 (älterer Client) gibt allen die Größe von Bild 1
+                pct2, pct3 = int(req.get("size_pct2", pct)), int(req.get("size_pct3", pct))
             except (TypeError, ValueError):
                 raise ValueError("Ecke und Größe müssen Zahlen sein")
-            if corner not in range(len(pip_corners())) or not 15 <= pct <= 40:
-                raise ValueError("Position aus der Liste wählen, Größe 15 bis 40 Prozent der Bildbreite")
+            if corner not in range(len(pip_corners())) or not all(15 <= v <= 40 for v in (pct, pct2, pct3)):
+                raise ValueError("Position aus der Liste wählen, Größe jedes kleinen Bildes 15 bis 40 Prozent der Bildbreite")
             audio = req.get("audio", "main")
             if audio not in ("main", "pip", "pip2", "pip3"):
                 raise ValueError("Ton: Hauptbild oder eines der kleinen Bilder")
-            cfg.update(pip=pipk, corner=corner, size_pct=pct, audio=audio)
+            cfg.update(pip=pipk, corner=corner, size_pct=pct, size_pct2=pct2, size_pct3=pct3, audio=audio)
             for key in ("x", "y", "x2", "y2", "x3", "y3"):
                 try:
                     val = int(req.get(key, 500))
@@ -863,6 +873,10 @@ class PipelineStore:
         for k in ("corner", "corner2", "corner3"):
             num(k, 0, len(PIP_CORNERS) - 1)
         num("size_pct", 15, 40)
+        for k in ("size_pct2", "size_pct3"):                  # ältere Dateien kennen sie nicht: dann gilt die Größe von Bild 1
+            if k not in out:
+                out[k] = out["size_pct"]
+            num(k, 15, 40)
         for k in ("x", "y", "x2", "y2", "x3", "y3"):
             num(k, 0, 1000)
         for k in ("main_delay_ms", "pip_delay_ms", "pip2_delay_ms", "pip3_delay_ms"):
@@ -1015,7 +1029,8 @@ class PipelineStore:
         else:
             out.append("demux.audio !\nqueue max-size-buffers=4 leaky=downstream ! fakesink sync=false async=false\n")
         if pip:
-            w, h = pip_size(c["size_pct"])
+            # Jedes kleine Bild hat seine eigene Größe (Prozent der Bildbreite); der Hardware-Decoder verkleinert auf genau diese Größe
+            (w, h), (w2, h2), (w3, h3) = pip_size(c["size_pct"]), pip_size(c["size_pct2"]), pip_size(c["size_pct3"])
             out.append(f"rtmpsrc location={base}/{c['pip']} do-timestamp=true !\nflvdemux name=pdemux\n")
             out.append(f"pdemux.video !\n{small('pipq_v', 'pip_delay_ms')} !\n"
                        f"h264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
@@ -1023,13 +1038,13 @@ class PipelineStore:
             if pip2:
                 out.append(f"rtmpsrc location={base}/{c['pip2']} do-timestamp=true !\nflvdemux name=p2demux\n")
                 out.append(f"p2demux.video !\n{small('pip2q_v', 'pip2_delay_ms')} !\n"
-                           f"h264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+                           f"h264parse ! mppvideodec width={w2} height={h2} !\nvideo/x-raw,format=NV12 !\n"
                            "queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot=1\n")
                 out.append(small_audio("p2demux", "pip2"))
             if pip3:
                 out.append(f"rtmpsrc location={base}/{c['pip3']} do-timestamp=true !\nflvdemux name=p3demux\n")
                 out.append(f"p3demux.video !\n{small('pip3q_v', 'pip3_delay_ms')} !\n"
-                           f"h264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+                           f"h264parse ! mppvideodec width={w3} height={h3} !\nvideo/x-raw,format=NV12 !\n"
                            "queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot=2\n")
                 out.append(small_audio("p3demux", "pip3"))
             out.append(small_audio("pdemux", "pip"))
@@ -1058,7 +1073,9 @@ class PipelineStore:
         Kamera zu allen ihren Warteschlangen (vfq = Bild groß, vsq = Bild klein, aq = Ton)."""
         q = self.Q
         cams, group, ap = plan["cams"], plan["group"], plan["audio_pos"]
-        w, h = pip_size(c["size_pct"])
+        # Größe des kleinen Bildes je Kamera: die der Stelle, an der sie beim Aufbau steht (Stelle 1 bis 3); die Hauptkamera bekommt die der Stelle 1.
+        # Beim Tausch folgt die Größe der Kamera, nicht der Stelle (der Decoder verkleinert fest auf diese Größe).
+        sizes = [pip_size(c["size_pct"]), pip_size(c["size_pct2"]), pip_size(c["size_pct3"])]
         out = []
         out.append(f"pbpipsel name=vsel tag-offset=true force-key=true state={plan['state']} !\n"
                    "identity name=v_delay signal-handoffs=TRUE !\nvideo/x-raw,format=NV12 !\n"
@@ -1075,6 +1092,7 @@ class PipelineStore:
             d = int(c.get(DELAY_KEYS[i], 0) or 0)
             items = [f"vsq{i}:s"]
             out.append(f"rtmpsrc location={base}/{key} do-timestamp=true !\nflvdemux name=dm{i}\n")
+            w, h = sizes[max(i - 1, 0)]
             small_chain = (f"{small(f'vsq{i}', DELAY_KEYS[i])} !\nh264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
                            f"queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot={(i + 3) % 4}\n")
             if i < group:
