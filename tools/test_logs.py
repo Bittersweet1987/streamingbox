@@ -107,6 +107,33 @@ class Scrubbing(unittest.TestCase):
         for gone in ("tail1234", "abc123", "user.name", "example.com"):
             self.assertNotIn(gone, out)
 
+    def test_mac_addresses_with_escaped_colons_from_nmcli_terse_output(self):
+        sc = scrubber()
+        out = sc.scrub(r"GENERAL.HWADDR:AC\:DE\:48\:11\:22\:33 und AC:DE:48:44:55:66 und 00\:00\:00\:00\:00\:00")
+        self.assertNotIn("11", out.replace("<MAC-1 AC:DE:48>", ""))
+        self.assertIn("<MAC-1 AC:DE:48>", out)
+        self.assertIn("<MAC-2 AC:DE:48>", out)
+        self.assertIn(r"00\:00\:00\:00\:00\:00", out)                                            # die Nulladresse bleibt auch so
+
+    def test_wlan_cards_section_is_in_the_bundle_and_scrubbed(self):
+        def fake(cmd, timeout=15, limit=0):
+            if cmd[:3] == ["nmcli", "-t", "-f"] and "DEVICE,TYPE" in cmd:
+                return "wlan1:wifi\neth0:ethernet\n"
+            if cmd[:2] == ["nmcli", "-t"] and "show" in cmd:
+                return "GENERAL.DEVICE:wlan1\nGENERAL.HWADDR:AC\\:DE\\:48\\:11\\:22\\:33\nWIFI-PROPERTIES.AP:yes\nIP4.ADDRESS[1]:192.0.2.5/24\n"
+            if cmd[:5] == ["nmcli", "-t", "-f", "SSID", "dev"]:                                    # so liest der Helfer die Namen, die er überall ersetzt
+                return "Nachbar\n"
+            if cmd[0] == "nmcli" and "BSSID" in " ".join(cmd):
+                return "IN-USE SSID BSSID CHAN\n      Nachbar AC:DE:48:99:88:77 6\n"
+            return ""
+        with mock.patch.object(H, "run", side_effect=fake), mock.patch.object(H, "STATE", tempfile.mkdtemp()):
+            text = H.build()
+        self.assertIn("===== WLAN-Karten", text)
+        self.assertIn("WIFI-PROPERTIES.AP:yes", text)
+        self.assertNotIn("IP4.ADDRESS", text.split("===== WLAN-Karten")[1].split("=====")[0])           # nur Zustand und Fähigkeiten, keine Adressen
+        for gone in ("11:22:33", "99:88:77", "Nachbar"):
+            self.assertNotIn(gone, text)
+
     def test_zero_mac_and_device_tree_names_stay(self):
         sc = scrubber()
         t = "phy phy-fd5d0000.syscon:usb2-phy@0.0: Looking up 00:00:00:00:00:00 ff:ff:ff:ff:ff:ff in /syscon@fd5d0000/usb2-phy@0/otg-port"

@@ -949,7 +949,7 @@ async function wifiLoad(){
   const nets=(d.scan&&d.scan.nets)||[];
   const bars=p=>"▂▄▆█".split("").map((c,i)=>`<span style="color:${p>=(i+1)*25-12?"var(--ok)":"var(--line)"}">${c}</span>`).join("");
   $("wifinets").innerHTML=nets.length?`<div class="muted" style="margin-bottom:4px">Gefundene Netze von <b>${esc((d.scan&&d.scan.iface)||"")}</b>${(d.scan&&d.scan.iface&&$("w_if").value&&d.scan.iface!==$("w_if").value)?` (nicht von ${esc($("w_if").value)}: dafür „Netze suchen“ drücken)`:""} – Zeile anklicken zum Übernehmen:</div><div class="wlist">`+nets.map(n=>
-    `<a href="#" class="wrow${n.in_use?" cur":""}" data-ssid="${esc(n.ssid)}"><span class="wname">${esc(n.ssid)}</span><span class="wsig">${bars(n.signal)} ${n.signal} %</span><span class="wsec">${n.security&&n.security!=="offen"?"🔒 "+esc(n.security):"offen"}${(d.saved||[]).includes(n.ssid)?" · gespeichert":""}</span>${n.in_use?'<span class="wuse">verbunden</span>':""}</a>`).join("")+"</div>":"";
+    `<a href="#" class="wrow${n.in_use?" cur":""}" data-ssid="${esc(n.ssid)}"><span class="wname">${esc(n.ssid)}</span><span class="wsig">${bars(n.signal)} ${n.signal} %</span><span class="wsec">${n.security&&n.security!=="offen"?"🔒 "+esc(n.security):"offen"}${(d.saved||[]).includes(n.ssid)?" · gespeichert":""}</span>${n.in_use?'<span class="wuse">verbunden</span>':""}</a>`).join("")+"</div>":wifiDebug(d);                      // leer: bei Bedarf technische Angaben zur Karte (Issue #8)
   // Ein gespeichertes Netz lässt sich hier anklicken (übernimmt den Namen) und mit leerem Passwort verbinden: es gilt dann das gespeicherte Passwort
   $("wifisaved").innerHTML=(d.saved||[]).length?"Gespeicherte Netze (Name anklicken, Passwort leer lassen und „Verbinden“): "+d.saved.map(s=>`<a href="#" data-ssid="${esc(s)}">${esc(s)}</a> <a href="#" data-forget="${esc(s)}" class="muted">vergessen</a>`).join(" · "):"";
   wifiPwHint();
@@ -1058,6 +1058,11 @@ $("wifidev").addEventListener("input",e=>{                  // Eingaben im Feld 
     sel.innerHTML=chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?"Kanal "+n:"automatisch"}</option>`).join("");
   }else if(c.contains("hs-ch")) dr.ch=parseInt(e.target.value,10)||0;
 });
+function wifiDebug(d){                                             // Suche ohne Treffer: technische Angaben der Karte zum Weitergeben (zum Beispiel an das Issue)
+  const dbg=(d.scan&&d.scan.debug)||[];
+  if(!dbg.length||d.state==="working") return "";
+  return `<details class="sens" open><summary class="muted">Technische Angaben zur Karte ${esc(d.scan.iface||"")} (die Suche hat nichts gefunden)</summary><pre>${esc(dbg.join("\n"))}</pre></details>`;
+}
 function wifiPwHint(){
   const saved=((wifiData&&wifiData.saved)||[]).includes($("w_ssid").value);
   $("w_pw").placeholder=saved?"leer = gespeichertes Passwort verwenden":"leer bei offenem Netz";

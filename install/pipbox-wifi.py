@@ -154,48 +154,133 @@ def check_password(pw):
         raise ValueError("Passwort: 8 bis 63 Zeichen (nur ASCII) oder leer bei offenem Netz")
 
 
+def _add_net(best, p):
+    """Ein Netz (IN-USE, SSID, SIGNAL, SECURITY) in die Liste {SSID: Netz} aufnehmen: das stärkste Signal je Name gilt, "verbunden" bleibt erhalten."""
+    if len(p) < 4 or not p[1]:
+        return
+    sig = int(p[2]) if p[2].isdigit() else 0
+    cur = best.get(p[1])
+    if cur is None or sig > cur["signal"] or p[0] == "*":
+        best[p[1]] = {"ssid": p[1], "signal": sig, "security": p[3] or "offen", "in_use": p[0] == "*" or bool(cur and cur["in_use"])}
+
+
 def read_nets(iface):
-    """Die Liste der gefundenen Netze einer Karte, wie NetworkManager sie gerade kennt: {SSID: Netz} (ohne neuen Suchlauf)."""
-    r = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no", timeout=15)
+    """Die Liste der gefundenen Netze einer Karte, wie NetworkManager sie gerade kennt: {SSID: Netz} (ohne neuen Suchlauf). Sie wird auf zwei Wegen
+    gelesen und vereinigt: mit "ifname" und, wie es die Original-Oberfläche der BELABOX macht, ohne "ifname" für alle Karten, nach der Spalte DEVICE
+    auf diese Karte beschränkt (manche Sticks melden ihre Netze auf einem der beiden Wege nicht)."""
     best = {}
+    r = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no", timeout=15)
     for line in r.stdout.splitlines():
-        p = split_terse(line)
-        if len(p) < 4 or not p[1]:
-            continue
-        sig = int(p[2]) if p[2].isdigit() else 0
-        cur = best.get(p[1])
-        if cur is None or sig > cur["signal"] or p[0] == "*":
-            best[p[1]] = {"ssid": p[1], "signal": sig, "security": p[3] or "offen", "in_use": p[0] == "*" or bool(cur and cur["in_use"])}
+        _add_net(best, split_terse(line))
+    try:
+        r = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY,DEVICE", "dev", "wifi", "list", "--rescan", "no", timeout=15)
+        for line in r.stdout.splitlines():
+            p = split_terse(line)
+            if len(p) >= 5 and p[4] == iface:
+                _add_net(best, p[:4])
+    except subprocess.TimeoutExpired:
+        pass
     return best
 
 
-SCAN_WAIT = 12        # so lange wird auf die Ergebnisse eines Suchlaufs gewartet (Sekunden)
+SCAN_WAIT = 25        # so lange wird auf die Ergebnisse eines Suchlaufs gewartet (Sekunden); die Original-Oberfläche liest bis zu 20 s nach
+SCAN_MIN = 8          # mindestens so lange lesen, auch wenn schon (ältere) Netze in der Liste stehen: der gerade angestoßene Suchlauf liefert erst später neue
+SCAN_STABLE = 4       # nach dem letzten neuen Netz so lange noch abwarten, ob weitere dazukommen (Sekunden)
+SCAN_POLL = 1.5       # Abstand der Abfragen (Sekunden)
+SCAN_RESCAN_EVERY = 10   # bleibt die Liste leer, wird der Suchlauf alle so viele Sekunden noch einmal angestoßen (NetworkManager lehnt zu frühe ab: egal)
 
 
-def do_scan(iface):
-    """Suchlauf auf der gewählten Karte. "--rescan yes" gibt bei manchen Sticks die Liste zurück, bevor der Suchlauf fertig ist (dann stand dort "0 Netze
-    gefunden", obwohl die Karte Netze sieht): Darum wird der Suchlauf angestoßen und danach gewartet, bis die Liste nicht mehr leer ist (und noch einen
-    Moment länger, damit sie vollständig wird)."""
-    check_client_iface(iface)
-    nm("radio", "wifi", "on")
+def rescan(iface):
     try:
         nm("dev", "wifi", "rescan", "ifname", iface, timeout=20)     # ein Fehler ("Suchlauf gerade nicht erlaubt") ist hier kein Problem: die Liste wird trotzdem gelesen
     except subprocess.TimeoutExpired:
         pass
-    deadline = time.time() + SCAN_WAIT
-    best = read_nets(iface)
-    while not best and time.time() < deadline:
-        time.sleep(1.5)
-        best = read_nets(iface)
-    if best:
-        time.sleep(2.0)                                              # der Suchlauf findet nach dem ersten Treffer meist noch weitere Netze
-        best.update({k: v for k, v in read_nets(iface).items()})
-    nets = sorted(best.values(), key=lambda n: (not n["in_use"], -n["signal"]))
-    write_status(scan={"iface": iface, "nets": nets[:40], "scanned": int(time.time())})
-    if not nets:
+
+
+def sorted_nets(best):
+    return sorted(best.values(), key=lambda n: (not n["in_use"], -n["signal"]))[:40]
+
+
+DIAG_SKIP = {"GENERAL.DBUS-PATH", "GENERAL.UDI", "GENERAL.CON-UUID", "GENERAL.CON-PATH", "GENERAL.NM-TYPE", "GENERAL.PHYS-PORT-ID", "GENERAL.IS-SOFTWARE",
+             "GENERAL.METERED", "GENERAL.IP4-CONNECTIVITY", "GENERAL.IP6-CONNECTIVITY", "GENERAL.PATH", "GENERAL.IP-IFACE", "CAPABILITIES.CARRIER-DETECT",
+             "CAPABILITIES.SPEED", "CAPABILITIES.SRIOV", "CAPABILITIES.IS-SOFTWARE", "INTERFACE-FLAGS.PROMISC"}      # Rauschen: für die Fehlersuche nicht nötig
+MAC_RE = re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){2})(?:[:-][0-9A-Fa-f]{2}){3}\b")
+
+
+def scan_diagnostics(iface):
+    """Technische Angaben zur Karte für den Fall, dass kein Netz gefunden wird (erscheinen in der Oberfläche und im Protokoll-Download): Zustand der
+    Karte laut NetworkManager, Funk (rfkill), Fähigkeiten, Zahl der Funkstationen insgesamt und Meldungen des Treibers. MAC-Adressen sind gekürzt."""
+    lines = []
+
+    def run(*cmd, timeout=10):
+        try:
+            r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout, errors="replace")
+            return (r.stdout or "") + (r.stderr if not r.stdout else "")
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+    for l in run("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev").splitlines():
+        if l.startswith(iface + ":"):
+            lines.append("Karte: " + l)
+    for l in run("nmcli", "-t", "-f", "GENERAL,CAPABILITIES,INTERFACE-FLAGS,WIFI-PROPERTIES", "dev", "show", iface).splitlines():
+        if l.split(":", 1)[0] not in DIAG_SKIP:
+            lines.append(l)
+    lines.append("Funk: " + " | ".join(x for x in run("nmcli", "-t", "radio", "all").splitlines() if x))
+    rf = run("rfkill", "list").strip()
+    if rf:
+        lines.append("rfkill: " + " ".join(rf.split())[:200])
+    all_aps = run("nmcli", "-t", "-f", "SSID,DEVICE", "dev", "wifi", "list", "--rescan", "no").splitlines()
+    mine = [l for l in all_aps if l.rsplit(":", 1)[-1] == iface]
+    hidden = [l for l in mine if l.startswith(":") or l.split(":", 1)[0] == ""]
+    lines.append("Funkstationen laut NetworkManager: %d insgesamt, %d auf %s (davon %d ohne Namen)" % (len(all_aps), len(mine), iface, len(hidden)))
+    try:
+        drv = os.path.basename(os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
+    except OSError:
+        drv = ""
+    key = re.compile(r"(?i)\b(%s|%s)\b" % (re.escape(iface), re.escape(drv))) if drv and drv != "driver" else re.compile(r"(?i)\b%s\b" % re.escape(iface))
+    k = [l for l in run("dmesg").splitlines() if key.search(l)][-8:]
+    if drv:
+        lines.append("Treiber: " + drv)
+    lines += ["Kernel: " + l for l in k]
+    return [MAC_RE.sub(lambda m: m.group(1) + ":xx:xx:xx", l)[:220] for l in lines][:70]
+
+
+def do_scan(iface):
+    """Suchlauf auf der gewählten Karte, nach dem Vorbild der Original-Oberfläche der BELABOX: Suchlauf anstoßen, die Liste danach immer wieder lesen
+    (die Ergebnisse trudeln ein; ein langsamer Stick mit beiden Bändern braucht bis zu 20 Sekunden) und die Netze schon während des Wartens anzeigen.
+    Früher wurde nach 12 Sekunden aufgegeben und nur die Liste mit "ifname" gelesen: bei manchen Sticks (TP-Link, Issue #8) blieb sie leer. Bleibt sie
+    auch jetzt leer, werden technische Angaben zur Karte mitgeliefert."""
+    check_client_iface(iface)
+    nm("radio", "wifi", "on")
+    rescan(iface)
+    start = time.time()
+    nets, last_new, next_rescan = {}, None, start + SCAN_RESCAN_EVERY
+    while True:
+        now = time.time()
+        found = read_nets(iface)
+        new = [k for k in found if k not in nets]
+        for k, v in found.items():
+            if k not in nets or v["signal"] > nets[k]["signal"] or v["in_use"]:
+                nets[k] = dict(v, in_use=v["in_use"] or bool(nets.get(k, {}).get("in_use")))
+        if new:
+            last_new = now
+            write_status(scan={"iface": iface, "nets": sorted_nets(nets), "scanned": int(now), "partial": True})     # schon anzeigen, die Suche läuft weiter
+        if nets and last_new is not None and now - last_new >= SCAN_STABLE and now - start >= SCAN_MIN:
+            break
+        if now - start >= SCAN_WAIT:
+            break
+        if not nets and now >= next_rescan:
+            rescan(iface)
+            next_rescan = now + SCAN_RESCAN_EVERY
+        time.sleep(SCAN_POLL)
+    result = sorted_nets(nets)
+    scan = {"iface": iface, "nets": result, "scanned": int(time.time())}
+    if not result:
+        scan["debug"] = scan_diagnostics(iface)
+    write_status(scan=scan)
+    if not result:
         return ("Keine Netze gefunden. Manche Sticks brauchen einen zweiten Suchlauf: bitte noch einmal „Netze suchen“ drücken. "
-                "Bleibt es leer, ist die Karte nicht in Reichweite eines Netzes oder noch nicht bereit.")
-    return f"{len(nets)} Netze gefunden"
+                "Bleibt es leer, stehen unten technische Angaben zur Karte.")
+    return f"{len(result)} Netze gefunden"
 
 
 def connect_saved(iface, ssid):

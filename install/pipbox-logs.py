@@ -65,7 +65,7 @@ def write_status(**kw):
 
 SECRET_KEYS = r"(?:pass(?:word|wd)?|psk|secret|token|stream[_-]?id|api[_-]?key|authorization|cookie|private[_-]?key)"
 RE_KV = re.compile(r"(?i)\b(" + SECRET_KEYS + r")\b([\"']?\s*[=:]\s*)(?:(?:Bearer|Basic)\s+)?(\"[^\"]*\"|'[^']*'|[^\s,;&}]+)")
-RE_MAC = re.compile(r"\b([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}\b")
+RE_MAC = re.compile(r"\b([0-9A-Fa-f]{2})\\?[:-]([0-9A-Fa-f]{2})\\?[:-]([0-9A-Fa-f]{2})(?:\\?[:-][0-9A-Fa-f]{2}){3}\b")      # auch mit "\:" (nmcli -t maskiert den Doppelpunkt)
 RE_DEV = re.compile(r"\bdev_(?:[0-9A-Fa-f]{2}_){5}[0-9A-Fa-f]{2}\b")
 RE_IPV4 = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 RE_IPV6 = re.compile(r"(?i)(?<![0-9a-z:.])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"
@@ -114,8 +114,8 @@ class Scrubber:
         if "@" in text:
             text = RE_EMAIL.sub("<E-Mail>", text)
         text = RE_DEV.sub(lambda m: "dev_<MAC-%d>" % self._num("mac", m.group(0)[4:].replace("_", ":").upper()), text)
-        text = RE_MAC.sub(lambda m: m.group(0) if m.group(0).replace("-", ":").lower() in KEEP_MACS else
-                          "<MAC-%d %s:%s:%s>" % (self._num("mac", m.group(0).replace("-", ":").upper()), m.group(1).upper(), m.group(2).upper(), m.group(3).upper()), text)
+        text = RE_MAC.sub(lambda m: m.group(0) if m.group(0).replace("\\", "").replace("-", ":").lower() in KEEP_MACS else
+                          "<MAC-%d %s:%s:%s>" % (self._num("mac", m.group(0).replace("\\", "").replace("-", ":").upper()), m.group(1).upper(), m.group(2).upper(), m.group(3).upper()), text)
         text = RE_DJI_KEY.sub(lambda m: "<Schlüssel-%d>" % self._num("key", m.group(0)), text)
         text = RE_IPV4.sub(lambda m: m.group(0) if m.group(0).startswith(KEEP_IPS) else "<IP-%d>" % self._num("ip", m.group(0)), text)
         text = RE_IPV6.sub(lambda m: m.group(0) if m.group(0) == "::1" else "<IPv6-%d>" % self._num("ip6", m.group(0).lower()), text)
@@ -247,6 +247,27 @@ def drop_noise(text, keep=15):
     return "\n".join(out) + "\n"
 
 
+def wifi_cards():
+    """Zustand der WLAN-Karten für die Fehlersuche (Issue #8, Netzsuche): Karten, Fähigkeiten, Funk, Treiber, gefundene Funkstationen. Namen und MAC-Adressen
+    werden danach bereinigt."""
+    out = ["Karten:\n" + run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev"], 8)]
+    for line in run(["nmcli", "-t", "-f", "DEVICE,TYPE", "dev"], 8).splitlines():
+        dev, _, typ = line.partition(":")
+        if typ.strip() == "wifi" and re.fullmatch(r"[A-Za-z0-9._-]{1,15}", dev):
+            info = [l for l in run(["nmcli", "-t", "-f", "GENERAL,CAPABILITIES,INTERFACE-FLAGS,WIFI-PROPERTIES", "dev", "show", dev], 8).splitlines()
+                    if l.split(":", 1)[0] not in ("GENERAL.DBUS-PATH", "GENERAL.UDI", "GENERAL.CON-UUID", "GENERAL.CON-PATH", "GENERAL.PHYS-PORT-ID")]
+            drv = ""
+            try:
+                drv = os.path.basename(os.path.realpath(f"/sys/class/net/{dev}/device/driver"))
+            except OSError:
+                pass
+            out.append("%s (Treiber %s):\n%s" % (dev, drv or "unbekannt", "\n".join(info)))
+    out.append("Funk:\n" + run(["nmcli", "-t", "radio", "all"], 8) + run(["rfkill", "list"], 8))
+    out.append("Gefundene Funkstationen (ohne neuen Suchlauf):\n" +
+               run(["nmcli", "-f", "IN-USE,SSID,BSSID,CHAN,FREQ,SIGNAL,SECURITY,DEVICE", "dev", "wifi", "list", "--rescan", "no"], 10))
+    return "\n".join(out)
+
+
 def settings_summary():
     """Kurzfassung der Einstellungen ohne Zugangsdaten (keine Passwörter, Stream-ID, Server, WLAN, Schlüssel)."""
     lines = []
@@ -318,6 +339,7 @@ def sections():
            ("Einstellungen (Kurzfassung)", settings_summary()),
            ("Netzwerkkarten", run(["ip", "-br", "addr"], 8) + run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev"], 8)),
            ("USB-Geräte", usb_devices()),
+           ("WLAN-Karten (Zustand und gefundene Funkstationen)", wifi_cards()),
            ("Bluetooth", run(["hciconfig"], 8)),
            ("Zustandsprotokoll (alle 10 s, letzte Stunde)", tail_file("/var/log/pipbox-health.log", 360) if os.path.exists("/var/log/pipbox-health.log")
             else tail_file("/run/pipbox-health.log", 360)),

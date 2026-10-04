@@ -303,24 +303,38 @@ class HelperChecks(unittest.TestCase):
         calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": "", "hidden": True}, ["Heim"])
         self.assertEqual(calls[0][0], ("con", "delete", "id", "Heim"))
 
-    def scan(self, rescan_rc=0, reads=()):
-        """do_scan mit nachgebautem nmcli: reads = Antworten von "dev wifi list" nacheinander (die letzte wiederholt sich)."""
-        calls, status, seq = [], {}, list(reads)
+    def scan(self, rescan_rc=0, reads=(), all_reads=None, other_device="", minimum=3, rescan_every=10):
+        """do_scan mit nachgebautem nmcli: reads = Antworten von "dev wifi list ifname wlan1" nacheinander (die letzte wiederholt sich). Die Liste ohne
+        ifname (wie in der Original-Oberfläche) liefert dasselbe mit der Spalte DEVICE, oder all_reads, falls angegeben; other_device sind Zeilen einer anderen Karte."""
+        calls, status, seq, writes = [], {}, list(reads), []
+        cur = {"out": ""}
 
         def nm(*args, stdin=None, timeout=60):
             calls.append(args)
             if args[:3] == ("dev", "wifi", "rescan"):
                 return mock.Mock(returncode=rescan_rc, stdout="", stderr="")
             if "list" in args and "wifi" in args:
-                out = seq.pop(0) if len(seq) > 1 else (seq[0] if seq else "")
-                return mock.Mock(returncode=0, stdout=out, stderr="")
+                if "ifname" in args:
+                    cur["out"] = seq.pop(0) if len(seq) > 1 else (seq[0] if seq else "")
+                    return mock.Mock(returncode=0, stdout=cur["out"], stderr="")
+                src = all_reads if all_reads is not None else cur["out"]
+                rows = "".join(l + ":wlan1\n" for l in src.splitlines()) + "".join(l + ":wlan0\n" for l in other_device.splitlines())
+                return mock.Mock(returncode=0, stdout=rows, stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def ws(**kw):
+            writes.append(dict(kw))
+            status.update(kw)
         with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "check_iface", lambda i: None), \
-                mock.patch.object(self.h.time, "sleep", lambda s: None), mock.patch.object(self.h, "write_status", lambda **kw: status.update(kw)), \
-                mock.patch.object(self.h, "SCAN_WAIT", 12):
+                mock.patch.object(self.h, "hotspot_active", lambda i: False), \
+                mock.patch.object(self.h.time, "sleep", lambda s: None), mock.patch.object(self.h, "write_status", ws), \
+                mock.patch.object(self.h, "scan_diagnostics", lambda i: ["Karte: %s:wifi:disconnected:" % i]), \
+                mock.patch.object(self.h, "SCAN_WAIT", 12), mock.patch.object(self.h, "SCAN_MIN", minimum), \
+                mock.patch.object(self.h, "SCAN_RESCAN_EVERY", rescan_every):
             clock = iter(range(0, 1000))
             with mock.patch.object(self.h.time, "time", lambda: next(clock) * 3):
                 msg = self.h.do_scan("wlan1")
+        self.writes = writes
         return calls, status, msg
 
     NETS = " :Bittersweet 5G:80:WPA2\n*:Bittersweet_EXT:57:WPA2\n :Nighthawk:90:WPA2\n :Offen:30:\n"
@@ -334,6 +348,44 @@ class HelperChecks(unittest.TestCase):
         self.assertIn(("dev", "wifi", "rescan", "ifname", "wlan1"), calls)                       # der Suchlauf wird ausdrücklich angestoßen
         self.assertTrue(all("--rescan" not in c or c[c.index("--rescan") + 1] == "no" for c in calls if "list" in c))
 
+    def test_scan_reads_the_list_for_all_cards_like_the_original_and_keeps_only_this_card(self):
+        """Issue #8 (Deep Dive): Die Original-Oberfläche liest "dev wifi list" ohne ifname. Manche Sticks melden ihre Netze nur auf diesem Weg."""
+        calls, status, msg = self.scan(reads=[""], all_reads=self.NETS, other_device=" :Nachbarkarte:99:WPA2\n")
+        self.assertEqual(msg, "4 Netze gefunden")
+        self.assertNotIn("Nachbarkarte", [n["ssid"] for n in status["scan"]["nets"]])             # Netze einer anderen Karte gehören nicht in diese Liste
+        self.assertTrue(any("list" in c and "ifname" not in c for c in calls))                    # ohne ifname gelesen
+        self.assertTrue(any("list" in c and "ifname" in c for c in calls))                        # und mit ifname
+
+    def test_scan_shows_networks_while_it_is_still_running(self):
+        calls, status, msg = self.scan(reads=[" :Eins:50:WPA2\n", " :Eins:50:WPA2\n :Zwei:60:WPA2\n"])
+        partial = [w["scan"] for w in self.writes if w["scan"].get("partial")]
+        self.assertTrue(partial)
+        self.assertEqual([n["ssid"] for n in partial[0]["nets"]], ["Eins"])                       # schon der erste Treffer wird angezeigt
+        self.assertEqual([n["ssid"] for n in partial[-1]["nets"]], ["Zwei", "Eins"])
+        self.assertFalse(status["scan"].get("partial"))                                             # das Endergebnis ist nicht mehr vorläufig
+
+    def test_scan_does_not_stop_on_old_results_before_the_minimum_time(self):
+        calls, status, msg = self.scan(reads=[" :Alt:50:WPA2\n"] * 3 + [" :Alt:50:WPA2\n :Neu:60:WPA2\n"], minimum=10)
+        self.assertEqual(msg, "2 Netze gefunden")                                                  # das Netz, das erst der neue Suchlauf findet, ist dabei
+
+    def test_scan_asks_for_a_new_rescan_while_the_list_stays_empty(self):
+        calls, status, msg = self.scan(reads=[""], rescan_every=4)
+        self.assertGreaterEqual(len([c for c in calls if c[:3] == ("dev", "wifi", "rescan")]), 2)
+
+    def test_empty_scan_carries_technical_details(self):
+        calls, status, msg = self.scan(reads=[""])
+        self.assertEqual(status["scan"]["nets"], [])
+        self.assertEqual(status["scan"]["debug"], ["Karte: wlan1:wifi:disconnected:"])
+        self.assertIn("technische Angaben", msg)
+        calls, status, msg = self.scan(reads=[self.NETS])
+        self.assertNotIn("debug", status["scan"])                                                   # mit Treffern keine Angaben
+
+    def test_diagnostics_shorten_mac_addresses_and_survive_missing_tools(self):
+        out = self.h.scan_diagnostics("wlan9")                                                      # hier gibt es weder nmcli noch die Karte
+        self.assertIsInstance(out, list)
+        self.assertLessEqual(len(out), 60)
+        self.assertEqual(self.h.MAC_RE.sub(lambda m: m.group(1) + ":xx:xx:xx", "GENERAL.HWADDR:00:11:22:33:44:55"), "GENERAL.HWADDR:00:11:22:xx:xx:xx")
+
     def test_scan_with_a_rescan_error_still_reads_the_list(self):
         calls, status, msg = self.scan(rescan_rc=1, reads=[self.NETS])                          # "Suchlauf gerade nicht erlaubt"
         self.assertEqual(msg, "4 Netze gefunden")
@@ -343,7 +395,7 @@ class HelperChecks(unittest.TestCase):
         self.assertIn("Keine Netze gefunden", msg)
         self.assertIn("noch einmal", msg)
         self.assertEqual(status["scan"]["nets"], [])
-        self.assertLess(len([c for c in calls if "list" in c]), 20)                            # es wird nicht endlos gefragt
+        self.assertLess(len([c for c in calls if "list" in c]), 30)                            # es wird nicht endlos gefragt
 
     def test_scan_merges_networks_that_appear_a_moment_later(self):
         calls, status, msg = self.scan(reads=[" :Eins:50:WPA2\n", " :Eins:50:WPA2\n :Zwei:60:WPA2\n"])
