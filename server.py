@@ -538,7 +538,7 @@ def plugin_swap():
 
 
 _VIEW = {"mtime": None, "ok": True}
-VIEW_ENABLED = False         # Ansicht im Betrieb (Issue #19): der Baustein kann sie schon, die Sendekette nutzt sie erst, wenn die Fußleiste sie braucht und sie mit echten Kameras geprüft ist
+VIEW_ENABLED = True          # Ansicht im Betrieb (Issue #19): Fußleiste am Handy; ohne passenden Baustein (plugin_view) bleibt es beim Neustart
 
 
 def plugin_view():
@@ -800,7 +800,8 @@ class PipelineStore:
     def swap_main_pip(self, with_key=None):
         """Hauptbild gegen eine Kamera tauschen, die gerade als kleines Bild im Bild ist (Szenenwechsel, Stufe 1). Ohne Angabe
         das erste kleine Bild. Kamera und Verzögerung bleiben beisammen (die Verzögerung gehört zur Kamera); Ecke, Größe,
-        Position und die Wahl des Tons (Hauptbild oder kleines Bild) bleiben am Platz."""
+        Position und die Wahl des Tons (Hauptbild oder kleines Bild) bleiben am Platz. Wahr, wenn dabei ein ausgeblendetes
+        kleines Bild eingeblendet wurde."""
         with self.lock:
             c = self.cfg
             if c.get("type") != "pip" or not c.get("pip") or not c.get("main"):
@@ -813,7 +814,15 @@ class PipelineStore:
             dk = self.SLOT_DELAY[slot]
             c["main"], c[slot] = c[slot], c["main"]
             c["main_delay_ms"], c[dk] = c.get(dk, 0), c.get("main_delay_ms", 0)
+            # "Ausgeblendet" gehört zur Kamera: die bisherige Hauptkamera war sichtbar, also ist ihr kleines Bild nach dem Tausch sichtbar
+            styles = clean_styles(c.get("styles"))
+            idx = STYLE_SLOTS[list(self.SLOT_DELAY).index(slot)]
+            shown = not styles[idx]["visible"]
+            if shown:
+                styles[idx]["visible"] = True
+                c["styles"] = styles
             self.save()
+            return shown
 
     def set(self, req, camera_keys):
         t = req.get("type")
@@ -1314,6 +1323,7 @@ class SendControl:
                "server": sel and {"name": sel["name"], "host": sel["host"], "port": sel["port"]}}
         out["failover"] = d.get("failover") if active else None
         out["view_live"], out["audio_live"], out["view"] = self.view_live(), self.audio_live(), self.view_state()
+        out["footer"] = self.footer()
         sw = d.get("swap") if active else None
         out["swap_group"] = [k for k in sw["cams"][:int(sw.get("group", 0))] if isinstance(k, str)] if isinstance(sw, dict) and isinstance(sw.get("cams"), list) else []
         applied = d.get("applied") if active else None
@@ -1438,6 +1448,38 @@ class SendControl:
         except (OSError, ValueError):
             return None
         return {"hide": hide, "audio": audio, "mute": bool(mute)}
+
+    def footer(self):
+        """Angaben für die Fußleiste am Handy (Issue #19): die Kameras im Bild in der Reihenfolge der Kameraliste (so springen die Knöpfe nach einem
+        Tausch nicht), welche Hauptbild und welche ausgeblendet ist, und die Tonquelle samt Stumm. Während der Sendung gilt, was der Baustein
+        meldet, sonst die Einstellung. None, wenn die Art nicht Bild-in-Bild ist."""
+        c = PipelineStore._safe_cfg(self.pipeline.cfg)
+        pip, pip2, pip3, _ = PipelineStore._layout(c)
+        if c["type"] != "pip" or not c.get("main") or not pip:
+            return None
+        order = ("main", "pip", "pip2", "pip3")
+        place = {"main": c["main"], "pip": c["pip"], "pip2": c["pip2"] if pip2 else "", "pip3": c["pip3"] if pip3 else ""}
+        st = self.view_state() if self.view_live() else None
+        if st:
+            hide, apos, mute = st["hide"], st["audio"], bool(st["mute"])
+        else:
+            (hide, apos), mute = PipelineStore.view_values(c), False
+        src = {v: k for k, v in PipelineStore.AUDIO_POS.items()}.get(apos, "main")
+        if not place.get(src):
+            src = "main"
+        slot_of = {}
+        for i, k in enumerate(order):
+            if place[k]:
+                slot_of.setdefault(place[k], i)
+        listed = {x["key"]: x for x in self.cams.listing("")}
+        keys = [k for k in listed if k in slot_of] + [k for k in slot_of if k not in listed]
+        cams = [{"key": k, "name": (listed.get(k) or {}).get("name") or k, "state": (listed.get(k) or {}).get("state", "unknown"),
+                 "slot": slot_of[k], "main": slot_of[k] == 0, "hidden": slot_of[k] > 0 and bool(hide >> (slot_of[k] - 1) & 1)} for k in keys]
+        options = [k for k in order if place[k]]
+        aud_key = place[src]
+        return {"cams": cams,
+                "audio": {"src": src, "key": aud_key, "name": (listed.get(aud_key) or {}).get("name") or aud_key, "mute": mute,
+                          "next": options[(options.index(src) + 1) % len(options)]}}
 
     def apply_view(self, hide, audio, mute):
         """Ansicht in die laufende Sendekette übernehmen, ohne Neustart. Wahr, wenn der Baustein den neuen Zustand zurückgemeldet hat (so, wie er
@@ -3610,9 +3652,15 @@ class Handler(BaseHTTPRequestHandler):
                 with_key = d.get("with")
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
                     raise ValueError("Kamera unbekannt")
-                self.pipeline.swap_main_pip(with_key)
+                shown = self.pipeline.swap_main_pip(with_key)
                 if self.send.swap_live():
-                    return self.reply(200, {"ok": True, "restarted": False, "note": "Getauscht, ohne Unterbrechung."})
+                    note = "Getauscht, ohne Unterbrechung."
+                    if shown:                      # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
+                        hide, aud = PipelineStore.view_values(self.pipeline.cfg)
+                        cur = self.send.view_state()
+                        if not (self.send.view_live() and self.send.apply_view(hide, aud, bool(cur and cur["mute"]))):
+                            note += " Das kleine Bild erscheint beim nächsten Start der Sendung."
+                    return self.reply(200, {"ok": True, "restarted": False, "note": note})
                 restarted, note = self.send.restart_if_live()
                 return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
             if path == "/api/pipeline":

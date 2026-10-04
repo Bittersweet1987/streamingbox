@@ -452,6 +452,147 @@ class Endpoint(unittest.TestCase):
         self.assertTrue(json.loads(h.out.data)["restarted"])
 
 
+NAMES = {"cam-a": "Osmo Action 4", "cam-b": "iPhone", "cam-c": "Action 5 Pro", "cam-d": "Webcam hinten"}
+
+
+def cam_listing(states=None, keys=KEYS):
+    states = states or {}
+    return [{"key": k, "name": NAMES[k], "state": states.get(k, "live")} for k in keys]
+
+
+class FooterData(unittest.TestCase):
+    """Was die Fußleiste am Handy braucht (Issue #19): Kameras im Bild, Hauptbild, ausgeblendet, Tonquelle."""
+    def make(self, cfg=None, listing=None, active=False):
+        d = tempfile.mkdtemp()
+        pipeline = server.PipelineStore(os.path.join(d, "pipeline.json"))
+        pipeline.set(dict(CFG), KEYS)
+        pipeline.cfg.update(cfg or {})                                                      # auch Zustände, die das Formular nicht erlaubt (alte Dateien)
+        cams = mock.Mock()
+        cams.listing = lambda host: listing if listing is not None else cam_listing()
+        srtla = mock.Mock(data={})
+        srtla.public = lambda: {"servers": [], "selected": None}
+        send = server.SendControl(d, srtla, pipeline, cams, demo=True)
+        patches = [mock.patch.object(server, "plugin_multi", lambda: True), mock.patch.object(server, "plugin_swap", lambda: True)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return send
+
+    def test_none_unless_picture_in_picture(self):
+        self.assertIsNone(self.make(dict(CFG, type="single", pip="", pip2="", pip3="")).footer())
+        self.assertIsNone(self.make(dict(CFG, pip="", pip2="", pip3="")).footer())
+
+    def test_all_cameras_in_the_order_of_the_camera_list_with_the_main_one_marked(self):
+        f = self.make().footer()
+        self.assertEqual([c["key"] for c in f["cams"]], KEYS)
+        self.assertEqual([c["main"] for c in f["cams"]], [True, False, False, False])
+        self.assertEqual([c["slot"] for c in f["cams"]], [0, 1, 2, 3])
+        self.assertEqual([c["name"] for c in f["cams"]], [NAMES[k] for k in KEYS])         # das erste Wort bildet die Oberfläche
+        self.assertEqual([c["hidden"] for c in f["cams"]], [False] * 4)
+
+    def test_only_cameras_that_are_in_the_picture(self):
+        f = self.make(dict(CFG, pip3="", swap_cams=2)).footer()
+        self.assertEqual([c["key"] for c in f["cams"]], ["cam-a", "cam-b", "cam-c"])
+
+    def test_hidden_comes_from_the_stored_visibility_without_a_chain(self):
+        f = self.make(dict(CFG, styles=hidden({"1": False, "3": False}))).footer()
+        self.assertEqual({c["key"]: c["hidden"] for c in f["cams"]}, {"cam-a": False, "cam-b": True, "cam-c": False, "cam-d": True})
+
+    def test_main_picture_is_never_reported_hidden(self):
+        f = self.make(dict(CFG, styles=hidden({"1": False, "2": False, "3": False}))).footer()
+        self.assertFalse(f["cams"][0]["hidden"])
+
+    def test_while_sending_what_the_plugin_reports_counts(self):
+        send = self.make(dict(CFG, styles=hidden({"1": False})))
+        send._fake_view = {"hide": 4, "audio": 1, "mute": True}                             # laut Baustein: Klein 3 aus, Ton von Klein 2, stumm
+        f = send.footer()
+        self.assertEqual({c["key"]: c["hidden"] for c in f["cams"]}, {"cam-a": False, "cam-b": False, "cam-c": False, "cam-d": True})
+        self.assertEqual((f["audio"]["src"], f["audio"]["key"], f["audio"]["mute"]), ("pip2", "cam-c", True))
+
+    def test_audio_follows_the_stored_choice_and_is_not_muted_without_a_chain(self):
+        f = self.make(dict(CFG, audio="pip3")).footer()
+        self.assertEqual((f["audio"]["src"], f["audio"]["key"], f["audio"]["name"], f["audio"]["mute"]), ("pip3", "cam-d", "Webcam hinten", False))
+
+    def test_audio_cycles_through_the_existing_pictures_only(self):
+        for cfg, start, order in ((CFG, "main", ["pip", "pip2", "pip3", "main"]), (dict(CFG, pip3="", swap_cams=2), "main", ["pip", "pip2", "main"]),
+                                  (dict(CFG, pip2="", pip3="", swap_cams=2), "main", ["pip", "main"])):
+            send = self.make(dict(cfg, audio=start))
+            seen = []
+            for _ in order:
+                f = send.footer()
+                seen.append(f["audio"]["next"])
+                send.pipeline.set_view(audio=f["audio"]["next"])
+            self.assertEqual(seen, order, str(cfg))
+
+    def test_audio_of_a_missing_picture_falls_back_to_the_main_picture(self):
+        send = self.make(dict(CFG, audio="pip3", pip3="", swap_cams=2))
+        self.assertEqual(send.footer()["audio"]["src"], "main")
+
+    def test_camera_that_the_list_does_not_know_keeps_its_key_as_name(self):
+        f = self.make(listing=cam_listing(keys=["cam-a", "cam-b", "cam-c"])).footer()
+        d = [c for c in f["cams"] if c["key"] == "cam-d"][0]
+        self.assertEqual((d["name"], d["state"]), ("cam-d", "unknown"))
+
+    def test_camera_state_is_handed_on(self):
+        f = self.make(listing=cam_listing({"cam-b": "offline"})).footer()
+        self.assertEqual({c["key"]: c["state"] for c in f["cams"]}["cam-b"], "offline")
+
+    def test_status_carries_the_footer(self):
+        send = self.make()
+        with mock.patch.object(send, "reasons", lambda: []):
+            st = send.status()
+        self.assertEqual([c["key"] for c in st["footer"]["cams"]], KEYS)
+
+    def test_swap_moves_the_main_mark_but_not_the_buttons(self):
+        send = self.make()
+        send.pipeline.swap_main_pip("cam-c")
+        f = send.footer()
+        self.assertEqual([c["key"] for c in f["cams"]], KEYS)                              # die Reihenfolge bleibt
+        self.assertEqual([c["key"] for c in f["cams"] if c["main"]], ["cam-c"])
+        self.assertEqual({c["key"]: c["slot"] for c in f["cams"]}, {"cam-a": 2, "cam-b": 1, "cam-c": 0, "cam-d": 3})
+
+    def test_swap_shows_the_picture_of_the_former_main_camera(self):
+        send = self.make(dict(CFG, styles=hidden({"2": False})))
+        self.assertTrue(send.pipeline.swap_main_pip("cam-c"))                              # Klein 2 war ausgeblendet: jetzt ist dort cam-a
+        self.assertTrue(send.pipeline.cfg["styles"]["2"]["visible"])
+        self.assertFalse(send.pipeline.swap_main_pip("cam-a"))                             # zurücktauschen: nichts mehr einzublenden
+        self.assertTrue(self.make(dict(CFG, styles=hidden({"1": False}))).pipeline.swap_main_pip())
+
+    def test_swap_keeps_other_hidden_pictures_hidden(self):
+        send = self.make(dict(CFG, styles=hidden({"1": False, "3": False})))
+        send.pipeline.swap_main_pip("cam-d")
+        v = {k: send.pipeline.cfg["styles"][k]["visible"] for k in "123"}
+        self.assertEqual(v, {"1": False, "2": True, "3": True})
+
+
+class FooterSwapEndpoint(Endpoint):
+    def test_swap_endpoint_applies_the_view_when_a_hidden_picture_comes_back(self):
+        self.pipeline.cfg["styles"] = hidden({"1": False})
+        applied = []
+        with mock.patch.object(self.send, "swap_live", lambda: True), mock.patch.object(self.send, "view_live", lambda: True), \
+                mock.patch.object(self.send, "apply_view", lambda h, a, m: applied.append((h, a, m)) or True):
+            h = self.handler("/api/pipeline/swap", {"with": "cam-b"})
+            h.do_POST()
+        self.assertEqual(h.sent, [200])
+        out = json.loads(h.out.data)
+        self.assertEqual(out["note"], "Getauscht, ohne Unterbrechung.")
+        self.assertEqual(applied, [(0, -1, False)])                                        # Klein 1 ist jetzt sichtbar
+
+    def test_swap_endpoint_says_so_when_the_view_cannot_be_applied(self):
+        self.pipeline.cfg["styles"] = hidden({"1": False})
+        with mock.patch.object(self.send, "swap_live", lambda: True), mock.patch.object(self.send, "view_live", lambda: False):
+            h = self.handler("/api/pipeline/swap", {"with": "cam-b"})
+            h.do_POST()
+        self.assertIn("nächsten Start", json.loads(h.out.data)["note"])
+
+    def test_swap_endpoint_leaves_the_view_alone_when_nothing_was_hidden(self):
+        with mock.patch.object(self.send, "swap_live", lambda: True), mock.patch.object(self.send, "apply_view", side_effect=AssertionError("nicht nötig")):
+            h = self.handler("/api/pipeline/swap", {"with": "cam-b"})
+            h.do_POST()
+        self.assertEqual(h.sent, [200])
+        self.assertEqual(json.loads(h.out.data)["note"], "Getauscht, ohne Unterbrechung.")
+
+
 class PluginSource(unittest.TestCase):
     SRC = open(os.path.join(ROOT, "gst", "gstpbpip.c"), encoding="utf-8").read()
 
@@ -469,8 +610,10 @@ class PluginSource(unittest.TestCase):
     def test_plugin_detection_looks_for_the_new_properties(self):
         d = tempfile.mkdtemp()
         so = os.path.join(d, "x.so")
-        self.assertFalse(server.VIEW_ENABLED)                                              # solange die Fußleiste fehlt: aus
-        with mock.patch.object(server, "PLUGIN_SO", so), mock.patch.object(server, "VIEW_ENABLED", True):
+        self.assertTrue(server.VIEW_ENABLED)                                               # die Fußleiste am Handy braucht es (Issue #19)
+        with mock.patch.object(server, "VIEW_ENABLED", False):
+            self.assertFalse(server.plugin_view())                                         # abschaltbar, ohne dass der Baustein befragt wird
+        with mock.patch.object(server, "PLUGIN_SO", so):
             server._VIEW.update(mtime=None, ok=True)
             open(so, "wb").write(b"... style1 style3 slot3 ...")
             self.assertFalse(server.plugin_view())
