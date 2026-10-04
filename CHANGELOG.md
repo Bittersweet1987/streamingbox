@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.41 (Beta)
+- Geändert: **Auf einer frischen BELABOX gibt es keinen Setup-Code und kein zweites Passwort mehr.** Die Oberfläche benutzt das Passwort der BELABOX (belaUI). Hat die BELABOX noch keins, steht auf der Anmeldeseite, dass es zuerst in der BELABOX-Oberfläche festgelegt werden muss;
+  die Seite wartet darauf und zeigt die Anmeldung von selbst, sobald das Passwort da ist. Die Datei `/var/lib/pipbox/setup-code` wird auf einer BELABOX nicht mehr angelegt (eine alte wird beim Start gelöscht). Ein eigenes Passwort, das eine frühere Version gesetzt hat, bleibt gültig.
+  Nur ohne belaUI (Entwicklung, Demo) gilt weiter das eigene Passwort mit Setup-Code.
+- Tests: Anmeldearten (frische BELABOX wartet ohne Code, Passwort der BELABOX, eigenes Passwort ohne belaUI, früheres eigenes Passwort bleibt gültig, alte Codedatei wird gelöscht).
+
 ## 0.9.40 (Beta)
 - Behoben: **Nach einem Tausch ohne Unterbrechung startete die automatische Umschaltung den Encoder etwa 3 Sekunden später doch neu** (gefunden im ersten Test mit echten Kameras: Einbruch im Upload nach dem Wechsel der Kamera). Die Sendekette führte ihre Einstellung nach dem Tausch zwar nach,
   die Reihenfolge der genutzten Kameras (die Anordnung) aber nicht; die Automatik hielt die neue Reihenfolge für eine neue Anordnung. Jetzt folgt auch die Anordnung der neuen Reihenfolge, der Tausch bleibt ohne Neustart.

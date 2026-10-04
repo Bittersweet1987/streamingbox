@@ -800,5 +800,83 @@ class SeamlessSwap(unittest.TestCase):
         self.assertFalse(sc.swap_live())
 
 
+class AuthModes(unittest.TestCase):
+    """Anmeldung: auf einer BELABOX gilt deren Passwort; ohne Passwort dort wartet die Oberfläche (kein Setup-Code)."""
+
+    def bela(self, config=None):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "belaUI"))
+        path = os.path.join(d, "belaUI", "config.json")
+        if config is not None:
+            with open(path, "w") as f:
+                json.dump(config, f)
+        return d, path
+
+    def test_fresh_belabox_waits_for_its_password_and_has_no_setup_code(self):
+        d, cfg = self.bela({"asrc": "x"})                               # belaUI ist da, aber ohne Passwort
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        self.assertEqual((a.mode, a.configured, a.setup_code), ("belabox-wartet", False, None))
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
+        with self.assertRaises(ValueError) as e:
+            a.login("irgendwas", "127.0.0.1")
+        self.assertIn("BELABOX", str(e.exception))
+        with self.assertRaises(ValueError) as e:
+            a.set_password("abc", "ein-langes-passwort", "127.0.0.1")
+        self.assertIn("BELABOX", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "auth.json")))     # nichts Eigenes angelegt
+
+    def test_missing_config_file_of_an_installed_belaui_also_waits(self):
+        d, cfg = self.bela(None)
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        self.assertEqual((a.mode, a.setup_code), ("belabox-wartet", None))
+
+    def test_page_switches_when_the_belabox_password_appears(self):
+        d, cfg = self.bela({"asrc": "x"})
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        self.assertEqual(a.mode, "belabox-wartet")
+        with open(cfg, "w") as f:
+            json.dump({"asrc": "x", "password_hash": "$2b$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234"}, f)
+        self.assertEqual((a.mode, a.configured), ("belabox", True))
+
+    def test_belabox_password_is_used_when_present(self):
+        d, cfg = self.bela({"password_hash": "$2b$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234"})
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        self.assertEqual((a.mode, a.configured, a.setup_code), ("belabox", True, None))
+        with mock.patch.object(a, "bela_ok", lambda pw, h: pw == "richtig"):
+            self.assertTrue(a.login("richtig", "127.0.0.1"))
+            with self.assertRaises(ValueError):
+                a.login("falsch", "127.0.0.1")
+
+    def test_without_belaui_the_own_password_with_setup_code_still_works(self):
+        d = tempfile.mkdtemp()
+        a = server.Auth(os.path.join(d, "state"), os.path.join(d, "keine-belaui", "config.json"))
+        self.assertEqual(a.mode, "own")
+        self.assertTrue(a.setup_code)
+        code = a.setup_code
+        with self.assertRaises(ValueError):
+            a.set_password("falsch", "ein-langes-passwort", "127.0.0.1")
+        a.set_password(code, "ein-langes-passwort", "127.0.0.1")
+        self.assertTrue(a.configured)
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
+        self.assertTrue(a.login("ein-langes-passwort", "127.0.0.1"))
+
+    def test_own_password_from_an_earlier_version_stays_valid_on_a_belabox_without_password(self):
+        d = tempfile.mkdtemp()
+        a0 = server.Auth(os.path.join(d, "state"), None)                 # früher: eigenes Passwort gesetzt
+        a0.set_password(a0.setup_code, "ein-langes-passwort", "127.0.0.1")
+        bd, cfg = self.bela({"asrc": "x"})
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        self.assertEqual((a.mode, a.configured), ("own", True))
+        self.assertTrue(a.login("ein-langes-passwort", "127.0.0.1"))
+
+    def test_stale_setup_code_file_is_removed_on_a_belabox(self):
+        d, cfg = self.bela({"asrc": "x"})
+        os.makedirs(os.path.join(d, "state"))
+        with open(os.path.join(d, "state", "setup-code"), "w") as f:
+            f.write("alt\n")
+        server.Auth(os.path.join(d, "state"), cfg)
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
+
+
 if __name__ == "__main__":
     unittest.main()

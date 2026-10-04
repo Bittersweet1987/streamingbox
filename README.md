@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.40 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
+**Version 0.9.41 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
 Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 13 Mbit/s, die Box war dabei zu rund 70 Prozent im
 Leerlauf (CPU im Mittel etwa 25 bis 30 Prozent, 35 bis 37 °C). Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
 ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN").
@@ -11,7 +11,7 @@ Auf der Radxa ROCK 5B+ wurde nur ein älterer Stand getestet (0.9.10).
 Eigenständiges Zusatzpaket für eine BELABOX, **getrennt von der Original-Oberfläche**. Es ändert nur eine
 Einstellung des RTMP-Servers der BELABOX (Leerlaufgrenze für Kameras, mit Sicherung und Rückweg; ein kleiner apt-Haken stellt sie nach einem Update des BELABOX-Pakets wieder her) und sonst keine
 BELABOX-Dateien, damit BELABOX-Updates weiter möglich bleiben. Eigene Weboberfläche mit Anmeldung über das
-vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
+vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein eigenes Passwort).
 
 ## Was geht
 
@@ -113,8 +113,7 @@ Die Installation lädt fehlende Pakete nach und baut den Bild-in-Bild-Baustein u
 Minuten dauern.
 
 Danach im Browser `http://<Adresse der Box>:8780` öffnen und mit dem BELABOX-Passwort anmelden. Hat die BELABOX noch kein
-Passwort, verlangt die Seite einen Setup-Code, den die Box in der Datei `/var/lib/pipbox/setup-code` bereithält
-(`sudo cat /var/lib/pipbox/setup-code`); dann ein eigenes Passwort festlegen. Spätere Versionen spielt die Karte
+Passwort (frisches Image), steht auf der Seite, dass es zuerst in der BELABOX-Oberfläche (`http://<Adresse der Box>/`) festgelegt werden muss; die Seite wartet darauf und zeigt die Anmeldung dann von selbst. Einen Setup-Code gibt es nicht. Spätere Versionen spielt die Karte
 "Software-Update" in der Oberfläche ein, ein erneutes Installieren ist nicht nötig.
 
 Das Paket schreibt nach der Installation sehr wenig auf die Speicherkarte ("Protokolle: sparsam"). Für die Fehlersuche lässt

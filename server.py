@@ -1296,11 +1296,14 @@ MAX_FAILS, FAIL_WINDOW = 5, 300
 
 
 class Auth:
-    """Ein Passwort für die Oberfläche; Einrichtung über einen Setup-Code.
+    """Ein Passwort für die Oberfläche.
 
-    Erster Start: kein Passwort gesetzt. Der Server schreibt einen Setup-Code in
-    <state>/setup-code (Rechte 0600, Besitzer pipbox). Wer den Code kennt, legt im Browser das
-    Passwort fest; danach wird die Codedatei gelöscht. Passwort nur als PBKDF2-HMAC-SHA256-Hash.
+    Auf einer BELABOX gilt das Passwort der belaUI (bcrypt-Hash in deren config.json, nur gelesen). Hat die BELABOX noch keins
+    (frisches Image), wartet die Oberfläche darauf: Es wird zuerst in der BELABOX-Oberfläche festgelegt, hier gibt es dann
+    weder einen Setup-Code noch ein zweites Passwort ("belabox-wartet").
+    Nur ohne belaUI (Entwicklung, Demo): eigenes Passwort. Erster Start: Der Server schreibt einen Setup-Code in
+    <state>/setup-code (Rechte 0600, Besitzer pipbox). Wer den Code kennt, legt im Browser das Passwort fest; danach wird die
+    Codedatei gelöscht. Passwort nur als PBKDF2-HMAC-SHA256-Hash. Ein eigenes Passwort aus einer früheren Version bleibt gültig.
     """
 
     BELA_JS = ("const b=require(process.argv[1]);let d='';"
@@ -1323,11 +1326,16 @@ class Auth:
         except (OSError, ValueError):
             pass
         self.setup_code = None
-        if not self.cfg and not self.bela_hash():
+        if not self.cfg and not self.bela_hash() and not self.bela_pending():
             self.setup_code = secrets.token_urlsafe(6)
             fd = os.open(self.code_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(self.setup_code + "\n")
+        else:
+            try:
+                os.remove(self.code_path)     # ein Code von früher ist nicht mehr nötig
+            except OSError:
+                pass
 
     def bela_hash(self):
         """bcrypt-Hash des BELABOX-Passworts (nur gelesen) oder None."""
@@ -1353,9 +1361,19 @@ class Auth:
             raise RuntimeError("BELABOX-Passwortprüfung nicht möglich")
         return r.returncode == 0
 
+    def bela_pending(self):
+        """Läuft die Oberfläche auf einer BELABOX, die noch kein Passwort hat? (belaUI ist da, ihre Konfiguration enthält aber keinen Hash)"""
+        if not self.bela_config or self.bela_hash():
+            return False
+        return os.path.isdir(os.path.dirname(os.path.abspath(self.bela_config)))
+
     @property
     def mode(self):
-        return "belabox" if self.bela_hash() else "own"
+        if self.bela_hash():
+            return "belabox"
+        if self.cfg:
+            return "own"                      # eigenes Passwort aus einer früheren Version bleibt gültig
+        return "belabox-wartet" if self.bela_pending() else "own"
 
     @property
     def configured(self):
@@ -1376,7 +1394,11 @@ class Auth:
         with self.lock:
             self.fails.setdefault(ip, []).append(time.time())
 
+    WAITING_MSG = "Auf der BELABOX ist noch kein Passwort gesetzt. Bitte zuerst in der BELABOX-Oberfläche eines festlegen."
+
     def set_password(self, code, pw, ip):
+        if self.mode == "belabox-wartet":
+            raise ValueError(self.WAITING_MSG)
         if self.configured or not self.setup_code:
             raise ValueError("Passwort ist schon gesetzt")
         if self.throttled(ip):
@@ -1401,7 +1423,7 @@ class Auth:
 
     def login(self, pw, ip):
         if not self.configured:
-            raise ValueError("Noch kein Passwort gesetzt")
+            raise ValueError(self.WAITING_MSG if self.mode == "belabox-wartet" else "Noch kein Passwort gesetzt")
         if self.throttled(ip):
             raise PermissionError("Zu viele Versuche, bitte 5 Minuten warten")
         bh = self.bela_hash()

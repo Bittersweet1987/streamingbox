@@ -28,17 +28,28 @@ button{background:var(--bar);color:#0f172a;font-weight:600;border-color:transpar
 </form>
 <script>
 const $=id=>document.getElementById(id);
-let setup=false;
-fetch("/api/auth").then(r=>r.json()).then(a=>{
-  if(a.authed){location.reload();return;}
-  setup=!a.configured;
-  if(a.mode==="belabox") $("hint").textContent="Anmelden mit dem BELABOX-Passwort";
-  if(setup){
-    $("hint").textContent="Ersteinrichtung: Den Setup-Code finden Sie auf der Box in der Datei /var/lib/pipbox/setup-code. Dann Passwort festlegen (mindestens 10 Zeichen).";
-    $("code").hidden=false; $("pw2").hidden=false; $("btn").textContent="Passwort festlegen";
-    $("pw").autocomplete="new-password";
-  }
-});
+let setup=false, waiting=false;
+function check(){
+  fetch("/api/auth").then(r=>r.json()).then(a=>{
+    if(a.authed){location.reload();return;}
+    if(a.mode==="belabox-wartet"){            // frische BELABOX: das Passwort wird zuerst in der BELABOX-Oberfläche festgelegt
+      $("hint").textContent="Auf dieser BELABOX ist noch kein Passwort gesetzt. Bitte zuerst die BELABOX-Oberfläche öffnen (http://"+location.hostname+"/), dort ein Passwort festlegen und danach hier mit diesem Passwort anmelden. Diese Seite wartet darauf.";
+      waiting=true;
+      $("pw").hidden=true; $("pw").required=false; $("btn").hidden=true; $("code").hidden=true; $("pw2").hidden=true;
+      setTimeout(check,3000);
+      return;
+    }
+    if(waiting&&a.configured){ location.reload(); return; }          // Passwort ist inzwischen gesetzt: Anmeldung zeigen
+    setup=!a.configured;
+    if(a.mode==="belabox") $("hint").textContent="Anmelden mit dem BELABOX-Passwort";
+    if(setup){
+      $("hint").textContent="Ersteinrichtung: Den Setup-Code finden Sie auf der Box in der Datei /var/lib/pipbox/setup-code. Dann Passwort festlegen (mindestens 10 Zeichen).";
+      $("code").hidden=false; $("pw2").hidden=false; $("btn").textContent="Passwort festlegen";
+      $("pw").autocomplete="new-password";
+    }
+  });
+}
+check();
 $("f").addEventListener("submit",async e=>{
   e.preventDefault(); $("err").textContent="";
   if(setup && $("pw").value!==$("pw2").value){ $("err").textContent="Die Passwörter stimmen nicht überein"; return; }
