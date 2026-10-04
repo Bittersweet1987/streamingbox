@@ -579,5 +579,33 @@ class UplinkLights(unittest.TestCase):
             self.assertEqual(server.uplink_states(["eth2"]), {})
 
 
+class SwapMainPip(unittest.TestCase):
+    def store(self, cfg):
+        d = tempfile.mkdtemp()
+        st = server.PipelineStore(os.path.join(d, "pipeline.json"))
+        st.cfg.update(cfg)
+        return st
+
+    def test_swaps_cameras_and_their_delays_but_not_the_places(self):
+        st = self.store({"type": "pip", "main": "cam-a", "pip": "cam-b", "pip2": "cam-c", "corner": 3, "size_pct": 25,
+                         "audio": "main", "main_delay_ms": 1500, "pip_delay_ms": 120, "pip2_delay_ms": 250})
+        st.swap_main_pip()
+        c = st.cfg
+        self.assertEqual((c["main"], c["pip"], c["pip2"]), ("cam-b", "cam-a", "cam-c"))
+        self.assertEqual((c["main_delay_ms"], c["pip_delay_ms"], c["pip2_delay_ms"]), (120, 1500, 250))
+        self.assertEqual((c["corner"], c["size_pct"], c["audio"]), (3, 25, "main"))
+        with open(st.path) as f:                     # gespeichert
+            self.assertEqual(json.load(f)["main"], "cam-b")
+        st.swap_main_pip()                           # zweimal tauschen = wie vorher
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["main_delay_ms"]), ("cam-a", "cam-b", 1500))
+
+    def test_refuses_without_small_picture(self):
+        for cfg in ({"type": "single", "main": "cam-a", "pip": ""}, {"type": "pip", "main": "cam-a", "pip": ""}):
+            st = self.store(cfg)
+            with self.assertRaises(ValueError):
+                st.swap_main_pip()
+            self.assertEqual(st.cfg["main"], "cam-a")
+
+
 if __name__ == "__main__":
     unittest.main()

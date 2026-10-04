@@ -139,7 +139,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
       <div class="row" style="justify-content:flex-start"><span class="big" id="livestate">–</span><span id="liveup" class="liveup" hidden title="Gesamter Upload über die gewählten Netze"></span></div>
-      <div class="actions"><button id="live_go" type="button" class="warnbtn">Live gehen</button><button id="live_stop" type="button" class="sec" hidden>Live beenden</button> <button type="button" class="sec" id="sm_btn2" title="Blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird">Streammodus: aus</button></div>
+      <div class="actions"><button id="live_go" type="button" class="warnbtn">Live gehen</button><button id="live_stop" type="button" class="sec" hidden>Live beenden</button> <button id="live_swap" type="button" class="sec" hidden title="Hauptbild und erstes kleines Bild tauschen. Läuft die Sendung, startet der Encoder dafür neu (etwa 5 Sekunden ohne Bild).">⇄ Bilder tauschen</button> <button type="button" class="sec" id="sm_btn2" title="Blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird">Streammodus: aus</button></div>
       <div id="livewhy" class="ph"></div>
       <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
       <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
@@ -803,6 +803,7 @@ async function pipeLoad(){
   setDelays([c.main_delay_ms,c.pip_delay_ms,c.pip2_delay_ms,c.pip3_delay_ms]);
   pipLive=d.live||{};
   $("p_audio").value=c.audio;
+  $("live_swap").hidden=!(c.type==="pip"&&c.pip&&c.main);
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
   let info=c.main?`Gespeichert: ${c.type==="pip"?"Bild-in-Bild":"eine Kamera"}, Hauptbild ${c.main}${c.type==="pip"?", kleines Bild "+c.pip+(c.pip2?(c.pip3?", ":" und ")+c.pip2:"")+(c.pip3?" und "+c.pip3:""):""}.`:"Noch keine Pipeline gespeichert.";
@@ -917,6 +918,11 @@ $("live_go").addEventListener("click",async()=>{
   if(!confirm(`Jetzt LIVE senden?\n\nZiel: ${s.name}\n\nDas Bild wird sofort zum Server übertragen.`)) return;
   try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
   setTimeout(sendLoad,800);
+});
+$("live_swap").addEventListener("click",async()=>{
+  const live=!$("live_stop").hidden;
+  if(live&&!confirm("Hauptbild und kleines Bild tauschen?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
+  try{ const r=await srtlaCall("POST","/api/pipeline/swap",{}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
 $("live_stop").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/send",{action:"stop"}); }catch(x){ $("liveerr").textContent=x.message; }

@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.33 (Beta)
+- Neu: **Hauptbild und kleines Bild tauschen** (Knopf "⇄ Bilder tauschen" in der Live-Karte, sichtbar, wenn ein Bild-in-Bild mit mindestens einem kleinen Bild eingestellt ist). Der Tausch vertauscht das Hauptbild
+  mit dem ersten kleinen Bild. Kamera und Verzögerung bleiben beisammen; Ecke, Größe, Position und die Wahl des Tons (Hauptbild oder kleines Bild) bleiben am Platz. Läuft die Sendung, startet der Encoder dafür neu und das
+  Bild ist etwa 5 Sekunden unterbrochen (nach Rückfrage); sonst wird nur die Einstellung getauscht. Das ist die erste Stufe des Szenenwechsels; ein Tausch ohne Neustart mit Überblendung ist geplant (siehe README).
+  Neu: `POST /api/pipeline/swap`.
+- Tests: Tausch von Kamera und Verzögerung, doppelter Tausch, Ablehnung ohne kleines Bild.
+
 ## 0.9.32 (Beta)
 - Geändert: Im Kasten "Upload" sitzt der Strich über der Zeile "Summe" jetzt direkt an der Zeile und braucht keinen eigenen Platz mehr. Die Summenzeile ist so hoch wie die anderen Zeilen und liegt auf der gleichen Höhe wie
   die Zeilen im Kasten "Kameras".

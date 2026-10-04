@@ -588,6 +588,17 @@ class PipelineStore:
         except OSError:
             pass
 
+    def swap_main_pip(self):
+        """Hauptbild und erstes kleines Bild tauschen (Szenenwechsel, Stufe 1). Kamera und Verzögerung bleiben beisammen
+        (die Verzögerung gehört zur Kamera); Ecke, Größe, Position und die Wahl des Tons bleiben am Platz."""
+        with self.lock:
+            c = self.cfg
+            if c.get("type") != "pip" or not c.get("pip") or not c.get("main"):
+                raise ValueError("Zum Tauschen braucht es ein Hauptbild und ein kleines Bild")
+            c["main"], c["pip"] = c["pip"], c["main"]
+            c["main_delay_ms"], c["pip_delay_ms"] = c.get("pip_delay_ms", 0), c.get("main_delay_ms", 0)
+            self.save()
+
     def set(self, req, camera_keys):
         t = req.get("type")
         if t not in ("single", "pip"):
@@ -2261,6 +2272,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/swupdate":
                 self.swupdate.request(d.get("action"), d.get("confirm") is True, d.get("version"), d.get("older") is True)
                 return self.reply(200, {"ok": True})
+            if path == "/api/pipeline/swap":
+                self.pipeline.swap_main_pip()
+                restarted, note = self.send.restart_if_live()
+                return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
             if path == "/api/pipeline":
                 before = dict(self.pipeline.cfg)
                 self.pipeline.set(d, [c["key"] for c in self.cams.cams])
