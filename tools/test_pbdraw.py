@@ -652,8 +652,9 @@ class Crop(unittest.TestCase, ModelMixin):
         self.assertIsNone(place("op=0", 1920, 1080, 480, 270))
         self.assertIsNone(place("op=0,cl=400,bw=3", 1920, 1080, 480, 270))
         self.assertIsNotNone(place("op=1", 1920, 1080, 480, 270))
-        # unten Mitte mit Rand: passt nicht mehr, wenn der Rand nicht mehr hineinpasst
-        self.assertIsNone(place("", 1920, 270 + 20, 480, 270, 4))
+        # unten Mitte mit Rand: Der Rand schrumpft, solange das Bild selbst hineinpasst (große Bilder bleiben im Bild)
+        self.assertEqual(place("", 1920, 270 + 20, 480, 270, 4), (0, 0, 480, 270, 720, 0))
+        self.assertIsNone(place("", 1920, 270 - 2, 480, 270, 4))                  # höher als das Hauptbild: nichts zeichnen
 
     def test_cropped_content_is_byte_exact(self):
         pic = Pic.pattern(480, 270, seed=3)

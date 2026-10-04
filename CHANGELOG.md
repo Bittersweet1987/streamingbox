@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.64 (Beta)
+- Geändert (Issue #7): **Die Skalierung eines kleinen Bildes ist von 1 bis 100 % frei einstellbar** (vorher 15 bis 40 %). Das Feld heißt jetzt "Skalierung (%)" (nicht mehr "Größe (% der Breite)"); 100 % ist so groß wie das Hauptbild. Sehr große Bilder brauchen mehr Rechenleistung (Hinweis im Tooltip).
+  - **Sehr kleine Bilder:** Der Hardware-Decoder der Box verkleinert nur bis etwa 1:16 (auf der Box gemessen: ab 120 Pixeln Breite geht es, darunter "No valid frames decoded"). Unter 128 Pixel Breite (etwa 6,7 %) verkleinert er deshalb auf 128 × 72 und eine Software-Stufe (`videoscale`) macht den Rest; bei dieser Größe kostet sie fast nichts. Mit dem echten Decoder und dem neuen Baustein geprüft (2 %-Bild mit Rahmen in der Ecke, 100 %-Bild füllt das Bild).
+  - **Große Bilder:** Ein Bild, das mit vollem Rand nicht mehr ins Hauptbild passt, wurde bisher nicht gezeichnet. Jetzt schrumpft der Rand, und das Bild bleibt im Bild (100 % liegt deckungsgleich auf dem Hauptbild); die Vorschau macht dasselbe. **Der Überlagerungs-Baustein wird beim Update neu gebaut.**
+- Tests: Skalierung 1 bis 100 (Speichern, Prüfung, beide Pipeline-Aufbauten, Software-Stufe unter 128 Pixel), Position großer Bilder in allen Ecken.
+
 ## 0.9.63 (Beta)
 - Behoben (Issue #11): **Der Name des WLAN-Sticks kommt jetzt aus der Hardware-Datenbank des Systems, wie in der Original-Oberfläche der BELABOX.** Viele Sticks melden selbst nur ihre Funknorm ("802.11ac NIC"). Ist der gemeldete Name so eine Standardbezeichnung, fragt die Box die Datenbank des Systems (`systemd-hwdb`) nach der USB-Kennung und zeigt deren Namen: für einen TP-Link Archer T2U Nano (USB 2357:011e) "**TP-Link Archer T2U Nano**" statt "802.11ac NIC". Auf der Box mit der echten Datenbank geprüft. Kennt die Datenbank nur den Hersteller (zum Beispiel Realtek 0bda:c811), steht der Hersteller zur USB-Kennung vor der Bezeichnung (die Marke geht dem Chiphersteller aus den Stickdaten vor). Ein echter gemeldeter Name (zum Beispiel "ASUS USB-BT500") bleibt unverändert. Das gilt für WLAN-Sticks und Bluetooth-Sticks; ein eigener Name ("umbenennen") geht weiter vor.
 - Tests: Name aus der Datenbank für Standardbezeichnungen (mit eckigen Klammern, nur Hersteller, ohne Datenbank), nur einmal gefragt je Kennung.

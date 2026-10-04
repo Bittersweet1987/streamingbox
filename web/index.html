@@ -302,7 +302,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 1</h3>
         <label class="muted">Kamera<select id="p_pip" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner" style="width:100%"></select></label>
-        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size1" type="number" min="15" max="40" step="1" style="width:100%"></label>
+        <label class="muted" title="Skalierung dieses kleinen Bildes in Prozent des Hauptbildes (1 bis 100; 100 = so groß wie das Hauptbild). Sehr große Bilder brauchen mehr Rechenleistung.">Skalierung (%)<input id="p_size1" type="number" min="1" max="100" step="1" style="width:100%"></label>
         <label class="muted dl" title="Zusätzliche Wartezeit nur für das erste kleine Bild."><span>Verzögerung: <b id="v_delay1">0</b> ms</span>
           <span class="dlrow"><input id="p_delay1" type="range" min="0" max="3000" step="10"><input id="n_delay1" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="1"></details>
@@ -311,7 +311,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 2 <span class="opt">(optional)</span></h3>
         <label class="muted">Kamera<select id="p_pip2" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner2" style="width:100%"></select></label>
-        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size2" type="number" min="15" max="40" step="1" style="width:100%"></label>
+        <label class="muted" title="Skalierung dieses kleinen Bildes in Prozent des Hauptbildes (1 bis 100; 100 = so groß wie das Hauptbild). Sehr große Bilder brauchen mehr Rechenleistung.">Skalierung (%)<input id="p_size2" type="number" min="1" max="100" step="1" style="width:100%"></label>
         <label class="muted dl" id="dl2" title="Zusätzliche Wartezeit nur für das zweite kleine Bild."><span>Verzögerung: <b id="v_delay2">0</b> ms</span>
           <span class="dlrow"><input id="p_delay2" type="range" min="0" max="3000" step="10"><input id="n_delay2" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="2"></details>
@@ -320,7 +320,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <h3>Kleines Bild 3 <span class="opt">(optional)</span></h3>
         <label class="muted">Kamera<select id="p_pip3" style="width:100%"></select></label>
         <label class="muted">Ecke<select id="p_corner3" style="width:100%"></select></label>
-        <label class="muted" title="Breite dieses kleinen Bildes in Prozent der Bildbreite (15 bis 40)">Größe (% der Breite)<input id="p_size3" type="number" min="15" max="40" step="1" style="width:100%"></label>
+        <label class="muted" title="Skalierung dieses kleinen Bildes in Prozent des Hauptbildes (1 bis 100; 100 = so groß wie das Hauptbild). Sehr große Bilder brauchen mehr Rechenleistung.">Skalierung (%)<input id="p_size3" type="number" min="1" max="100" step="1" style="width:100%"></label>
         <label class="muted dl" id="dl3" title="Zusätzliche Wartezeit nur für das dritte kleine Bild."><span>Verzögerung: <b id="v_delay3">0</b> ms</span>
           <span class="dlrow"><input id="p_delay3" type="range" min="0" max="3000" step="10"><input id="n_delay3" type="number" min="0" max="3000" step="10"></span></label>
         <details class="pvs" data-k="3"></details>
@@ -1045,7 +1045,7 @@ function renderPreview(){
   let out='<div class="pvmain">Hauptbild: '+esc(nm($("p_main").value))+'</div>';
   [["p_pip","p_corner",1],["p_pip2","p_corner2",2],["p_pip3","p_corner3",3]].forEach(([cs,co,k])=>{
     const cam=$(cs).value; if(!cam) return;
-    const size=Math.max(15,Math.min(40,+$("p_size"+k).value||25)), pw=W*size/100, ph=pw*9/16;          // jedes kleine Bild hat seine eigene Größe
+    const size=Math.max(1,Math.min(100,+$("p_size"+k).value||25)), pw=W*size/100, ph=pw*9/16;          // jedes kleine Bild hat seine eigene Größe
     // Ein beschnittenes Bild behält seinen Maßstab: nur der Ausschnitt (cw x ch) wird gezeichnet und danach positioniert (wie im Baustein)
     const st=styleOf(k), cr=st.crop, cw=pw*(CROP_W-cr.l-cr.r)/CROP_W, ch=ph*(CROP_H-cr.t-cr.b)/CROP_H, sc=W/1920;
     const bw=st.border.enabled?Math.max(1,Math.round(st.border.width*sc)):0, rad=st.radius?Math.min(Math.round(st.radius*sc),Math.min(cw,ch)/2):0;     // die Rundung gilt für das Bild selbst, auch ohne Rahmen
@@ -1053,6 +1053,7 @@ function renderPreview(){
     if(c===5){ x=f.x/1000*(W-cw); y=f.y/1000*(H-ch); }
     else if(c===4){ x=(W-cw)/2; y=H-ch-m; }
     else { x=(c&1)?W-cw-m:m; y=(c&2)?H-ch-m:m; }
+    x=Math.max(0,Math.min(W-cw,x)); y=Math.max(0,Math.min(H-ch,y));          // ein großes Bild behält keinen vollen Rand, bleibt aber im Bild (wie im Baustein)
     out+=`<div class="pvpip pv${k}${st.visible?"":" off"}" data-k="${k}" data-co="${co}" style="left:${x}px;top:${y}px;width:${cw}px;height:${ch}px;opacity:${st.visible?1:.18};border-radius:${rad}px">`+
       `<div class="pvin" style="left:${-pw*cr.l/CROP_W}px;top:${-ph*cr.t/CROP_H}px;width:${pw}px;height:${ph}px"></div><b>${k}</b><span>${esc(nm(cam))}${st.visible?"":" (ausgeblendet)"}</span>`+
       (bw?`<i class="pvrim" style="border:${bw}px solid ${hexRgba(st.border.color,st.border.opacity/100)};border-radius:${rad}px"></i>`:"")+`</div>`;

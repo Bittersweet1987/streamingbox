@@ -669,11 +669,23 @@ def style_text(st):
     return ",".join(parts)
 
 
+SIZE_MIN, SIZE_MAX = 1, 100       # Skalierung eines kleinen Bildes in Prozent des Hauptbildes (100 = so groß wie das Hauptbild)
+HW_MIN_W, HW_MIN_H = 128, 72     # kleinste Größe, auf die der Hardware-Decoder verkleinert: auf der Box gemessen geht es ab 120 Pixeln Breite (Verhältnis 1:16), darunter nicht
+
+
 def pip_size(pct):
     """Breite/Höhe des kleinen Bildes in Pixel (gerade, durch 16 teilbar in der Breite)."""
     w = max(16, int(round(1920 * pct / 100.0 / 16.0)) * 16)
     h = int(round(w * 9 / 16.0 / 2.0)) * 2
     return w, h
+
+
+def small_decode(w, h):
+    """Der Teil der Pipeline, der ein kleines Bild auf w x h bringt: Der Hardware-Decoder verkleinert selbst. Reicht seine Verkleinerung nicht (unter
+    128 Pixel Breite), verkleinert er auf 128 x 72 und eine Software-Stufe (videoscale) macht den Rest; bei dieser Größe kostet sie fast nichts."""
+    if w >= HW_MIN_W:
+        return f"mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+    return (f"mppvideodec width={HW_MIN_W} height={HW_MIN_H} !\nvideoscale !\nvideo/x-raw,format=NV12,width={w},height={h} !\n")
 
 
 DEFAULT_MAIN_DELAY_MS = 450   # Ausgangswert (Schätzung, per Regler anpassbar): das Hauptbild wartet so lange, damit die kleinen Bilder zeitlich passen
@@ -805,8 +817,8 @@ class PipelineStore:
                 pct2, pct3 = int(req.get("size_pct2", pct)), int(req.get("size_pct3", pct))
             except (TypeError, ValueError):
                 raise ValueError("Ecke und Größe müssen Zahlen sein")
-            if corner not in range(len(pip_corners())) or not all(15 <= v <= 40 for v in (pct, pct2, pct3)):
-                raise ValueError("Position aus der Liste wählen, Größe jedes kleinen Bildes 15 bis 40 Prozent der Bildbreite")
+            if corner not in range(len(pip_corners())) or not all(SIZE_MIN <= v <= SIZE_MAX for v in (pct, pct2, pct3)):
+                raise ValueError("Position aus der Liste wählen, Skalierung jedes kleinen Bildes %d bis %d Prozent" % (SIZE_MIN, SIZE_MAX))
             audio = req.get("audio", "main")
             if audio not in ("main", "pip", "pip2", "pip3"):
                 raise ValueError("Ton: Hauptbild oder eines der kleinen Bilder")
@@ -872,11 +884,11 @@ class PipelineStore:
             out[k] = max(lo, min(hi, v))
         for k in ("corner", "corner2", "corner3"):
             num(k, 0, len(PIP_CORNERS) - 1)
-        num("size_pct", 15, 40)
+        num("size_pct", SIZE_MIN, SIZE_MAX)
         for k in ("size_pct2", "size_pct3"):                  # ältere Dateien kennen sie nicht: dann gilt die Größe von Bild 1
             if k not in out:
                 out[k] = out["size_pct"]
-            num(k, 15, 40)
+            num(k, SIZE_MIN, SIZE_MAX)
         for k in ("x", "y", "x2", "y2", "x3", "y3"):
             num(k, 0, 1000)
         for k in ("main_delay_ms", "pip_delay_ms", "pip2_delay_ms", "pip3_delay_ms"):
@@ -1033,18 +1045,18 @@ class PipelineStore:
             (w, h), (w2, h2), (w3, h3) = pip_size(c["size_pct"]), pip_size(c["size_pct2"]), pip_size(c["size_pct3"])
             out.append(f"rtmpsrc location={base}/{c['pip']} do-timestamp=true !\nflvdemux name=pdemux\n")
             out.append(f"pdemux.video !\n{small('pipq_v', 'pip_delay_ms')} !\n"
-                       f"h264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+                       f"h264parse ! {small_decode(w, h)}"
                        "queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink\n")
             if pip2:
                 out.append(f"rtmpsrc location={base}/{c['pip2']} do-timestamp=true !\nflvdemux name=p2demux\n")
                 out.append(f"p2demux.video !\n{small('pip2q_v', 'pip2_delay_ms')} !\n"
-                           f"h264parse ! mppvideodec width={w2} height={h2} !\nvideo/x-raw,format=NV12 !\n"
+                           f"h264parse ! {small_decode(w2, h2)}"
                            "queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot=1\n")
                 out.append(small_audio("p2demux", "pip2"))
             if pip3:
                 out.append(f"rtmpsrc location={base}/{c['pip3']} do-timestamp=true !\nflvdemux name=p3demux\n")
                 out.append(f"p3demux.video !\n{small('pip3q_v', 'pip3_delay_ms')} !\n"
-                           f"h264parse ! mppvideodec width={w3} height={h3} !\nvideo/x-raw,format=NV12 !\n"
+                           f"h264parse ! {small_decode(w3, h3)}"
                            "queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot=2\n")
                 out.append(small_audio("p3demux", "pip3"))
             out.append(small_audio("pdemux", "pip"))
@@ -1093,7 +1105,7 @@ class PipelineStore:
             items = [f"vsq{i}:s"]
             out.append(f"rtmpsrc location={base}/{key} do-timestamp=true !\nflvdemux name=dm{i}\n")
             w, h = sizes[max(i - 1, 0)]
-            small_chain = (f"{small(f'vsq{i}', DELAY_KEYS[i])} !\nh264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+            small_chain = (f"{small(f'vsq{i}', DELAY_KEYS[i])} !\nh264parse ! {small_decode(w, h)}"
                            f"queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot={(i + 3) % 4}\n")
             if i < group:
                 qv = f"{q} name=vfq{i}" + (f" min-threshold-time={(d + FRAME_MS) * 1000000}" if d else "")

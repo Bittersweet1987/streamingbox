@@ -203,6 +203,13 @@ static void pb_pos(guint corner, gint mw, gint mh, gint pw, gint ph, gint margin
     *x = (corner & 1u) ? mw - pw - margin : margin;
     *y = (corner & 2u) ? mh - ph - margin : margin;
   }
+  /* Ein großes Bild (bis so groß wie das Hauptbild) behält keinen vollen Rand: Der Rand schrumpft, das Bild bleibt im Bild */
+  if (corner != 5u) {
+    if (*x > mw - pw) *x = mw - pw;
+    if (*y > mh - ph) *y = mh - ph;
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+  }
 }
 /* PB_POS_END */
 

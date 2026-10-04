@@ -49,6 +49,18 @@ class CornerPos(unittest.TestCase):
                 self.assertLessEqual(x + pw, 1920)
                 self.assertLessEqual(y + ph, 1080)
 
+    def test_large_pictures_stay_inside_the_frame_in_every_corner(self):
+        """Skalierung bis 100 %: Der Rand schrumpft, das Bild bleibt im Bild (vorher lief ein großes Bild aus dem Hauptbild und wurde nicht gezeichnet)."""
+        for pw, ph in ((1920, 1080), (1900, 1070), (1800, 1012), (1000, 562)):
+            for x, y in self.positions(1920, 1080, pw, ph):
+                self.assertGreaterEqual(x, 0)
+                self.assertGreaterEqual(y, 0)
+                self.assertLessEqual(x + pw, 1920, (pw, x))
+                self.assertLessEqual(y + ph, 1080, (ph, y))
+        self.assertEqual(self.positions(1920, 1080, 1920, 1080), [(0, 0)] * 5)         # so groß wie das Hauptbild: überall oben links
+        margin = (1920 // 60) & ~1
+        self.assertEqual(self.positions(1920, 1080, 480, 270)[0], (margin, margin))       # kleine Bilder: der volle Rand wie bisher
+
     def test_1080p_25_percent(self):
         p = self.positions(1920, 1080, 480, 270)          # 25 % der Breite, 16:9
         margin = (1920 // 60) & ~1                        # 32

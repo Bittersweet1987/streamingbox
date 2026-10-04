@@ -389,7 +389,7 @@ class RootHelperHardening(unittest.TestCase):
 
     def test_safe_cfg_clamps(self):
         c = server.PipelineStore._safe_cfg({"type": "pip", "corner": 99, "size_pct": 1000, "x": -5, "pip_delay_ms": 99999})
-        self.assertEqual((c["corner"], c["size_pct"], c["x"], c["pip_delay_ms"]), (len(server.PIP_CORNERS) - 1, 40, 0, 3000))
+        self.assertEqual((c["corner"], c["size_pct"], c["x"], c["pip_delay_ms"]), (len(server.PIP_CORNERS) - 1, 100, 0, 3000))
 
     def test_work_dir_replaced_when_not_ours(self):
         sys.path.insert(0, os.path.dirname(HERE))
@@ -1246,9 +1246,11 @@ class HeaderControls(unittest.TestCase):
         h = self.html
         self.assertNotIn('id="p_size"', h)
         for k in (1, 2, 3):
-            self.assertIn('id="p_size%d" type="number" min="15" max="40"' % k, h)
+            self.assertIn('id="p_size%d" type="number" min="1" max="100"' % k, h)                      # Skalierung 1 bis 100 Prozent
+            self.assertIn("Skalierung (%)", h)
         self.assertIn("size_pct2:+$(\"p_size2\").value,size_pct3:+$(\"p_size3\").value", h.replace("\\", ""))
-        self.assertIn('const size=Math.max(15,Math.min(40,+$("p_size"+k).value||25))', h)             # Vorschau: Größe je Bild
+        self.assertIn('const size=Math.max(1,Math.min(100,+$("p_size"+k).value||25))', h)             # Vorschau: Größe je Bild
+        self.assertNotIn("(% der Breite)", h[h.index('id="p_size1"') - 300:h.index('id="p_size1"') + 100])    # Text "Skalierung", nicht "Breite"
 
     def test_saving_reports_when_the_restarted_transmission_runs_again(self):
         """Issue #7: Nach "Die Übertragung wird jetzt kurz neu gestartet" meldet die Oberfläche, wann sie wieder läuft."""
@@ -1989,6 +1991,28 @@ class PictureStyle(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.clean_style({"radius": 61}, strict=True)
 
+    def test_scaling_from_1_to_100_percent_with_a_software_stage_for_tiny_pictures(self):
+        """Issue #7: Die Skalierung ist von 1 bis 100 % frei. Der Hardware-Decoder schafft auf der Box nur Breiten ab 120 Pixeln (gemessen: darunter
+        "No valid frames decoded"): Darunter verkleinert er auf 128 x 72 und videoscale macht den Rest."""
+        self.assertEqual((server.SIZE_MIN, server.SIZE_MAX), (1, 100))
+        self.assertEqual(server.pip_size(100), (1920, 1080))
+        self.assertEqual(server.pip_size(1), (16, 8))
+        for pct in range(1, 101):
+            w, h = server.pip_size(pct)
+            self.assertTrue(w % 16 == 0 and h % 2 == 0 and 16 <= w <= 1920, pct)
+        big = server.small_decode(*server.pip_size(50))
+        self.assertEqual(big, "mppvideodec width=960 height=540 !\nvideo/x-raw,format=NV12 !\n")                  # Hardware allein
+        self.assertNotIn("videoscale", server.small_decode(*server.pip_size(7)))                                     # 7 % = 144 Pixel: noch Hardware
+        tiny = server.small_decode(*server.pip_size(3))                                                              # 3 % = 64 Pixel: Software-Stufe
+        self.assertEqual(tiny, "mppvideodec width=128 height=72 !\nvideoscale !\nvideo/x-raw,format=NV12,width=64,height=36 !\n")
+        text = server.PipelineStore(os.devnull).build(dict(server.PipelineStore.DEFAULT, **dict(BASE, size_pct=2, size_pct2=50, size_pct3=100)))
+        self.assertIn("mppvideodec width=128 height=72 !\nvideoscale !\nvideo/x-raw,format=NV12,width=32,height=18", text)
+        self.assertIn("mppvideodec width=960 height=540 !", text)
+        self.assertIn("mppvideodec width=1920 height=1080 !", text)
+        s = store()
+        s.set(dict(BASE, size_pct=1, size_pct2=100, size_pct3=60), KEYS)
+        self.assertEqual((s.cfg["size_pct"], s.cfg["size_pct2"], s.cfg["size_pct3"]), (1, 100, 60))
+
     def test_every_small_picture_has_its_own_size(self):
         """Issue #7: Die Größe wird je kleinem Bild eingestellt (vorher galt eine Größe für alle)."""
         cfg = dict(server.PipelineStore.DEFAULT, **dict(BASE, size_pct=20, size_pct2=30, size_pct3=40))
@@ -2005,19 +2029,19 @@ class PictureStyle(unittest.TestCase):
         dual = server.PipelineStore(os.devnull).build(dict(cfg, swap_cams=4))
         for slot, (w, h) in ((0, (w1, h1)), (1, (w1, h1)), (2, (w2, h2)), (3, (w3, h3))):            # Kamera 0 (Hauptbild) bekommt die Größe von Stelle 1
             self.assertIn("mppvideodec width=%d height=%d !" % (w, h), dual)
-        # Speichern: jeder Wert 15 bis 40, ältere Anfragen ohne Bild 2 und 3 geben allen die Größe von Bild 1
+        # Speichern: jeder Wert 1 bis 100, ältere Anfragen ohne Bild 2 und 3 geben allen die Größe von Bild 1
         s = store()
         s.set(dict(BASE, size_pct=22, size_pct2=33, size_pct3=38), KEYS)
         self.assertEqual((s.cfg["size_pct"], s.cfg["size_pct2"], s.cfg["size_pct3"]), (22, 33, 38))
         s.set(dict(BASE, size_pct=27), KEYS)
         self.assertEqual((s.cfg["size_pct"], s.cfg["size_pct2"], s.cfg["size_pct3"]), (27, 27, 27))
-        for bad in (dict(BASE, size_pct2=14), dict(BASE, size_pct3=41), dict(BASE, size_pct2="gross")):
+        for bad in (dict(BASE, size_pct2=0), dict(BASE, size_pct3=101), dict(BASE, size_pct2="gross")):
             with self.assertRaises(ValueError, msg=str(bad)):
                 s.set(bad, KEYS)
         self.assertEqual(s.cfg["size_pct2"], 27)                                                       # abgelehnt: nichts geändert
         old = server.PipelineStore._safe_cfg({"type": "pip", "size_pct": 31})                           # ältere Datei ohne die neuen Felder
         self.assertEqual((old["size_pct2"], old["size_pct3"]), (31, 31))
-        self.assertEqual(server.PipelineStore._safe_cfg({"type": "pip", "size_pct": 20, "size_pct3": 9999})["size_pct3"], 40)
+        self.assertEqual(server.PipelineStore._safe_cfg({"type": "pip", "size_pct": 20, "size_pct3": 9999})["size_pct3"], 100)
 
     def test_requests_are_checked(self):
         bad = ({"opacity": 101}, {"opacity": -1}, {"opacity": "viel"}, {"visible": "ja"}, {"crop": {"l": 2000}}, {"crop": {"l": 1000, "r": 900}},
