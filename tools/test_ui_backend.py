@@ -1161,7 +1161,8 @@ class HeaderControls(unittest.TestCase):
         self.assertIn('id="hdr_live"', self.header)
         self.assertIn("function updHdrLive", self.html)
         self.assertIn("updHdrLive(d);", self.html)                                # wird bei jeder Abfrage des Sendezustands nachgeführt
-        self.assertIn("confirm(\"Die Sendung jetzt beenden?", self.html)          # Beenden nur mit Rückfrage
+        self.assertNotIn("Die Sendung jetzt beenden?", self.html)                 # Beenden ohne Rückfrage (Issue #19, Antwort des Melders: Ja)
+        self.assertIn("if(sendData&&sendData.active) await doLiveStop(); else await doLiveStart();", self.html)
         self.assertEqual(self.html.count('{action:"start",confirm:true}'), 1)     # ein gemeinsamer Weg zum Starten (Live-Karte und Kopfleiste)
         self.assertEqual(self.html.count('"/api/send",{action:"stop"}'), 1)       # ein gemeinsamer Weg zum Beenden
 

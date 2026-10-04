@@ -31,12 +31,15 @@ class MobileFooter(unittest.TestCase):
         self.assertIn('$("hdr_live").addEventListener("click",liveToggle)', PAGE)
         self.assertIn('$("mf_live").addEventListener("click",liveToggle)', PAGE)
 
-    def test_no_question_when_going_live_but_still_one_when_stopping(self):
+    def test_no_question_when_going_live_or_when_stopping(self):
         start = PAGE[PAGE.index("async function doLiveStart(){"):PAGE.index('$("live_go").addEventListener')]
         self.assertNotIn("confirm(", start)
         self.assertNotIn("Jetzt LIVE senden?", PAGE)
         toggle = PAGE[PAGE.index("async function liveToggle(){"):PAGE.index('$("hdr_live").addEventListener')]
-        self.assertIn("Die Sendung jetzt beenden?", toggle)                               # ein versehentlicher Druck auf "Stop" beendet nichts
+        self.assertNotIn("confirm(", toggle)                                              # auch beim Beenden keine Rückfrage (Antwort des Melders: Ja)
+        self.assertNotIn("Die Sendung jetzt beenden?", PAGE)
+        self.assertIn("doLiveStop()", toggle)
+        self.assertNotIn("(mit Rückfrage)", PAGE)                                         # Tooltips stimmen wieder
 
     def test_page_leaves_room_for_the_footer_and_the_toast(self):
         self.assertIn("body{padding-bottom:calc(76px + env(safe-area-inset-bottom))}", PAGE)

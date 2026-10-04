@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.74 (Beta)
+- Geändert (Issue #19, Antwort des Melders): **Auch das Beenden der Sendung fragt nicht mehr nach.** Der Knopf "Stop" in der Fußleiste (Handy) und "● LIVE" in der Kopfleiste (Desktop) beenden die Sendung mit einem Klick; die Tooltips sagen nicht mehr "mit Rückfrage". (Der Start fragte schon seit 0.9.71 nicht mehr.) Ein versehentlicher Druck beendet die Sendung also sofort.
+- Tests: `tools/test_mobile.py` und `tools/test_ui_backend.py` prüfen jetzt, dass es weder beim Start noch beim Beenden eine Rückfrage gibt.
+
 ## 0.9.73 (Beta)
 - Geändert (Issue #16, Rückmeldung des Melders): **Der Hotspot wird jetzt je WLAN-Stick bedient.** Der große Abschnitt "WLAN-Hotspot" mit Kartenauswahl ist weg. Unter jeder WLAN-Karte steht stattdessen eine Zeile **"Hotspot-Modus"** mit einem Schalter **"Aus" / "An"** und, nur im Zustand "Aus", dem Knopf **"Einstellen"**.
   - **"Einstellen"** öffnet die Einstellungen (Name, Passwort, Band, Kanal, "Passwort erzeugen") direkt im Feld dieses Sticks; **"Speichern"** merkt sie, ohne den Hotspot zu starten (neue Aktion `hotspot_save` im Helfer). Läuft der Hotspot, geht das nicht (erst ausschalten, dann einstellen). Eingaben gehen nicht verloren, wenn sich die Anzeige im Hintergrund aktualisiert.

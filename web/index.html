@@ -1416,20 +1416,19 @@ async function doLiveStop(){
   setTimeout(sendLoad,800);
 }
 $("live_stop").addEventListener("click",doLiveStop);
-// Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (beim Beenden mit Rückfrage)
+// Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (ohne Rückfrage)
 function updHdrLive(d){
   const b=$("hdr_live"), live=!!d.active, busy=d.state==="restarting"||d.state==="starting"||d.state==="stopping";
   b.hidden=false; b.className="livebtn"+(live&&!busy?" on":"")+(busy?" busy":"");
   b.textContent=busy?(LIVE_LABEL[d.state]==="Wird beendet…"?"Wird beendet…":"Verbinde …"):(live?"● LIVE":"Live gehen");
   b.disabled=busy||(!live&&!d.can_start);
-  b.title=busy?(LIVE_LABEL[d.state]||""):(live?"Es wird gesendet. Klicken beendet die Sendung (mit Rückfrage).":(d.can_start?"Nicht live. Klicken startet die Sendung (mit Rückfrage).":"Kann nicht starten: "+((d.reasons||[]).join(" · ")||"Bedingungen nicht erfüllt")));
+  b.title=busy?(LIVE_LABEL[d.state]||""):(live?"Es wird gesendet. Klicken beendet die Sendung.":(d.can_start?"Nicht live. Klicken startet die Sendung.":"Kann nicht starten: "+((d.reasons||[]).join(" · ")||"Bedingungen nicht erfüllt")));
   const f=$("mf_live");                                                      // Fußleiste (nur auf dem Handy sichtbar): "Live" oder "Stop"
   f.className="mf-live"+(live&&!busy?" on":"")+(busy?" busy":"");
   f.textContent=busy?"…":(live?"Stop":"Live"); f.disabled=b.disabled; f.title=b.title;
 }
-async function liveToggle(){
-  if(sendData&&sendData.active){ if(confirm("Die Sendung jetzt beenden?\n\nDas Bild geht zum Server nicht mehr weiter.")) await doLiveStop(); }
-  else await doLiveStart();
+async function liveToggle(){                                       // Kopfleiste und Fußleiste: ohne Rückfrage starten und beenden (Issue #19)
+  if(sendData&&sendData.active) await doLiveStop(); else await doLiveStart();
 }
 $("hdr_live").addEventListener("click",liveToggle);
 $("mf_live").addEventListener("click",liveToggle);
