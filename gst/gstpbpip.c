@@ -6,7 +6,10 @@
  *   pbpipsink  nimmt das KLEINE Bild entgegen (schon vom Hardware-Decoder auf z. B. 480x270
  *              verkleinert) und legt es in einem Ringspeicher ab.
  *   pbpipmix   steht im Hauptbild-Pfad und schreibt pro Hauptbild das nächste kleine Bild an
- *              die gewählte Ecke HINEIN. Das große Bild wird nie gelesen.
+ *              die gewählte Ecke HINEIN. Das große Bild wird nie gelesen, außer ein Stil (Eigenschaften
+ *              style1 bis style3: Beschnitt, Deckkraft, Rahmen, Eckenrundung) verlangt es: dann nur in
+ *              genau den Bildpunkten, die vom Hauptbild abhängen (Deckkraft unter 100 %, durchscheinender
+ *              Rahmen, weiche Kante an gerundeten Ecken). Ohne Stil bleibt es beim reinen Schreiben.
  *
  * Warum so: Auf dem RK3588 ist das Lesen von Decoder-Bildern durch die CPU extrem langsam
  * (gemessen: 1080p-Umwandlung ca. 9 Bilder/s). Schreiben in diesen Speicher ist schnell.
@@ -203,11 +206,469 @@ static void pb_pos(guint corner, gint mw, gint mh, gint pw, gint ph, gint margin
 }
 /* PB_POS_END */
 
-typedef struct { GstVideoFilter parent; guint corner; guint slot; gint slot2; guint corner2; gint slot3; guint corner3; guint fx, fy, fx2, fy2, fx3, fy3; gint follow_tag; } PbPipMix;
+/* PB_DRAW_BEGIN  (wird von tools/test_pbdraw.py zusammen mit PB_POS einzeln übersetzt und geprüft: reine Ganzzahlrechnung ohne GStreamer) */
+/* Gestaltung eines kleinen Bildes: Beschnitt, Deckkraft, Rahmen mit Eckenrundung.
+ *
+ * Das kleine Bild ist NV12, dicht gepackt (Stride = Breite): erst die Y-Ebene, dann die UV-Ebene. Das Hauptbild wird in
+ * Y und UV mit je eigenem Stride beschrieben. Ohne Stil (Deckkraft 100 %, kein Rahmen) werden nur Zeilen kopiert und das
+ * Hauptbild nie gelesen. Mit Stil wird das Hauptbild nur dort gelesen, wo das Ergebnis davon abhängt: Deckkraft unter
+ * 100 % und die weiche Kante an gerundeten Ecken. Ein durchscheinender Rahmen mischt Rahmenfarbe und Bild (beides liegt im
+ * Ring-Speicher), das Hauptbild geht erst über die Deckkraft des ganzen Bildes ein.
+ *
+ * Schichtung je Bildpunkt: S = Bild + (Rahmenfarbe - Bild) * Rahmenanteil; Ergebnis = Hauptbild + (S - Hauptbild) * Deckkraft.
+ * Rahmenanteil = bo * (1 - Abdeckung der Innenform), Deckkraft = op * Abdeckung der Außenform. Beides wird in Festkomma mit
+ * PB_ONE = 1024 gerechnet (ein Rundungsschritt am Ende, bei Deckkraft 1 geht das Hauptbild gar nicht ein).
+ *
+ * Chroma (UV) liegt auf einem 2x2-Raster: Rahmenanteil und Deckkraft eines UV-Paares sind das Mittel der vier zugehörigen
+ * Luma-Bildpunkte. Das Hauptbild-Chroma wird nur gelesen, wenn dieses Mittel unter voller Deckkraft liegt. */
+#define PB_SHIFT 10
+#define PB_ONE (1 << PB_SHIFT)                /* Abdeckung/Anteil in Festkomma: PB_ONE = voll */
+#define PB_HALF (1 << (2 * PB_SHIFT - 1))     /* halbe Einheit nach der Multiplikation zweier Festkomma-Werte */
+#define PB_CHUNK 128                          /* Bildpunkte je Arbeitsstück (Puffer liegen auf dem Stack) */
+
+typedef struct {
+  gint op;                 /* Deckkraft des ganzen Bildes in Prozent (0 bis 100); 0 = nicht zeichnen */
+  gint cl, cr, ct, cb;     /* Beschnitt links/rechts/oben/unten in Pixeln eines 1920x1080-Bildes (0 bis 1900) */
+  gint bw;                 /* Rahmenbreite in Pixeln eines 1920 Pixel breiten Hauptbildes (0 bis 64); 0 = kein Rahmen */
+  guint bc;                /* Rahmenfarbe 0xRRGGBB */
+  gint bo;                 /* Deckkraft des Rahmens über dem Bild in Prozent (0 bis 100) */
+  gint br;                 /* Eckenradius in Pixeln eines 1920 Pixel breiten Hauptbildes (0 bis 200); wirkt nur bei bw > 0 */
+} PbStyle;
+
+/* Ort und Größe des (beschnittenen) kleinen Bildes: Ausschnitt (cx, cy, cw, ch) im kleinen Bild, Ziel (x, y) im Hauptbild */
+typedef struct { gint cx, cy, cw, ch, x, y; } PbPlace;
+
+static void pb_style_default(PbStyle *st) {
+  st->op = 100;
+  st->cl = st->cr = st->ct = st->cb = 0;
+  st->bw = 0;
+  st->bc = 0xffffffu;
+  st->bo = 100;
+  st->br = 0;
+}
+
+/* Kleine Helfer für den Text [s, e): ohne Bibliotheksfunktionen, damit der Abschnitt einzeln übersetzbar bleibt */
+static gboolean pb_tok_is(const char *s, const char *e, const char *lit) {
+  while (s < e && *lit && *s == *lit) {
+    s++;
+    lit++;
+  }
+  return s == e && *lit == 0;
+}
+
+static void pb_tok_trim(const char **s, const char **e) {
+  while (*s < *e && (**s == ' ' || **s == '\t'))
+    (*s)++;
+  while (*e > *s && ((*e)[-1] == ' ' || (*e)[-1] == '\t'))
+    (*e)--;
+}
+
+/* Ganze Zahl mit optionalem Vorzeichen. Sehr große Zahlen bleiben sehr groß (werden danach begrenzt), ohne zu überlaufen. */
+static gboolean pb_tok_num(const char *s, const char *e, gint *out) {
+  gboolean neg = FALSE;
+  gint v = 0;
+  if (s < e && (*s == '-' || *s == '+')) {
+    neg = (*s == '-');
+    s++;
+  }
+  if (s >= e)
+    return FALSE;
+  for (; s < e; s++) {
+    if (*s < '0' || *s > '9')
+      return FALSE;
+    if (v < 1000000)
+      v = v * 10 + (*s - '0');
+  }
+  *out = neg ? -v : v;
+  return TRUE;
+}
+
+static gboolean pb_tok_hex6(const char *s, const char *e, guint *out) {
+  guint v = 0;
+  if (e - s != 6)
+    return FALSE;
+  for (; s < e; s++) {
+    guint d;
+    if (*s >= '0' && *s <= '9') d = (guint) (*s - '0');
+    else if (*s >= 'a' && *s <= 'f') d = (guint) (*s - 'a' + 10);
+    else if (*s >= 'A' && *s <= 'F') d = (guint) (*s - 'A' + 10);
+    else return FALSE;
+    v = (v << 4) | d;
+  }
+  *out = v;
+  return TRUE;
+}
+
+#define PB_CLAMP(v, lo, hi) MIN(MAX((v), (lo)), (hi))
+
+/* Stil aus Text "schluessel=wert,..." lesen. Alle Schlüssel sind optional. Unbekannte Schlüssel, Teile ohne "=" und
+ * fehlerhafte Werte werden ignoriert (der Schlüssel behält dann seinen bisherigen Wert), zu große oder zu kleine Zahlen
+ * werden begrenzt. Bei doppeltem Schlüssel gilt der letzte. NULL oder leerer Text ergibt den Standardstil. */
+static void pb_style_parse(const char *text, PbStyle *st) {
+  pb_style_default(st);
+  if (!text)
+    return;
+  const char *p = text;
+  while (*p) {
+    const char *ts = p;
+    while (*p && *p != ',')
+      p++;
+    const char *te = p;
+    if (*p == ',')
+      p++;
+    const char *eq = ts;
+    while (eq < te && *eq != '=')
+      eq++;
+    if (eq == te)
+      continue;
+    const char *ks = ts, *ke = eq, *vs = eq + 1, *ve = te;
+    pb_tok_trim(&ks, &ke);
+    pb_tok_trim(&vs, &ve);
+    gint n = 0;
+    guint rgb = 0;
+    if (pb_tok_is(ks, ke, "bc")) {
+      if (pb_tok_hex6(vs, ve, &rgb))
+        st->bc = rgb;
+    } else if (pb_tok_num(vs, ve, &n)) {
+      if (pb_tok_is(ks, ke, "op")) st->op = PB_CLAMP(n, 0, 100);
+      else if (pb_tok_is(ks, ke, "cl")) st->cl = PB_CLAMP(n, 0, 1900);
+      else if (pb_tok_is(ks, ke, "cr")) st->cr = PB_CLAMP(n, 0, 1900);
+      else if (pb_tok_is(ks, ke, "ct")) st->ct = PB_CLAMP(n, 0, 1900);
+      else if (pb_tok_is(ks, ke, "cb")) st->cb = PB_CLAMP(n, 0, 1900);
+      else if (pb_tok_is(ks, ke, "bw")) st->bw = PB_CLAMP(n, 0, 64);
+      else if (pb_tok_is(ks, ke, "bo")) st->bo = PB_CLAMP(n, 0, 100);
+      else if (pb_tok_is(ks, ke, "br")) st->br = PB_CLAMP(n, 0, 200);
+    }
+  }
+}
+
+/* Beschnitt auf ein kleines Bild der Größe sw x sh umrechnen. Die Werte beziehen sich auf ein Bild von 1920x1080 und werden
+ * auf die tatsächliche Größe umgerechnet (gerundet) und auf gerade Werte abgerundet (NV12-Chroma ist 2x2). Bleiben weniger
+ * als 16x16 Bildpunkte übrig, wird der Beschnitt ganz ignoriert. Rückgabe TRUE: es gilt ein Ausschnitt (cx, cy, cw, ch),
+ * FALSE: das ganze Bild (0, 0, sw, sh). Ein Ausschnitt behält seinen Maßstab, er wird nicht vergrößert. */
+static gboolean pb_style_crop(const PbStyle *st, gint sw, gint sh, gint *cx, gint *cy, gint *cw, gint *ch) {
+  *cx = 0;
+  *cy = 0;
+  *cw = sw;
+  *ch = sh;
+  if (st->cl <= 0 && st->cr <= 0 && st->ct <= 0 && st->cb <= 0)
+    return FALSE;
+  const gint l = ((st->cl * sw + 960) / 1920) & ~1, r = ((st->cr * sw + 960) / 1920) & ~1;
+  const gint t = ((st->ct * sh + 540) / 1080) & ~1, b = ((st->cb * sh + 540) / 1080) & ~1;
+  if (l == 0 && r == 0 && t == 0 && b == 0)
+    return FALSE;
+  const gint w = (sw - l - r) & ~1, h = (sh - t - b) & ~1;
+  if (w < 16 || h < 16)
+    return FALSE;
+  *cx = l;
+  *cy = t;
+  *cw = w;
+  *ch = h;
+  return TRUE;
+}
+
+/* Ausschnitt und Platz im Hauptbild (mw x mh) bestimmen. Die Position (Ecke, fx/fy, Rand) wird mit der Größe des
+ * Ausschnitts berechnet, nicht mit der des ganzen kleinen Bildes. Rückgabe FALSE: nichts zeichnen (Deckkraft 0, passt
+ * nicht ins Hauptbild). x und y sind danach gerade (UV-Raster des Hauptbildes). */
+static gboolean pb_place(const PbStyle *st, gint mw, gint mh, gint pw, gint ph, guint corner, gint fx, gint fy, PbPlace *pl) {
+  if (st->op <= 0)
+    return FALSE;
+  pb_style_crop(st, pw, ph, &pl->cx, &pl->cy, &pl->cw, &pl->ch);
+  if (pl->cw > mw || pl->ch > mh)
+    return FALSE;
+  const gint margin = (mw / 60) & ~1;              /* ca. 2 % der Breite, gerade */
+  pb_pos(corner, mw, mh, pl->cw, pl->ch, margin, fx, fy, &pl->x, &pl->y);
+  pl->x &= ~1;
+  pl->y &= ~1;
+  return pl->x >= 0 && pl->y >= 0 && pl->x + pl->cw <= mw && pl->y + pl->ch <= mh;
+}
+
+/* RGB (0xRRGGBB) nach NV12: BT.709, begrenzter Bereich (Y 16..235, U/V 16..240), gerundet. Koeffizienten in Zehntausendsteln. */
+static void pb_rgb_to_nv12(guint rgb, gint *y, gint *u, gint *v) {
+  const gint r = (gint) ((rgb >> 16) & 0xffu), g = (gint) ((rgb >> 8) & 0xffu), b = (gint) (rgb & 0xffu);
+  const gint den = 255 * 10000;
+  *y = 16 + (219 * (2126 * r + 7152 * g + 722 * b) + den / 2) / den;
+  *u = (128 * den + 224 * (-1146 * r - 3854 * g + 5000 * b) + den / 2) / den;     /* Zähler bleibt positiv */
+  *v = (128 * den + 224 * (5000 * r - 4542 * g - 458 * b) + den / 2) / den;
+  *y = PB_CLAMP(*y, 16, 235);
+  *u = PB_CLAMP(*u, 16, 240);
+  *v = PB_CLAMP(*v, 16, 240);
+}
+
+/* Form des gestalteten Bildes (Maße in Bildpunkten des Hauptbildes) */
+typedef struct {
+  gint cw, ch;             /* Größe des Ausschnitts (gerade) */
+  gint bw;                 /* Rahmenbreite, 0 = kein Rahmen */
+  gint ro, ri;             /* Eckenradius außen / innen (innen = max(außen - Rahmenbreite, 0)) */
+  gint op, bo;             /* Deckkraft Bild / Rahmen in Festkomma 0..PB_ONE */
+} PbShape;
+
+/* Rahmenbreite und Eckenradius skalieren mit der Breite des Hauptbildes (Bezug 1920). Der Rahmen liegt innen im Ausschnitt;
+ * Breite höchstens min(cw, ch) / 2, Radius ebenso. Der Radius wirkt nur mit Rahmen. */
+static void pb_shape_init(PbShape *s, const PbStyle *st, gint mw, gint cw, gint ch) {
+  const gint lim = MIN(cw, ch) / 2;
+  s->cw = cw;
+  s->ch = ch;
+  s->bw = s->ro = s->ri = 0;
+  if (st->bw > 0) {
+    s->bw = MIN(MAX((st->bw * mw + 960) / 1920, 1), lim);
+    s->ro = MIN((st->br * mw + 960) / 1920, lim);
+    s->ri = MAX(s->ro - s->bw, 0);
+  }
+  s->op = (PB_CLAMP(st->op, 0, 100) * PB_ONE + 50) / 100;
+  s->bo = (PB_CLAMP(st->bo, 0, 100) * PB_ONE + 50) / 100;
+}
+
+/* Ganzzahlige Quadratwurzel (abgerundet) */
+static gint64 pb_isqrt(gint64 v) {
+  gint64 r = 0, bit = (gint64) 1 << 62;
+  while (bit > v)
+    bit >>= 2;
+  while (bit != 0) {
+    if (v >= r + bit) {
+      v -= r + bit;
+      r = (r >> 1) + bit;
+    } else {
+      r >>= 1;
+    }
+    bit >>= 2;
+  }
+  return r;
+}
+
+/* Abdeckung (0..PB_ONE) des Bildpunkts (fx, fy) im Eckquadrat einer Rundung mit Radius r: fx, fy zählen vom Rand nach innen,
+ * der Eckmittelpunkt liegt bei (r, r). Abdeckung = r - Abstand(Bildpunktmitte, Eckmittelpunkt) + 0,5, begrenzt auf 0..1:
+ * ein Bildpunkt Übergang. Mit doppelten Abständen gerechnet, damit die Entscheidung "ganz drin / ganz draußen" ohne Wurzel
+ * auskommt; nur im Übergang wird die Wurzel gezogen. */
+static gint pb_corner_cov(gint fx, gint fy, gint r) {
+  const gint64 ux = 2 * (gint64) (r - fx) - 1, uy = 2 * (gint64) (r - fy) - 1;
+  const gint64 d2 = ux * ux + uy * uy;               /* (2 * Abstand)^2 */
+  const gint64 in = 2 * (gint64) r - 1, out = 2 * (gint64) r + 1;
+  if (d2 <= in * in)
+    return PB_ONE;
+  if (d2 >= out * out)
+    return 0;
+  const gint64 s = pb_isqrt(d2 << (2 * PB_SHIFT));   /* 2 * Abstand * PB_ONE */
+  const gint64 c = (out * PB_ONE - s + 1) / 2;       /* (2r + 1 - 2 * Abstand) / 2 */
+  return (gint) PB_CLAMP(c, 0, PB_ONE);
+}
+
+/* Rahmenanteil *wb und Deckkraft *a (beide 0..PB_ONE) des Luma-Bildpunkts (x, y) des Ausschnitts. Die Form ist an beiden
+ * Achsen symmetrisch; gerechnet wird deshalb mit dem Abstand zum nächsten Rand (fx, fy). */
+static void pb_shape_px(const PbShape *s, gint x, gint y, gint *wb, gint *a) {
+  const gint fx = MIN(x, s->cw - 1 - x), fy = MIN(y, s->ch - 1 - y);
+  gint ao = PB_ONE, ai = PB_ONE;
+  if (s->ro > 0 && fx < s->ro && fy < s->ro)
+    ao = pb_corner_cov(fx, fy, s->ro);               /* Außenform: Bildpunkte außerhalb bleiben Hauptbild */
+  if (s->bw > 0) {
+    const gint ix = fx - s->bw, iy = fy - s->bw;     /* Lage zur Innenform (Inset = Rahmenbreite) */
+    if (ix < 0 || iy < 0)
+      ai = 0;
+    else if (s->ri > 0 && ix < s->ri && iy < s->ri)
+      ai = pb_corner_cov(ix, iy, s->ri);
+  }
+  *a = (s->op * ao + PB_ONE / 2) >> PB_SHIFT;
+  *wb = (s->bo * (PB_ONE - ai) + PB_ONE / 2) >> PB_SHIFT;
+}
+
+/* Für die Zeile y: Breite *zone der Randbereiche (links und rechts), in denen der Bildpunkt einzeln bewertet werden muss.
+ * Dazwischen sind Rahmenanteil *wb und Deckkraft *a für die ganze Zeile gleich (Rahmenzeile oder Bildzeile). */
+static gint pb_row_zone(const PbShape *s, gint y, gint *wb, gint *a) {
+  const gint fy = MIN(y, s->ch - 1 - y);
+  gint zone = 0;
+  *a = s->op;
+  *wb = 0;
+  if (s->bw <= 0)
+    return 0;
+  if (fy < s->bw) {                                  /* Zeile liegt ganz im Rahmen, nur die Außenrundung schneidet an den Enden */
+    *wb = s->bo;
+    if (fy < s->ro)
+      zone = s->ro;
+  } else {                                           /* Bildzeile: links/rechts Rahmenspalten, an den Rundungen mehr */
+    zone = s->bw;
+    if (fy < s->ro)
+      zone = MAX(zone, s->ro);
+    if (s->ri > 0 && fy - s->bw < s->ri)
+      zone = MAX(zone, s->bw + s->ri);
+  }
+  return zone;
+}
+
+/* Ein Bildpunkt: Ergebnis aus Hauptbild d, Bild p, Rahmenfarbe b, Rahmenanteil wb und Deckkraft a (0 < a <= PB_ONE).
+ * Bei a == PB_ONE geht d nicht ein. Ein einziger Rundungsschritt. */
+static gint pb_mix(gint d, gint p, gint b, gint wb, gint a) {
+  return (d * (PB_ONE - a) * PB_ONE + (p * (PB_ONE - wb) + b * wb) * a + PB_HALF) >> (2 * PB_SHIFT);
+}
+
+/* n (höchstens PB_CHUNK) Luma-Bildpunkte mischen. wbv[i]/av[i]: Rahmenanteil/Deckkraft je Bildpunkt; sind die Zeiger NULL,
+ * gelten wc/ac für alle. Bildpunkte mit Deckkraft 0 (außerhalb der Form) werden weder gelesen noch geschrieben. Das Hauptbild
+ * wird nur für zusammenhängende Läufe gelesen, die einen Bildpunkt mit Deckkraft unter 1 enthalten, und dann in einem Stück
+ * (breite Zugriffe, das ist bei Decoder-Speicher viel schneller als einzelne Bytes). */
+static void pb_y_vec(guint8 *dst, const guint8 *src, gint n, gint b, const gint *wbv, const gint *av, gint wc, gint ac) {
+  gint i = 0;
+  while (i < n) {
+    while (i < n && (av ? av[i] : ac) <= 0)
+      i++;
+    gint j = i;
+    gboolean rd = FALSE;
+    while (j < n && (av ? av[j] : ac) > 0) {
+      if ((av ? av[j] : ac) < PB_ONE)
+        rd = TRUE;
+      j++;
+    }
+    if (j > i) {
+      guint8 buf[PB_CHUNK];
+      if (rd)
+        memcpy(buf, dst + i, (gsize) (j - i));
+      for (gint k = i; k < j; k++) {
+        const gint a = av ? av[k] : ac, wb = wbv ? wbv[k] : wc;
+        buf[k - i] = (guint8) pb_mix(rd ? buf[k - i] : 0, src[k], b, wb, a);
+      }
+      memcpy(dst + i, buf, (gsize) (j - i));
+    }
+    i = j;
+  }
+}
+
+/* Dasselbe für n UV-Paare (je U und V, 2 Bytes) */
+static void pb_uv_vec(guint8 *dst, const guint8 *src, gint n, gint bu, gint bv, const gint *wbv, const gint *av, gint wc, gint ac) {
+  gint i = 0;
+  while (i < n) {
+    while (i < n && (av ? av[i] : ac) <= 0)
+      i++;
+    gint j = i;
+    gboolean rd = FALSE;
+    while (j < n && (av ? av[j] : ac) > 0) {
+      if ((av ? av[j] : ac) < PB_ONE)
+        rd = TRUE;
+      j++;
+    }
+    if (j > i) {
+      guint8 buf[2 * PB_CHUNK];
+      if (rd)
+        memcpy(buf, dst + 2 * i, (gsize) (j - i) * 2);
+      for (gint k = i; k < j; k++) {
+        const gint a = av ? av[k] : ac, wb = wbv ? wbv[k] : wc, o = 2 * (k - i);
+        buf[o] = (guint8) pb_mix(rd ? buf[o] : 0, src[2 * k], bu, wb, a);
+        buf[o + 1] = (guint8) pb_mix(rd ? buf[o + 1] : 0, src[2 * k + 1], bv, wb, a);
+      }
+      memcpy(dst + 2 * i, buf, (gsize) (j - i) * 2);
+    }
+    i = j;
+  }
+}
+
+/* Lauf mit gleichem Rahmenanteil und gleicher Deckkraft (Mittelteil einer Zeile). Schnellwege: Bild unverändert bei voller
+ * Deckkraft (nur kopieren), reine Rahmenfarbe bei voller Deckkraft (nur schreiben). */
+static void pb_y_run(guint8 *dst, const guint8 *src, gint n, gint b, gint wb, gint a) {
+  if (n <= 0 || a <= 0)
+    return;
+  if (a >= PB_ONE && wb <= 0) {
+    memcpy(dst, src, (gsize) n);
+    return;
+  }
+  if (a >= PB_ONE && wb >= PB_ONE) {
+    memset(dst, b, (gsize) n);
+    return;
+  }
+  for (gint i = 0; i < n; i += PB_CHUNK)
+    pb_y_vec(dst + i, src + i, MIN(PB_CHUNK, n - i), b, NULL, NULL, wb, a);
+}
+
+static void pb_uv_run(guint8 *dst, const guint8 *src, gint n, gint bu, gint bv, gint wb, gint a) {
+  if (n <= 0 || a <= 0)
+    return;
+  if (a >= PB_ONE && wb <= 0) {
+    memcpy(dst, src, (gsize) n * 2);
+    return;
+  }
+  for (gint i = 0; i < n; i += PB_CHUNK)
+    pb_uv_vec(dst + 2 * i, src + 2 * i, MIN(PB_CHUNK, n - i), bu, bv, NULL, NULL, wb, a);
+}
+
+/* Luma-Bildpunkte x0 bis x1-1 der Zeile y einzeln bewerten und mischen (d, p: Zeilenanfang im Ziel / im Bild) */
+static void pb_y_edge(const PbShape *s, gint y, gint x0, gint x1, guint8 *d, const guint8 *p, gint b) {
+  gint wbv[PB_CHUNK], av[PB_CHUNK];
+  for (gint x = x0; x < x1; x += PB_CHUNK) {
+    const gint n = MIN(PB_CHUNK, x1 - x);
+    for (gint i = 0; i < n; i++)
+      pb_shape_px(s, x + i, y, &wbv[i], &av[i]);
+    pb_y_vec(d + x, p + x, n, b, wbv, av, 0, 0);
+  }
+}
+
+/* UV-Paare k0 bis k1-1 der Paarzeile mit der Luma-Zeile y (gerade) einzeln bewerten: Mittel der vier Luma-Bildpunkte */
+static void pb_uv_edge(const PbShape *s, gint y, gint k0, gint k1, guint8 *d, const guint8 *p, gint bu, gint bv) {
+  gint wbv[PB_CHUNK], av[PB_CHUNK];
+  for (gint k = k0; k < k1; k += PB_CHUNK) {
+    const gint n = MIN(PB_CHUNK, k1 - k);
+    for (gint i = 0; i < n; i++) {
+      gint w4 = 0, a4 = 0;
+      for (gint q = 0; q < 4; q++) {
+        gint w, a;
+        pb_shape_px(s, 2 * (k + i) + (q & 1), y + (q >> 1), &w, &a);
+        w4 += w;
+        a4 += a;
+      }
+      wbv[i] = (w4 + 2) >> 2;
+      av[i] = (a4 + 2) >> 2;
+    }
+    pb_uv_vec(d + 2 * k, p + 2 * k, n, bu, bv, wbv, av, 0, 0);
+  }
+}
+
+/* Schreibt den Ausschnitt pl (cx, cy, cw, ch) des kleinen Bildes src (pw x ph, NV12 dicht gepackt) mit Stil st an (x, y) in
+ * das Hauptbild: dy/ystride = Y-Ebene, duv/uvstride = UV-Ebene, mw = Breite des Hauptbildes (für Rahmenbreite und Radius).
+ * Voraussetzung (stellt pb_place sicher): x, y, cx, cy gerade, der Ausschnitt liegt im kleinen Bild und das Ziel im Hauptbild.
+ * Ohne Stil (Deckkraft 100 %, kein Rahmen) werden nur Zeilen kopiert, das Hauptbild wird nicht gelesen. */
+static void pb_draw_picture(guint8 *dy, gint ystride, guint8 *duv, gint uvstride, gint mw,
+                            const guint8 *src, gint pw, gint ph, const PbPlace *pl, const PbStyle *st) {
+  if (st->op <= 0)
+    return;
+  const gint cx = pl->cx, cy = pl->cy, x = pl->x, y = pl->y;
+  const guint8 *suv = src + (gsize) pw * ph;
+  PbShape s;
+  pb_shape_init(&s, st, mw, pl->cw & ~1, pl->ch & ~1);
+  if (st->op >= 100 && s.bw <= 0) {
+    for (gint r = 0; r < pl->ch; r++)
+      memcpy(dy + (gsize) (y + r) * ystride + x, src + (gsize) (cy + r) * pw + cx, (gsize) pl->cw);
+    for (gint r = 0; r < pl->ch / 2; r++)
+      memcpy(duv + (gsize) (y / 2 + r) * uvstride + x, suv + (gsize) (cy / 2 + r) * pw + cx, (gsize) pl->cw);
+    return;
+  }
+  gint yb, ub, vb;
+  pb_rgb_to_nv12(st->bc, &yb, &ub, &vb);
+  for (gint r = 0; r < s.ch; r++) {
+    gint wb, a;
+    const gint zone = pb_row_zone(&s, r, &wb, &a);
+    guint8 *d = dy + (gsize) (y + r) * ystride + x;
+    const guint8 *p = src + (gsize) (cy + r) * pw + cx;
+    const gint le = MIN(zone, s.cw), rs = MAX(s.cw - zone, le);
+    pb_y_edge(&s, r, 0, le, d, p, yb);
+    pb_y_run(d + le, p + le, rs - le, yb, wb, a);
+    pb_y_edge(&s, r, rs, s.cw, d, p, yb);
+  }
+  const gint np = s.cw / 2;                          /* UV-Paare je Zeile */
+  for (gint m = 0; m < s.ch / 2; m++) {
+    gint wb0, a0, wb1, a1;
+    const gint z0 = pb_row_zone(&s, 2 * m, &wb0, &a0), z1 = pb_row_zone(&s, 2 * m + 1, &wb1, &a1);
+    const gint zone = MAX(z0, z1);                   /* beide Zeilen des Paares sind im Mittelteil konstant */
+    guint8 *d = duv + (gsize) (y / 2 + m) * uvstride + x;
+    const guint8 *p = suv + (gsize) (cy / 2 + m) * pw + cx;
+    const gint kz = (zone + 1) / 2, le = MIN(kz, np), rs = MAX(np - kz, le);
+    pb_uv_edge(&s, 2 * m, 0, le, d, p, ub, vb);
+    pb_uv_run(d + 2 * le, p + 2 * le, rs - le, ub, vb, (wb0 + wb1 + 1) >> 1, (a0 + a1 + 1) >> 1);
+    pb_uv_edge(&s, 2 * m, rs, np, d, p, ub, vb);
+  }
+}
+/* PB_DRAW_END */
+
+typedef struct { GstVideoFilter parent; guint corner; guint slot; gint slot2; guint corner2; gint slot3; guint corner3; guint fx, fy, fx2, fy2, fx3, fy3; gint follow_tag; PbStyle style[3]; gchar *style_txt[3]; } PbPipMix;
 typedef struct { GstVideoFilterClass parent_class; } PbPipMixClass;
 G_DEFINE_TYPE(PbPipMix, pb_pip_mix, GST_TYPE_VIDEO_FILTER)
 
-enum { PROP_0, PROP_CORNER, PROP_WIDTH_PCT, PROP_SLOT, PROP_SLOT2, PROP_CORNER2, PROP_SLOT3, PROP_CORNER3, PROP_X, PROP_Y, PROP_X2, PROP_Y2, PROP_X3, PROP_Y3, PROP_FOLLOW };
+enum { PROP_0, PROP_CORNER, PROP_WIDTH_PCT, PROP_SLOT, PROP_SLOT2, PROP_CORNER2, PROP_SLOT3, PROP_CORNER3, PROP_X, PROP_Y, PROP_X2, PROP_Y2, PROP_X3, PROP_Y3, PROP_FOLLOW,
+       PROP_STYLE1, PROP_STYLE2, PROP_STYLE3 };      /* Stil 1 bis 3 müssen lückenlos aufeinander folgen */
 
 static GstStaticPadTemplate mix_sink = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS, GST_STATIC_CAPS("video/x-raw, format=(string)NV12"));
@@ -231,6 +692,16 @@ static void pb_mix_set_property(GObject *o, guint id, const GValue *v, GParamSpe
     case PROP_SLOT3: self->slot3 = g_value_get_int(v) < 0 ? -1 : g_value_get_int(v) % NSLOTS; break;
     case PROP_CORNER3: g_atomic_int_set(&self->corner3, MIN(g_value_get_uint(v), 5u)); break;
     case PROP_FOLLOW: g_atomic_int_set(&self->follow_tag, g_value_get_boolean(v) ? 1 : 0); break;
+    case PROP_STYLE1: case PROP_STYLE2: case PROP_STYLE3: {
+      /* Text parsen und übernehmen unter ring_lock: der Videofaden liest den Stil unter demselben Schloss und sieht nie etwas Halbes */
+      const guint i = id - PROP_STYLE1;
+      g_mutex_lock(&ring_lock);
+      g_free(self->style_txt[i]);
+      self->style_txt[i] = g_value_dup_string(v);
+      pb_style_parse(self->style_txt[i], &self->style[i]);
+      g_mutex_unlock(&ring_lock);
+      break;
+    }
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, ps);
   }
 }
@@ -252,12 +723,26 @@ static void pb_mix_get_property(GObject *o, guint id, GValue *v, GParamSpec *ps)
     case PROP_SLOT3: g_value_set_int(v, self->slot3); break;
     case PROP_CORNER3: g_value_set_uint(v, g_atomic_int_get(&self->corner3)); break;
     case PROP_FOLLOW: g_value_set_boolean(v, g_atomic_int_get(&self->follow_tag)); break;
+    case PROP_STYLE1: case PROP_STYLE2: case PROP_STYLE3: {
+      const guint i = id - PROP_STYLE1;
+      g_mutex_lock(&ring_lock);
+      g_value_set_string(v, self->style_txt[i] ? self->style_txt[i] : "");
+      g_mutex_unlock(&ring_lock);
+      break;
+    }
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, ps);
   }
 }
 
-/* Zeichnet das kleine Bild aus Platz "slot" in das Hauptbild. Aufrufer hält ring_lock. */
-static void pb_mix_draw(GstVideoFrame *frame, guint slot, guint corner, gint fx, gint fy) {
+static void pb_mix_finalize(GObject *o) {
+  PbPipMix *self = (PbPipMix *) o;
+  for (guint i = 0; i < G_N_ELEMENTS(self->style_txt); i++)
+    g_free(self->style_txt[i]);
+  G_OBJECT_CLASS(pb_pip_mix_parent_class)->finalize(o);
+}
+
+/* Zeichnet das kleine Bild aus Platz "slot" mit dem Stil st in das Hauptbild. Aufrufer hält ring_lock (schützt auch st). */
+static void pb_mix_draw(GstVideoFrame *frame, guint slot, guint corner, gint fx, gint fy, const PbStyle *st) {
   Ring *ring = &rings[slot];
   if (ring->w <= 0 || ring->slot_size == 0)
     return;
@@ -281,20 +766,13 @@ static void pb_mix_draw(GstVideoFrame *frame, guint slot, guint corner, gint fx,
   const gboolean draw = ring->have_cur && age < STALE_US;
   const gint pw = ring->w, ph = ring->h;
   const gint mw = GST_VIDEO_FRAME_WIDTH(frame), mh = GST_VIDEO_FRAME_HEIGHT(frame);
-  if (draw && pw <= mw && ph <= mh) {
-    const gint margin = (mw / 60) & ~1;            /* ca. 2 % der Breite, gerade */
-    gint x, y;
-    pb_pos(corner, mw, mh, pw, ph, margin, fx, fy, &x, &y);
-    x &= ~1;
-    y &= ~1;
-    if (x >= 0 && y >= 0) {
-      guint8 *dy = GST_VIDEO_FRAME_PLANE_DATA(frame, 0), *duv = GST_VIDEO_FRAME_PLANE_DATA(frame, 1);
-      const gint sy = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 0), suv = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 1);
-      for (gint r = 0; r < ph; r++)
-        memcpy(dy + (gsize) (y + r) * sy + x, ring->cur + (gsize) r * pw, pw);
-      for (gint r = 0; r < ph / 2; r++)
-        memcpy(duv + (gsize) (y / 2 + r) * suv + x, ring->cur + (gsize) pw * ph + (gsize) r * pw, pw);
-    }
+  /* Ausschnitt, Platz und Stil: Position mit der Größe des beschnittenen Bildes. Deckkraft 0 oder zu groß: nichts zeichnen
+   * (der Ring lief oben trotzdem weiter, das Bild erscheint sofort wieder). Ohne Stil bleibt es beim reinen Kopieren. */
+  PbPlace pl = { 0, 0, 0, 0, 0, 0 };
+  if (draw && pb_place(st, mw, mh, pw, ph, corner, fx, fy, &pl)) {
+    guint8 *dy = GST_VIDEO_FRAME_PLANE_DATA(frame, 0), *duv = GST_VIDEO_FRAME_PLANE_DATA(frame, 1);
+    const gint sy = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 0), suv = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 1);
+    pb_draw_picture(dy, sy, duv, suv, mw, ring->cur, pw, ph, &pl, st);
   }
 }
 
@@ -326,18 +804,18 @@ static GstFlowReturn pb_mix_transform_ip(GstVideoFilter *filter, GstVideoFrame *
       if (cam > 3)
         continue;                                      /* 15: an dieser Stelle gibt es kein kleines Bild */
       const guint ring = (cam + 3) % NSLOTS;           /* Kamera 1 -> Platz 0, 2 -> 1, 3 -> 2, Hauptkamera 0 -> 3 */
-      pb_mix_draw(frame, ring, cn[p], fx[p], fy[p]);
+      pb_mix_draw(frame, ring, cn[p], fx[p], fy[p], &self->style[p]);   /* Stil p+1 gehört zur Stelle p, egal welche Kamera dort ist */
       shown |= 1u << ring;
     }
     for (guint r = 0; r < NSLOTS; r++)
       if (!(shown & (1u << r)))
         pb_mix_trim(r);
   } else {
-    pb_mix_draw(frame, self->slot, g_atomic_int_get(&self->corner), g_atomic_int_get(&self->fx), g_atomic_int_get(&self->fy));
+    pb_mix_draw(frame, self->slot, g_atomic_int_get(&self->corner), g_atomic_int_get(&self->fx), g_atomic_int_get(&self->fy), &self->style[0]);
     if (self->slot2 >= 0)                              /* zweites kleines Bild im selben Durchgang (nur ein Mapping des Hauptbilds) */
-      pb_mix_draw(frame, (guint) self->slot2, g_atomic_int_get(&self->corner2), g_atomic_int_get(&self->fx2), g_atomic_int_get(&self->fy2));
+      pb_mix_draw(frame, (guint) self->slot2, g_atomic_int_get(&self->corner2), g_atomic_int_get(&self->fx2), g_atomic_int_get(&self->fy2), &self->style[1]);
     if (self->slot3 >= 0)
-      pb_mix_draw(frame, (guint) self->slot3, g_atomic_int_get(&self->corner3), g_atomic_int_get(&self->fx3), g_atomic_int_get(&self->fy3));
+      pb_mix_draw(frame, (guint) self->slot3, g_atomic_int_get(&self->corner3), g_atomic_int_get(&self->fx3), g_atomic_int_get(&self->fy3), &self->style[2]);
   }
   g_mutex_unlock(&ring_lock);
   return GST_FLOW_OK;
@@ -349,6 +827,7 @@ static void pb_pip_mix_class_init(PbPipMixClass *klass) {
   GstVideoFilterClass *vc = GST_VIDEO_FILTER_CLASS(klass);
   oc->set_property = pb_mix_set_property;
   oc->get_property = pb_mix_get_property;
+  oc->finalize = pb_mix_finalize;
   g_object_class_install_property(oc, PROP_CORNER,
       g_param_spec_uint("corner", "Ecke", "0 oben links, 1 oben rechts, 2 unten links, 3 unten rechts, 4 unten Mitte, 5 frei (x/y)",
                         0, 5, 3, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
@@ -381,6 +860,17 @@ static void pb_pip_mix_class_init(PbPipMixClass *klass) {
   g_object_class_install_property(oc, PROP_FOLLOW,
       g_param_spec_boolean("follow-tag", "Zustand aus dem Bild", "kleine Bilder nach dem Zustand zeigen, den pbpipsel ins Bild schreibt (Tausch ohne Unterbrechung)",
                            FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
+  {
+    /* style1 gilt für das Bild von slot/corner/x/y, style2 für slot2/corner2/x2/y2, style3 für slot3/corner3/x3/y3; im Modus
+     * follow-tag gilt style<p+1> für die Stelle p, egal welche Kamera dort gerade ist */
+    static const struct { guint id; const gchar *name; const gchar *nick; } sp[] = {
+      {PROP_STYLE1, "style1", "Stil 1"}, {PROP_STYLE2, "style2", "Stil 2"}, {PROP_STYLE3, "style3", "Stil 3"}};
+    for (guint i = 0; i < G_N_ELEMENTS(sp); i++)
+      g_object_class_install_property(oc, sp[i].id,
+          g_param_spec_string(sp[i].name, sp[i].nick,
+                              "Gestaltung des kleinen Bildes, kommagetrennt: op (Deckkraft %), cl/cr/ct/cb (Beschnitt, Bezug 1920x1080), bw (Rahmenbreite), bc (Rahmenfarbe rrggbb), bo (Rahmendeckkraft %), br (Eckenradius); leer = unverändert",
+                              "", G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
+  }
   gst_element_class_set_static_metadata(ec, "IRL4YOU PiP Einblendung", "Filter/Effect/Video",
       "Schreibt das kleine Bild in das Hauptbild, ohne dieses zu lesen", "IRL4YOU");
   gst_element_class_add_static_pad_template(ec, &mix_sink);
@@ -394,6 +884,8 @@ static void pb_pip_mix_init(PbPipMix *self) {
   self->corner2 = 2;
   self->slot3 = -1;
   self->corner3 = 0;
+  for (guint i = 0; i < G_N_ELEMENTS(self->style); i++)
+    pb_style_default(&self->style[i]);
   gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
 

@@ -33,7 +33,7 @@ mehrere Netze gleichzeitig) → SRTLA-Server.
 | `pipbox_send.py` | Sendekette: startet Encoder und Sender, wählt bei Kameraausfall automatisch eine andere Anordnung, liest Netzänderungen live |
 | `dji_daemon.py` | DJI-Kameras per Bluetooth koppeln und Stream starten, Verbindung je Kamera wählbar (Protokoll nach Moblin, MIT; Bibliothek bleak) |
 | `dji.py` | Bluetooth-Sticks und -Adapter: was steckt, was BlueZ kennt, Hinweise |
-| `gst/gstpbpip.c` | GStreamer-Plugin: Bild-in-Bild-Mischer, Zwischenspeicher für die kleinen Bilder, Live-Verzögerung |
+| `gst/gstpbpip.c` | GStreamer-Plugin: Bild-in-Bild-Mischer (je kleinem Bild Beschnitt, Deckkraft, Rahmen), Zwischenspeicher für die kleinen Bilder, Live-Verzögerung |
 | `srtla/` | Patch auf BELABOX/srtla (AGPL-3.0): Laufzeit und Jitter je Leitung |
 | `install/` | Installation, Root-Helfer, systemd-Dateien, Zustandsprotokoll |
 | `tools/` | Tests (ohne Box lauffähig) und die Stoppuhr zum Einstellen der Kameraversätze |

@@ -95,3 +95,9 @@ unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` 
 
 Die WLAN-Karte der Oberfläche legt über `nmcli` (NetworkManager) Verbindungsprofile an, wenn Sie ein Netz verbinden.
 Das Passwort wird nur an `nmcli` übergeben und von diesem Projekt nicht gespeichert.
+
+## Aussehen der kleinen Bilder (Anregung)
+
+Bedienkonzept und Wertebereiche für Beschnitt in Pixeln, Rahmen (Dicke, Farbe, Deckkraft, Eckenrundung), Deckkraft je kleinem Bild und das
+Ein-/Ausblenden folgen der Anregung von Bittersweet1987 (Issue und Erweiterung in seinem Projekt, MIT-Lizenz). Die Umsetzung ist eigen: Der
+Zeichenkern in `gst/gstpbpip.c` und die Oberfläche wurden für den Baustein dieser Software neu geschrieben, Programmcode wurde nicht übernommen.
