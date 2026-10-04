@@ -169,6 +169,15 @@ class Connections(unittest.TestCase):
         with mock.patch.object(dji, "SYSFS_BT", os.path.join(root, "gibt-es-nicht")):
             self.assertIsNone(dd.preferred_adapter())
 
+    def test_known_connection_errors_get_plain_texts(self):
+        self.assertIn("nicht geantwortet", dd.friendly_error(asyncio.TimeoutError()))
+        self.assertIn("nicht geantwortet", dd.friendly_error(TimeoutError()))
+        self.assertIn("nicht mehr sichtbar", dd.friendly_error(Exception("device 'dev_E4_7A_2C_D0_D0_4B' not found")))
+        self.assertIn("beim Einrichten", dd.friendly_error(Exception("failed to discover services, device disconnected")))
+        self.assertIn("abgebrochen", dd.friendly_error(Exception("org.bluez.Error.Failed: le-connection-abort-by-local")))
+        self.assertIsNone(dd.friendly_error(ValueError("etwas ganz anderes")))
+        self.assertIsNone(dd.friendly_error(TimeoutError("mit Text")))
+
     def test_camera_key_has_no_clash_with_other_cameras(self):
         first = dd.camera_key("D0:D0:4B:00:00:01")
         self.assertEqual(first, "dji-000001")
@@ -273,6 +282,69 @@ class Commands(unittest.TestCase):
             self.assertNotIn("pb", json.dumps(pub))
             await dm.handle({"cmd": "delete_saved", "addr": ADDR, "ssid": "A"})
             self.assertEqual([n["ssid"] for n in cam.cfg["saved"]], ["B"])
+        arun(go())
+
+    def test_same_connection_offers_the_wifi_already_entered_for_it(self):
+        """Das WLAN einmal an einer Verbindung eingegeben: Wählt eine weitere Kamera dieselbe Verbindung, wird es angeboten."""
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            await self.add(dm, addr=ADDR2, name="Kamera B")
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "eth2"})
+            await dm.handle({"cmd": "update", "addr": ADDR, "ssid": "KameraNetz"})
+            await dm.handle({"cmd": "update", "addr": ADDR, "password": "geheim123"})        # Name und Passwort kommen getrennt an
+            b = dm.cameras[ADDR2]
+            await dm.handle({"cmd": "update", "addr": ADDR2, "wifi_ifname": "eth2"})
+            self.assertEqual((b.cfg["ssid"], b.cfg["password"]), ("KameraNetz", "geheim123"))
+            self.assertEqual(b.public()["saved"], ["KameraNetz"])                           # in ihrer eigenen Liste
+            self.assertNotIn("geheim123", json.dumps(await dm.handle({"cmd": "state"})))
+            dm2 = dd.Daemon(d)                                                               # auch nach einem Neustart
+            await self.add(dm2, addr="AA:BB:CC:00:00:03", name="Kamera C")
+            await dm2.handle({"cmd": "update", "addr": "AA:BB:CC:00:00:03", "wifi_ifname": "eth2"})
+            self.assertEqual(dm2.cameras["AA:BB:CC:00:00:03"].cfg["ssid"], "KameraNetz")
+        arun(go())
+
+    def test_cameras_stay_independent(self):
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            await self.add(dm, addr=ADDR2, name="Kamera B")
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "eth2", "ssid": "Netz1", "password": "pw1"})
+            await dm.handle({"cmd": "update", "addr": ADDR2, "wifi_ifname": "eth2"})
+            a, b = dm.cameras[ADDR], dm.cameras[ADDR2]
+            await dm.handle({"cmd": "update", "addr": ADDR, "ssid": "Netz2", "password": "pw2"})      # A ändert ihr WLAN
+            self.assertEqual((b.cfg["ssid"], b.cfg["password"]), ("Netz1", "pw1"))                      # B bleibt wie sie war
+            c_addr = "AA:BB:CC:00:00:03"
+            await self.add(dm, addr=c_addr, name="Kamera C")
+            await dm.handle({"cmd": "update", "addr": c_addr, "ssid": "Eigenes", "password": "pwc"})     # C hat schon ein eigenes WLAN
+            await dm.handle({"cmd": "update", "addr": c_addr, "wifi_ifname": "eth2"})
+            self.assertEqual(dm.cameras[c_addr].cfg["ssid"], "Eigenes")                                  # und behält es
+            self.assertEqual(a.public()["saved"], [])                                                   # nichts wird in fremde Listen geschrieben
+        arun(go())
+
+    def test_another_connection_or_manual_gets_no_offer(self):
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            await self.add(dm, addr=ADDR2, name="Kamera B")
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "eth2", "ssid": "Netz1", "password": "pw1"})
+            await dm.handle({"cmd": "update", "addr": ADDR2, "wifi_ifname": "eth3"})
+            self.assertFalse(dm.cameras[ADDR2].cfg.get("ssid"))
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "manual", "ssid": "M", "password": "pm"})
+            await dm.handle({"cmd": "update", "addr": ADDR2, "wifi_ifname": "manual"})
+            self.assertFalse(dm.cameras[ADDR2].cfg.get("ssid"))                                          # "Manuell" ist keine bestimmte Verbindung
+        arun(go())
+
+    def test_wifi_accepted_by_a_camera_is_remembered_for_its_connection(self):
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            await self.add(dm, addr=ADDR2, name="Kamera B")
+            cam = dm.cameras[ADDR]
+            cam.cfg.update(wifi_ifname="eth2", ssid="", password="")
+            dm.remember_network(cam, "KameraNetz", "geheim123")
+            await dm.handle({"cmd": "update", "addr": ADDR2, "wifi_ifname": "eth2"})
+            self.assertEqual(dm.cameras[ADDR2].cfg["ssid"], "KameraNetz")
         arun(go())
 
     def test_remove_and_unknown_things(self):
@@ -392,7 +464,14 @@ class CameraSim:
         self.connecting = 0
         self.max_connecting = 0
         self.disconnect_cb = None
+        self.client = None
+        self.scan_on_during_connect = None
         self.found = True
+
+    def drop_bluetooth(self):
+        """Die Kamera (oder der Funkchip) beendet die Bluetooth-Verbindung."""
+        self.client.is_connected = False
+        self.disconnect_cb(self.client)
 
     def reply(self, msg):
         pl = b"\x00\x01" if msg.id == dd.ID_PAIR else (b"\x00\x00" if (msg.id != dd.ID_WIFI or self.wifi_ok) else b"\x00\x01")
@@ -403,6 +482,7 @@ class FakeClient:
     def __init__(self, sim, device, timeout=None, disconnected_callback=None):
         self.sim, self.cb = sim, None
         sim.disconnect_cb = disconnected_callback
+        sim.client = self
         self.is_connected = False
         svc = types.SimpleNamespace(characteristics=[FakeChar("0000fff4-0000-1000-8000-00805f9b34fb", ["notify"]),
                                                      FakeChar("0000fff5-0000-1000-8000-00805f9b34fb", ["write-without-response"])])
@@ -411,6 +491,7 @@ class FakeClient:
     async def __aenter__(self):
         s = self.sim
         s.connecting += 1
+        s.scan_on_during_connect = SHARED["scans_on"] > 0                 # BlueZ vergisst die Kamera, wenn die Suche vorher endet
         s.max_connecting = max(s.max_connecting, SHARED["active"] + 1)
         SHARED["active"] += 1
         await asyncio.sleep(s.connect_delay)
@@ -434,15 +515,27 @@ class FakeClient:
         asyncio.get_event_loop().call_soon(self.cb, None, self.sim.reply(msg))
 
 
-SHARED = {"active": 0}
+SHARED = {"active": 0, "scans_on": 0}
 
 
 def fake_scanner(sims):
     class Scanner:
-        @staticmethod
-        async def find_device_by_address(addr, timeout=10, **kw):
-            sim = sims.get(addr)
-            return types.SimpleNamespace(address=addr, sim=sim) if sim and sim.found else None
+        def __init__(self, *a, **kw):
+            self.kw = kw
+            self.running = False
+
+        async def start(self):
+            self.running = True
+            SHARED["scans_on"] += 1
+
+        async def stop(self):
+            if self.running:
+                self.running = False
+                SHARED["scans_on"] -= 1
+
+        @property
+        def discovered_devices_and_advertisement_data(self):
+            return {a: (types.SimpleNamespace(address=a, sim=s), None) for a, s in sims.items() if s.found}
 
         @staticmethod
         async def discover(timeout=5, return_adv=False, **kw):
@@ -453,11 +546,15 @@ def fake_scanner(sims):
 class Session(unittest.TestCase):
     def setUp(self):
         SHARED["active"] = 0
+        SHARED["scans_on"] = 0
         self.bt = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.bt, "hci0"))
         self.patches = [mock.patch.object(dji, "SYSFS_BT", self.bt),
                         mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: True),
-                        mock.patch.object(dd.Camera, "RETRY_SECONDS", 0.2),
+                        mock.patch.object(dd.Camera, "RETRY_SCHEDULE", (0.2,)),
+                        mock.patch.object(dd.Camera, "SEARCH_SECONDS", 0.6),
+                        mock.patch.object(dd.Camera, "STREAM_CHECK_SECONDS", 0.2),
+                        mock.patch.object(dd.Camera, "STREAM_LOST_SECONDS", 0.6),
                         mock.patch.object(dd.Camera, "CONNECT_SETTLE", 0.0)]
         for p in self.patches:
             p.start()
@@ -521,6 +618,106 @@ class Session(unittest.TestCase):
             self.assertEqual(sim.sent[-1].payload, dd.STOP_PAYLOAD)
         arun(go())
 
+    def test_search_stays_on_until_the_connection_stands_and_then_stops(self):
+        async def go():
+            sim = CameraSim(connect_delay=0.05)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(dm.cameras[ADDR], ("streaming",)))
+            self.assertTrue(sim.scan_on_during_connect)                           # sonst: "device not found"
+            self.assertEqual(SHARED["scans_on"], 0)                               # nach dem Verbindungsaufbau ist die Suche aus
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_search_is_off_after_a_camera_was_not_found(self):
+        async def go():
+            sim = CameraSim()
+            sim.found = False
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(dm.cameras[ADDR], ("error",), 4))
+            self.assertEqual(SHARED["scans_on"], 0)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_retry_delay_grows_with_failures(self):
+        async def go():
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            cam = dm.cameras[ADDR]
+            with mock.patch.object(dd.Camera, "RETRY_SCHEDULE", (8, 8, 15, 30)):
+                got = []
+                for fails in (0, 1, 2, 3, 4, 9):
+                    cam.fail_count = fails
+                    got.append(cam.retry_delay())
+            self.assertEqual(got, [8, 8, 8, 15, 30, 30])
+        arun(go())
+
+    def test_bluetooth_loss_does_not_restart_a_stream_that_still_arrives(self):
+        """Früher (und in der Vorlage) endete die Sitzung beim Verlust von Bluetooth: Der Neuaufbau unterbrach den Stream."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            n = len(sim.sent)
+            sim.drop_bluetooth()
+            await asyncio.sleep(1.2)
+            self.assertEqual(cam.state, "streaming")                              # nicht "error", keine neue Sitzung
+            self.assertIn("Bluetooth", cam.detail)
+            self.assertEqual(len(sim.sent), n)                                    # nichts Neues an die Kamera gesendet
+            self.assertTrue(cam.public()["locked"])
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})                  # ohne Bluetooth kein Stopp-Befehl möglich
+            self.assertEqual(cam.state, "idle")
+            self.assertEqual(len(sim.sent), n)
+        arun(go())
+
+    def test_lost_bluetooth_does_not_burn_cpu(self):
+        """Fehler 0.9.50: Nach dem Bluetooth-Verlust drehte die Schleife ohne Pause (ein Kern voll, Last auf der Box)."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            sim.drop_bluetooth()
+            await asyncio.sleep(0.3)
+            t0 = time.process_time()
+            await asyncio.sleep(1.5)
+            used = time.process_time() - t0
+            self.assertLess(used, 0.4, "Schleife läuft ohne Pause: %.2f s CPU in 1,5 s" % used)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_bluetooth_loss_and_a_vanished_stream_start_over(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            state = {"on": True}
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: state["on"]):
+                sim.drop_bluetooth()
+                await asyncio.sleep(0.5)
+                self.assertEqual(cam.state, "streaming")
+                state["on"] = False                                               # der Stream bleibt jetzt aus
+                self.assertTrue(await self.wait_state(cam, ("error",), 4))
+                self.assertIn("ausgefallen", cam.detail)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
     def test_older_model_skips_the_confirmation_and_pocket3_the_stabilization(self):
         async def go():
             sim = CameraSim()
@@ -544,7 +741,7 @@ class Session(unittest.TestCase):
             self.assertTrue(await self.wait_state(cam, ("error",)))
             self.assertIn("KameraNetz", cam.detail)
             self.assertNotIn("geheim123", cam.detail)
-            self.assertEqual(cam.cfg.get("saved"), None)                        # ein Netz, das nicht klappt, wird nicht gemerkt
+            self.assertIsNone(cam.cfg.get("saved"))                              # ein Netz, das nicht klappt, wird nicht gemerkt
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
@@ -560,6 +757,18 @@ class Session(unittest.TestCase):
             self.assertTrue(await self.wait_state(cam, ("error",)))
             self.assertIn("nicht gefunden", cam.detail)
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_adapter_argument_depends_on_the_bleak_version(self):
+        async def go():
+            dm = dd.Daemon(tempfile.mkdtemp())
+            with mock.patch.object(dd, "preferred_adapter", lambda: "hci1"):
+                with mock.patch.object(dd, "BLEAK_MAJOR", 1):
+                    self.assertEqual(dm.scan_kwargs(), {"adapter": "hci1"})
+                with mock.patch.object(dd, "BLEAK_MAJOR", 3):
+                    self.assertEqual(dm.scan_kwargs(), {"bluez": {"adapter": "hci1"}})
+            with mock.patch.object(dd, "preferred_adapter", lambda: None):
+                self.assertEqual(dm.scan_kwargs(), {})
         arun(go())
 
     def test_missing_connection_gives_a_router_hint_without_bluetooth_traffic(self):

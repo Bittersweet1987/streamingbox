@@ -45,6 +45,17 @@ ONBOARD_USB_ID = "13d3:3572"                 # eingebautes Realtek-Modul der ROC
 
 log = logging.getLogger("pipbox-dji")
 
+
+def _bleak_major():
+    try:
+        from importlib.metadata import version
+        return int(version("bleak").split(".")[0])
+    except Exception:
+        return 0
+
+
+BLEAK_MAJOR = _bleak_major()      # ab bleak 2 steht der Adapter in "bluez", bei 1.x in "adapter" (die alte Angabe warnt in 3.x)
+
 # ---------------------------------------------------------------- Protokoll ---
 
 FIRST_BYTE = 0x55
@@ -293,6 +304,20 @@ async def bluez_cleanup(addr):
             pass
 
 
+def friendly_error(e):
+    """Verständlicher Text für die bekannten Fehler beim Verbinden (None: unbekannt, dann mit Ablaufverfolgung ins Journal)."""
+    text = str(e).lower()
+    if isinstance(e, (asyncio.TimeoutError, TimeoutError)) and not text:
+        return "Die Kamera hat auf den Bluetooth-Verbindungsaufbau nicht geantwortet (Zeitüberschreitung)"
+    if "not found" in text and ("device" in text or "dev_" in text):
+        return "Die Kamera ist für Bluetooth nicht mehr sichtbar (aus, im Ruhemodus oder mit dem Handy verbunden?)"
+    if "failed to discover services" in text or "device disconnected" in text:
+        return "Die Kamera hat die Bluetooth-Verbindung beim Einrichten beendet"
+    if "le-connection-abort-by-local" in text:
+        return "Der Bluetooth-Verbindungsaufbau wurde abgebrochen (Funk gestört?)"
+    return None
+
+
 def camera_key(addr, taken=()):
     """RTMP-Schlüssel einer DJI-Kamera: dji- plus die letzten sechs Stellen der Adresse (eindeutig, ohne Kollision mit anderen
     Kameras der Box, deren Schlüssel nicht mit dji- beginnen)."""
@@ -313,7 +338,10 @@ class CameraError(Exception):
 class Camera:
     """Zustand und BLE-Sitzung einer eingerichteten Kamera."""
 
-    RETRY_SECONDS = 8
+    RETRY_SCHEDULE = (8, 8, 15, 30)   # Sekunden bis zum nächsten Versuch nach dem 1., 2., 3. ... Fehlversuch (Suchen stört die stehenden Verbindungen)
+    SEARCH_SECONDS = 15
+    STREAM_CHECK_SECONDS = 5    # so oft wird geprüft, ob der Stream noch ankommt
+    STREAM_LOST_SECONDS = 30    # so lange darf er fehlen, bevor die Sitzung neu beginnt
     CONNECT_SETTLE = 1.0     # so lange bleibt das Verbinden nach dem Aufbau noch gesperrt (dem Funkchip einen Moment geben)
 
     def __init__(self, daemon, addr, cfg):
@@ -334,6 +362,8 @@ class Camera:
         self.publishing = False      # die Kamera liefert ihren Stream (der Dienst prüft das), auch ohne Bluetooth
         self.force_cleanup = False   # "Verbinden" von Hand: erst einen hängenden BlueZ-Eintrag verwerfen
         self.typed_network = True
+        self._scanner = None
+        self._search_started = 0.0
 
     def locked(self):
         """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet."""
@@ -382,27 +412,39 @@ class Camera:
         return ssid, pw, "rtmp://%s:%d/%s/%s" % (ip, self.daemon.rtmp_port, self.daemon.rtmp_app, key)
 
     async def find_device(self):
-        """Die Werbung der Kamera suchen. Nur eine Suche gleichzeitig (BlueZ erlaubt eine)."""
-        async with self.daemon.ble_lock:
-            if self.fail_count >= 2 or self.force_cleanup:
-                self.force_cleanup = False
-                await bluez_cleanup(self.addr)
-            kw = self.daemon.scan_kwargs()
-            device = None
+        """Die Werbung der Kamera suchen und die Suche LAUFEN LASSEN, bis die Verbindung steht (stop_scan). BlueZ vergisst eine
+        Kamera, sobald die Suche endet ("device not found"); gemessen auf der Box, so lief schon die frühere Version. Der Aufrufer
+        hält das gemeinsame Schloss (nur eine Suche oder ein Verbindungsaufbau zur Zeit)."""
+        if self.fail_count >= 2 or self.force_cleanup:
+            self.force_cleanup = False
+            await bluez_cleanup(self.addr)
+        self._search_started = time.time()
+        scanner = BleakScanner(**self.daemon.scan_kwargs())
+        try:
+            await scanner.start()
+        except Exception as e:
+            raise CameraError("Die Bluetooth-Suche konnte nicht gestartet werden: %s" % e)
+        self._scanner = scanner
+        end = time.time() + self.SEARCH_SECONDS
+        while time.time() < end and not self.stop_requested:
             try:
-                device = await BleakScanner.find_device_by_address(self.addr, timeout=15, **kw)
+                for addr, (dev, _adv) in scanner.discovered_devices_and_advertisement_data.items():
+                    if str(addr).upper() == self.addr.upper():
+                        self.last_seen = time.time()
+                        return dev
             except Exception as e:
-                log.info("%s: Suche fehlgeschlagen: %s", self.addr, e)
-            if device is None:
-                try:
-                    found = await BleakScanner.discover(timeout=6, return_adv=True, **kw)
-                    if self.addr in found:
-                        device = found[self.addr][0]
-                except Exception as e:
-                    log.info("%s: zweite Suche fehlgeschlagen: %s", self.addr, e)
-            if device is not None:
-                self.last_seen = time.time()
-            return device
+                log.info("%s: Suchergebnis nicht lesbar: %s", self.addr, e)
+            await asyncio.sleep(0.2)
+        await self.stop_scan()
+        return None
+
+    async def stop_scan(self):
+        s, self._scanner = self._scanner, None
+        if s is not None:
+            try:
+                await s.stop()
+            except Exception as e:
+                log.info("%s: Suche beenden fehlgeschlagen: %s", self.addr, e)
 
     async def session(self):
         cfg = self.cfg
@@ -426,7 +468,8 @@ class Camera:
         held = [True]
         loop2 = asyncio.get_event_loop()
 
-        def release():
+        async def release():
+            await self.stop_scan()                       # erst jetzt darf die Suche enden
             if held[0]:
                 held[0] = False
                 loop2.call_later(self.CONNECT_SETTLE, self.daemon.conn_lock.release)    # dem Funkchip einen Moment geben, bevor die nächste dran ist
@@ -434,7 +477,7 @@ class Camera:
         try:
             await self._connect_and_stream(loop, ssid, password, rtmp_url, key, release)
         finally:
-            release()
+            await release()
 
     async def _connect_and_stream(self, loop, ssid, password, rtmp_url, key, release):
         cfg = self.cfg
@@ -474,7 +517,9 @@ class Camera:
 
         self.set_state("connecting", "Verbinde per Bluetooth")
         self.last_rx = time.time()
+        t_connect = time.time()
         async with BleakClient(device, timeout=20, disconnected_callback=lambda c: disconnected.set()) as client:
+            t_connected = time.time()
             write_char = None
             for service in client.services:
                 for ch in service.characteristics:
@@ -487,7 +532,9 @@ class Camera:
                             log.debug("Benachrichtigung auf %s fehlgeschlagen: %s", ch.uuid, e)
             if write_char is None:
                 raise CameraError("Kein DJI-Gerät (Schreib-Kanal FFF5 fehlt)")
-            release()          # die Verbindung steht: die nächste Kamera darf jetzt verbinden
+            log.info("%s: Zeiten: Verbinden und Dienste %.1f s, Benachrichtigungen %.1f s (Suche vorher %.1f s)", self.addr,
+                     t_connected - t_connect, time.time() - t_connected, t_connect - self._search_started)
+            await release()    # die Verbindung steht: die Suche endet, die nächste Kamera darf jetzt verbinden
 
             async def send(msg):
                 await client.write_gatt_char(write_char, msg.encode(), response=False)
@@ -515,6 +562,8 @@ class Camera:
             resp = await wait_for(ID_WIFI, 30)
             if resp.payload != bytes([0, 0]):
                 raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
+            if self.typed_network and ssid:
+                self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
 
             # 3. Bildstabilisierung bei den Modellen, die sie brauchen
             if model_kind in CONFIGURE_KINDS:
@@ -533,42 +582,46 @@ class Camera:
             await wait_for(ID_START, 30)
             self.set_state("streaming", rtmp_url)
             self.fail_count = 0
-            # das Netz hat funktioniert: für diese Kamera merken
-            if self.typed_network and ssid:
-                saved = [n for n in cfg.get("saved", []) if n["ssid"] != ssid]
-                saved.append({"ssid": ssid, "password": password})
-                cfg["saved"] = saved[-20:]
-                self.daemon.save()
 
-            # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen und die Kamera
-            #    muss über Bluetooth weiter reden. Sonst endet die Sitzung mit einem Fehler und beginnt von vorn (automatisch
-            #    verbinden): Die Kamera kann das WLAN verlassen haben, ausgeschaltet worden sein oder die Bluetooth-
-            #    Verbindung ohne Meldung verloren haben.
+            # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen. Geht nur die
+            #    Bluetooth-Verbindung verloren, während der Stream noch ankommt, läuft er unverändert weiter (die frühere Version
+            #    hat ebenfalls nur den Stream geprüft): Ein Neuaufbau würde ihn mit "Stopp, Vorbereiten, Start" unterbrechen.
+            #    Endet der Stream, endet die Sitzung mit einem Fehler und beginnt von vorn (automatisch verbinden): Die
+            #    Kamera kann das WLAN verlassen haben oder ausgeschaltet worden sein.
             last_ok = time.time()
             last_check = 0
-            while not disconnected.is_set() and not self.stop_requested:
-                try:
-                    await asyncio.wait_for(disconnected.wait(), 1)
-                except asyncio.TimeoutError:
-                    pass
+            bt_lost = False
+            while not self.stop_requested:
+                if bt_lost:
+                    await asyncio.sleep(1)          # das Signal "getrennt" ist schon gesetzt: darauf zu warten würde sofort zurückkehren (Dauerschleife)
+                else:
+                    try:
+                        await asyncio.wait_for(disconnected.wait(), 1)
+                    except asyncio.TimeoutError:
+                        pass
                 while not queue.empty():
                     queue.get_nowait()
 
                 now = time.time()
-                if now - last_check >= 5:
+                if disconnected.is_set() and not bt_lost:
+                    bt_lost = True
+                    self.battery = None
+                    log.info("%s: Bluetooth-Verbindung getrennt, prüfe den Stream", self.addr)
+                if now - last_check >= self.STREAM_CHECK_SECONDS or (bt_lost and last_check == 0):
                     last_check = now
                     publishing = await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)
+                    if publishing is None and bt_lost:
+                        raise CameraError("Die Bluetooth-Verbindung ging verloren")     # ohne Statistik nicht zu beurteilen
                     if publishing is None or publishing:
                         last_ok = now
-                    elif now - last_ok > 30:
+                        if bt_lost:
+                            self.set_state("streaming", "Der Stream läuft, die Bluetooth-Verbindung ist getrennt")
+                    elif now - last_ok > self.STREAM_LOST_SECONDS:
                         raise CameraError("Der Stream ist ausgefallen (Kamera außer Reichweite des WLANs?)")
-                if now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
+                if not bt_lost and now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
                     raise CameraError("Die Bluetooth-Verbindung ging verloren")
 
-            if disconnected.is_set() and not self.stop_requested:
-                raise CameraError("Die Bluetooth-Verbindung ging verloren")
-
-            if self.stop_requested and client.is_connected:
+            if self.stop_requested and client.is_connected and not bt_lost:
                 self.set_state("stopping", "Stream wird beendet")
                 try:
                     await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
@@ -592,21 +645,31 @@ class Camera:
                 self.set_state("error", str(e))
             except Exception as e:
                 self.fail_count += 1
-                log.exception("Sitzung fehlgeschlagen")
-                self.set_state("error", "%s: %s" % (type(e).__name__, e))
+                msg = friendly_error(e)
+                if msg is None:
+                    log.exception("Sitzung fehlgeschlagen")
+                    msg = "%s: %s" % (type(e).__name__, e)
+                else:
+                    log.info("%s: %s (%s)", self.addr, msg, type(e).__name__)
+                self.set_state("error", msg)
             self.battery = None
             if self.stop_requested or not self.cfg.get("autoconnect"):
                 self.retry_at = 0
                 return
-            # vor dem nächsten Versuch warten; "Verbinden" / "Neu verbinden" wecken sofort auf
-            self.retry_at = time.time() + self.RETRY_SECONDS
+            # vor dem nächsten Versuch warten (gestaffelt); "Verbinden" / "Neu verbinden" wecken sofort auf
+            delay = self.retry_delay()
+            self.retry_at = time.time() + delay
             try:
-                await asyncio.wait_for(self.wake.wait(), self.RETRY_SECONDS)
+                await asyncio.wait_for(self.wake.wait(), delay)
             except asyncio.TimeoutError:
                 pass
             self.retry_at = 0
             if self.stop_requested:
                 return
+
+    def retry_delay(self):
+        """Wartezeit bis zum nächsten Versuch: wächst mit den Fehlversuchen in Folge."""
+        return self.RETRY_SCHEDULE[min(max(self.fail_count, 1) - 1, len(self.RETRY_SCHEDULE) - 1)]
 
     def running(self):
         return self.task is not None and not self.task.done()
@@ -744,11 +807,11 @@ class Daemon:
         self.token_path = os.path.join(state_dir, "dji-token")
         self.rtmp_port, self.rtmp_app, self.stat_url = rtmp_port, rtmp_app, stat_url
         self.cameras = {}
+        self.by_conn = {}                    # Verbindung -> zuletzt dort eingegebenes WLAN der Kamera {"ssid","password"} (nur zum Vorschlagen)
         self.scan_results = []
         self.scanning = False
         self.scan_error = ""
-        self.ble_lock = asyncio.Lock()
-        self.conn_lock = asyncio.Lock()           # nur eine Kamera gleichzeitig verbinden
+        self.ble_lock = self.conn_lock = asyncio.Lock()   # eine Suche oder ein Verbindungsaufbau zur Zeit (Suche und Verbinden stören sich)
         self.token = self._load_token()
         self._opts = (0.0, [])
         self._adapt = None
@@ -776,15 +839,48 @@ class Daemon:
             saved = {"cameras": migrate_legacy(self.state_dir)}
             if saved["cameras"]:
                 log.info("%d Kamera(s) aus der früheren Version übernommen", len(saved["cameras"]))
-                self.cameras = {a: Camera(self, a, c) for a, c in saved["cameras"].items()}
-                self.save()
-                return
+        for ifname, n in (saved.get("by_connection") or {}).items():
+            if isinstance(n, dict) and n.get("ssid"):
+                self.by_conn[str(ifname)] = {"ssid": str(n["ssid"]), "password": str(n.get("password", ""))}
+        migrated = not os.path.exists(self.config_file) and bool(saved.get("cameras"))
         for addr, cfg in (saved.get("cameras") or {}).items():
             if isinstance(cfg, dict):
                 self.cameras[addr] = Camera(self, addr, cfg)
+                if migrated:
+                    self._note_connection(cfg)
+        if migrated:
+            self.save()
+
+    def _note_connection(self, cfg):
+        """Merkt das WLAN dieser Kamera für ihre Verbindung (nur Vorschlag für weitere Kameras an derselben Verbindung)."""
+        ifname = cfg.get("wifi_ifname")
+        if ifname and ifname != "manual" and cfg.get("ssid") and cfg.get("password"):
+            self.by_conn[ifname] = {"ssid": cfg["ssid"], "password": cfg["password"]}
+
+    def remember_network(self, cam, ssid, password):
+        """Ein WLAN, das die Kamera angenommen hat: in ihrer eigenen Liste gespeichert und für ihre Verbindung gemerkt."""
+        saved = [n for n in cam.cfg.get("saved", []) if n["ssid"] != ssid]
+        saved.append({"ssid": ssid, "password": password})
+        cam.cfg["saved"] = saved[-20:]
+        self._note_connection(dict(cam.cfg, ssid=ssid, password=password))
+        self.save()
+
+    def offer_connection_network(self, cam):
+        """Wurde für diese Kamera eine Verbindung gewählt, an der schon eine andere Kamera ihr WLAN eingegeben hat, wird dieses
+        WLAN vorgeschlagen (Name und Passwort eingetragen und in ihrer Liste). Eine Kamera mit eigenem WLAN behält es; die anderen
+        Kameras bleiben unberührt."""
+        cfg = cam.cfg
+        m = self.by_conn.get(cfg.get("wifi_ifname") or "")
+        if not m or cfg.get("ssid"):
+            return False
+        cfg["ssid"], cfg["password"] = m["ssid"], m["password"]
+        saved = [n for n in cfg.get("saved", []) if n["ssid"] != m["ssid"]]
+        saved.append(dict(m))
+        cfg["saved"] = saved[-20:]
+        return True
 
     def save(self):
-        data = {"cameras": {a: c.cfg for a, c in self.cameras.items()}}
+        data = {"cameras": {a: c.cfg for a, c in self.cameras.items()}, "by_connection": self.by_conn}
         tmp = self.config_file + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # enthält WLAN-Passwörter von Hand eingegebener Netze
         with os.fdopen(fd, "w") as f:
@@ -806,8 +902,11 @@ class Daemon:
             return True
 
     def scan_kwargs(self):
+        """Adapter für Suche und Verbindung (die Angabe hängt von der bleak-Version ab)."""
         a = preferred_adapter()
-        return {"adapter": a} if a else {}
+        if not a:
+            return {}
+        return {"bluez": {"adapter": a}} if BLEAK_MAJOR >= 2 else {"adapter": a}
 
     def adapter_info(self):
         """Welche Bluetooth-Adapter laufen und welche Sticks stecken, ohne einen Adapter zu ergeben. Höchstens alle 10 s neu."""
@@ -918,6 +1017,10 @@ class Daemon:
                     if k == "password" and req[k] == "":
                         continue                         # leer lassen = gespeichertes Passwort behalten
                     cam.cfg[k] = req[k]
+            if "wifi_ifname" in req:
+                self.offer_connection_network(cam)
+            if "ssid" in req or "password" in req:
+                self._note_connection(cam.cfg)
             self.sanitize(cam)
             if req.get("autoconnect") is True:
                 cam.manual_off = False
@@ -935,6 +1038,7 @@ class Daemon:
                 for n in cam.cfg.get("saved", []):
                     if n["ssid"] == ssid:
                         cam.cfg["ssid"], cam.cfg["password"] = n["ssid"], n["password"]
+                        self._note_connection(cam.cfg)
             self.save()
             return {"ok": True}
         if cmd == "remove":

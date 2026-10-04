@@ -1,5 +1,18 @@
 # Änderungen
 
+## 0.9.51 (Beta)
+Korrekturen zu 0.9.50 nach dem ersten Test mit echten Kameras auf der Box.
+- Behoben: **"device not found" beim Verbinden** (Action 5 Pro, Action 6). BlueZ vergisst eine Kamera, sobald die Suche endet; die Vorlage beendete die Suche vor dem Verbinden. Jetzt läuft die Suche, bis die Verbindung steht, und endet erst dann. Dasselbe hatte schon die frühere Version gemessen.
+- Behoben: **Der Stream wurde bei Bluetooth-Verlust neu gestartet.** Die Action 4 trennt Bluetooth gleich nach dem Streamstart (die frühere Version hat das nie geprüft, nur ob der Stream ankommt). Die Vorlage beendete dann die Sitzung und baute alles neu auf, mit "Stopp, Vorbereiten, Start": das Bild flackerte alle 25 Sekunden.
+  Jetzt läuft ein ankommender Stream unverändert weiter; die Karte zeigt "Der Stream läuft, die Bluetooth-Verbindung ist getrennt". Endet der Stream, beginnt die Sitzung von vorn. Ohne Bluetooth kann "Trennen" den Stream nicht beenden (kein Stopp-Befehl möglich): Er läuft, bis die Kamera ausgeschaltet wird.
+- Behoben: **Dauerschleife nach dem Bluetooth-Verlust** (Fehler beim ersten Entwurf dieser Korrektur): Der Dienst belegte einen ganzen Kern und blockierte sich selbst, Verbindungsaufbauten dauerten 11 bis 19 Sekunden statt etwa 3 Sekunden. Ein Test weist die Schleife nach.
+- Geändert: **Wiederholung gestaffelt** (8, 8, 15, dann 30 Sekunden statt immer 8): Ständiges Suchen stört die schon stehenden Verbindungen.
+- Neu: **Dieselbe Verbindung, dasselbe WLAN.** Wählt eine weitere Kamera eine Verbindung, an der schon eine andere Kamera ihr WLAN eingegeben hat, werden Name und Passwort angeboten (eingetragen und in ihrer Liste). Eine Kamera mit eigenem WLAN behält es; die Kameras bleiben sonst unabhängig voneinander ("Manuell" und andere Verbindungen bekommen nichts angeboten).
+  Gemerkt wird, sobald Name und Passwort eingegeben sind und sobald die Kamera das WLAN angenommen hat.
+- Neu: **Bildaufbau zeigt so viele Fenster wie Kameras da sind** (Hauptbild und höchstens drei kleine Bilder): Bei zwei Kameras zwei Fenster, bei drei Kameras drei, ab vier alle vier. Ein Fenster mit schon gewählter Kamera bleibt sichtbar.
+- Geändert: Verständliche Meldungen statt "TimeoutError:" bei Zeitüberschreitung, "nicht mehr sichtbar", Abbruch beim Einrichten; die Warnung von `bleak` 3.x im Journal ist weg (der Adapter wird je nach `bleak`-Version angegeben); das Journal nennt die Dauer der Verbindungsschritte ("Zeiten: Verbinden und Dienste …").
+- Bestätigt auf der Box: Eine Action 4 verbindet in etwa 3 Sekunden bis "Koppeln", das WLAN wird übergeben, der Stream läuft. **Noch nicht bestätigt:** Action 5 Pro und Action 6 mit der Korrektur der Suche. Tests: 68 für den DJI-Dienst (alle grün).
+
 ## 0.9.50 (Beta)
 - Neu: **DJI-Anbindung neu aufgebaut: Verbindung je Kamera aus den vorhandenen Verbindungen der Box wählbar, schnellere Wiederholung, bessere Statusmeldungen.**
   Der Bluetooth-Dienst (`pipbox-dji`, `dji_daemon.py`) folgt jetzt dem Ablauf des DJI-Dienstes von Bittersweet1987 (Bibliothek `bleak` statt direkter BlueZ-Aufrufe), angepasst an dieses Projekt (siehe NOTICE.md).

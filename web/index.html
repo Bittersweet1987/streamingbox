@@ -80,6 +80,7 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .camcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:10px;margin-top:12px}
 .camcol{display:flex;flex-direction:column;gap:8px;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
 .camcol[hidden]{display:none}
+.camcol.slotoff{display:none}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
 .camcol .opt{color:var(--muted);font-weight:400}
 .camcol>label{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -599,7 +600,14 @@ function djiDynamic(){
     card.querySelector(".d-disconnect").disabled=!active;
     card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel").forEach(f=>{ f.disabled=!!c.locked; });
     card.querySelector(".d-lockhint").hidden=!c.locked;
-    const sv=card.querySelector(".d-saved"); if(sv&&sv!==document.activeElement) sv.value=(c.saved||[]).includes(c.ssid)?c.ssid:"";
+    const ss=card.querySelector(".d-ssid"); if(ss&&ss!==document.activeElement&&ss.value!==(c.ssid||"")) ss.value=c.ssid||"";   // z. B. vom Dienst vorgeschlagenes WLAN derselben Verbindung
+    const sv=card.querySelector(".d-saved");
+    if(sv&&sv!==document.activeElement){
+      const names=(c.saved||[]), have=[...sv.options].slice(1).map(o=>o.value);
+      if(JSON.stringify(names)!==JSON.stringify(have)) sv.innerHTML='<option value="">– gespeicherte Netze –</option>'+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
+      sv.value=names.includes(c.ssid)?c.ssid:"";
+      card.querySelector(".d-savedrow").hidden=!names.length;
+    }
     const pw=card.querySelector(".d-pw"); if(pw&&pw!==document.activeElement) pw.placeholder=(c.saved||[]).includes(c.ssid)?"Passwort gespeichert – leer lassen, um es zu behalten":"Passwort";
     const wo=(d.wifi_options||[]).find(o=>o.ifname===c.wifi_ifname);
     card.querySelector(".dsum-conn").textContent=c.wifi_ifname==="manual"?"· "+(c.ssid||"–"):(c.wifi_ifname?"· "+(wo&&wo.ssid?wo.ssid:c.wifi_ifname):"");
@@ -897,6 +905,9 @@ function pipConstrain(v){
   au.value=[...au.options].some(o=>o.value===prev)?prev:"main";
   $("p_corner2").disabled=!pip2; $("p_pip3").disabled=!pip2; $("p_corner3").disabled=!pip3;
   $("dl2").style.display=pip2?"":"none"; $("dl3").style.display=pip3?"":"none";
+  // So viele Bildfenster wie Kameras (höchstens vier): Hauptbild, dann kleine Bilder. Ein Fenster, in dem schon eine Kamera gewählt ist, bleibt sichtbar.
+  const nSlots=Math.min(4,Math.max(1,pipCams.length));
+  document.querySelectorAll("#pipecard .camcols>.camcol").forEach((col,k)=>col.classList.toggle("slotoff",!(k<nSlots||(k===2&&pip2)||(k===3&&pip3))));
   renderPreview();
 }
 async function pipeLoad(){
