@@ -49,7 +49,12 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .ph{font-size:12px;color:var(--muted);margin-top:8px}
 .cam{padding:10px 0;border-bottom:1px solid var(--line)}
 .cam:last-of-type{border-bottom:0}
-.cam .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.cam .top{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap}
+/* Eine Zeile je Kamera: Name | Verbindung | Signal (fps, Mbit/s) | Entfernen. Die Verbindung steht als Spalte vor dem Signal (spart die eigene Zeile darunter); das Signal hat eine feste Mindestbreite und gleich breite Ziffern, damit nichts wackelt. */
+.cam .top .cl{flex:1 1 200px;min-width:0}
+.cam .top .cn{flex:0 1 270px;min-width:0}
+.cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
+.cam .top .dyn{display:inline-block;min-width:9.6em;text-align:right;font-variant-numeric:tabular-nums}
 .cam code{display:block;margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
 .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);margin-left:6px}
 .cam a.ren{color:var(--text);text-decoration:none;border-bottom:1px dotted var(--muted)}
@@ -72,12 +77,26 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .wstat .wgrow{flex:1;min-width:160px}
 .wstat label{display:flex;gap:8px;align-items:center;white-space:nowrap}
 #wificard a{color:var(--accent)}
-.pvbox{position:relative;width:100%;max-width:640px;background:linear-gradient(135deg,#1d3b6b,#0e2a4a 60%,#0a1f38);border:1px solid var(--line);border-radius:12px;overflow:hidden;user-select:none;margin-top:6px}
+.pvbox{position:relative;width:100%;max-width:640px;background:linear-gradient(135deg,#1d3b6b,#0e2a4a 60%,#0a1f38);border:1px solid var(--line);overflow:hidden;user-select:none;margin-top:6px}
 .pvmain{position:absolute;left:12px;top:8px;font-size:13px;color:#cbd5e1}
-.pvpip{touch-action:none;position:absolute;border:2px solid rgba(255,255,255,.7);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;color:#fff;cursor:grab;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+/* Die Vorschau zeigt, was gesendet wird: Bild und kleine Bilder eckig (nicht abgerundet), ohne eigenen Rahmen und Schatten; Rahmen, Rundung, Deckkraft und Beschnitt nur, wenn sie eingestellt sind */
+.pvpip{touch-action:none;position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;color:#fff;cursor:grab;overflow:hidden}
+.pvpip .pvin{position:absolute}
+.pvpip .pvrim{position:absolute;left:0;top:0;right:0;bottom:0;box-sizing:border-box;pointer-events:none}
+.pvpip b,.pvpip span{position:relative}
 .pvpip b{font-size:18px}.pvpip span{max-width:96%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pvpip.drag{cursor:grabbing;border-color:var(--warn)}
-.pv1{background:linear-gradient(135deg,#0891b2,#164e63)}.pv2{background:linear-gradient(135deg,#059669,#064e3b)}.pv3{background:linear-gradient(135deg,#d97706,#78350f)}
+.pvpip.drag{cursor:grabbing;outline:2px solid var(--warn)}
+.pvpip.off{outline:1px dashed rgba(255,255,255,.6)}
+.pv1 .pvin{background:linear-gradient(135deg,#0891b2,#164e63)}.pv2 .pvin{background:linear-gradient(135deg,#059669,#064e3b)}.pv3 .pvin{background:linear-gradient(135deg,#d97706,#78350f)}
+/* Aussehen je kleinem Bild: Deckkraft, Beschnitt, Rahmen */
+.pvs{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}
+.pvs>summary{cursor:pointer;color:var(--muted);font-size:13px}
+.pvs .pvs-sum{font-size:12px;opacity:.8}
+.pvs .pvs-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px;margin:4px 0}
+.pvs .pvs-grid input[type=number]{width:100%}
+.pvs input[type=color]{width:100%;height:30px;padding:2px;box-sizing:border-box}
+.pvs .sech{margin:10px 0 2px}
+.pvs .pvs-info{font-size:12px;margin:2px 0 6px}
 .wlist{display:grid;gap:4px;max-height:260px;overflow:auto}
 .wrow{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:12px;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);text-decoration:none}
 .wrow:hover{border-color:var(--accent)}
@@ -101,8 +120,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 #camlights.hasbatt .row>span:last-child{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 #camlights .battcell{text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
 #camlights .hrow .mid{text-align:center}
-.cam .camnet{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px}
-.cam .camnet select{padding:2px 6px;font-size:12px;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
+.cam .camnet{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cam .camnet select{padding:2px 6px;font-size:12px;width:100%;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
 .camcol .opt{color:var(--muted);font-weight:400}
 .camcol>label{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -154,6 +173,15 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 #swcard[open]>summary .sumh::before{content:"\25BE  ";}
 #swcard[open]>summary{margin-bottom:10px}
 #swcard .swpick{margin-top:12px}
+/* Änderungen eines Updates: gegliedert und lesbar (Überschrift je Version, Aufzählung, fette Stichworte), bei viel Text scrollbar */
+#sw_notes{max-height:26em;overflow:auto;margin:10px 0;padding:6px 14px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-size:14px;line-height:1.5}
+#sw_notes h4{margin:12px 0 4px;font-size:14px;color:var(--accent);letter-spacing:.02em}
+#sw_notes h4:first-child{margin-top:6px}
+#sw_notes ul{margin:4px 0 8px;padding-left:20px}
+#sw_notes li{margin:5px 0}
+#sw_notes p{margin:4px 0}
+#sw_notes code{font-size:12.5px;padding:1px 5px;border-radius:5px;background:var(--card)}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:80;max-width:calc(100% - 32px);padding:10px 16px;border:1px solid var(--ok);border-radius:10px;background:var(--card);color:var(--text);box-shadow:0 8px 24px rgba(2,6,23,.6);font-size:14px}
 #sw_notes{white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px;margin:10px 0}
 #updcard[open]>summary .sumh::before{content:"\25BE  ";}
 #updcard[open]>summary{margin-bottom:10px}
@@ -277,6 +305,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <label class="muted">Ecke<select id="p_corner" style="width:100%"></select></label>
         <label class="muted dl" title="Zusätzliche Wartezeit nur für das erste kleine Bild."><span>Verzögerung: <b id="v_delay1">0</b> ms</span>
           <span class="dlrow"><input id="p_delay1" type="range" min="0" max="3000" step="10"><input id="n_delay1" type="number" min="0" max="3000" step="10"></span></label>
+        <details class="pvs" data-k="1"></details>
       </div>
       <div class="camcol piponly">
         <h3>Kleines Bild 2 <span class="opt">(optional)</span></h3>
@@ -284,6 +313,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <label class="muted">Ecke<select id="p_corner2" style="width:100%"></select></label>
         <label class="muted dl" id="dl2" title="Zusätzliche Wartezeit nur für das zweite kleine Bild."><span>Verzögerung: <b id="v_delay2">0</b> ms</span>
           <span class="dlrow"><input id="p_delay2" type="range" min="0" max="3000" step="10"><input id="n_delay2" type="number" min="0" max="3000" step="10"></span></label>
+        <details class="pvs" data-k="2"></details>
       </div>
       <div class="camcol piponly">
         <h3>Kleines Bild 3 <span class="opt">(optional)</span></h3>
@@ -291,6 +321,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <label class="muted">Ecke<select id="p_corner3" style="width:100%"></select></label>
         <label class="muted dl" id="dl3" title="Zusätzliche Wartezeit nur für das dritte kleine Bild."><span>Verzögerung: <b id="v_delay3">0</b> ms</span>
           <span class="dlrow"><input id="p_delay3" type="range" min="0" max="3000" step="10"><input id="n_delay3" type="number" min="0" max="3000" step="10"></span></label>
+        <details class="pvs" data-k="3"></details>
       </div>
     </div>
     <div class="piponly pvwrap"><div class="sech">Vorschau: kleine Bilder verschieben</div><div id="pvbox" class="pvbox"></div><div id="pvnote" class="ph"></div></div>
@@ -434,6 +465,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 <dialog id="rdlg"><form method="dialog"><b>Noch nicht übernommen</b>
   <p id="rdlg_t"></p><p class="muted">Die Sendung läuft noch mit den alten Werten. Ein Neustart unterbricht das Bild für einige Sekunden.</p>
   <div class="actions"><button type="button" id="rdlg_go" class="warnbtn">Stream neu starten</button><button type="submit" class="sec">Später</button></div></form></dialog>
+<div id="updtoast" class="toast" role="status" hidden></div>
 <footer class="foot"><div id="stagefoot"></div>
   <div class="footlinks">© 2026 IRL4YOU · MIT-Lizenz (Ordner srtla: AGPL-3.0) · <a href="https://irl4you.de" target="_blank" rel="noopener noreferrer">Webseite</a> · <a href="https://discord.gg/nrBCEarMup" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://github.com/IRL4YOU/irl4you-pip" target="_blank" rel="noopener noreferrer">Quellcode auf GitHub</a> · <a href="https://github.com/IRL4YOU/irl4you-pip/blob/main/NOTICE.md" target="_blank" rel="noopener noreferrer">Drittprojekte (Moblin, BELABOX)</a></div></footer>
 <script>
@@ -482,11 +514,13 @@ function camNetHtml(c){
   // Die Adresse oben gilt für die Verbindung der Kamera: DJI-Kameras wählen sie in ihrer Karte, andere Kameras (z. B. ein Handy) hier.
   if((c.key||"").startsWith("dji-")){
     const o=netOpts.find(x=>x.iface===c.via);
-    return `<div class="camnet muted">Verbindung: ${c.via_src==="dji"?esc(c.via==="manual"?"Manuell":(o?netLabel(o):c.via))+" (in der DJI-Karte gewählt)":"Hauptverbindung (in der DJI-Karte wählbar)"}</div>`;
+    const name=c.via_src==="dji"?(c.via==="manual"?"Manuell":(o?netLabel(o):c.via)):"Hauptverbindung";
+    const full=c.via_src==="dji"?name+" (in der DJI-Karte gewählt)":"Hauptverbindung (in der DJI-Karte wählbar)";
+    return `<span class="camnet muted" title="Verbindung: ${esc(full)}">${esc(name)} · DJI-Karte</span>`;     // kurz, damit die Zeile nicht umbricht; der Hinweis steht im Tooltip
   }
   const opts=[`<option value="">Hauptverbindung (Standard)</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${c.iface===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
   if(c.iface&&!netOpts.some(o=>o.iface===c.iface)) opts.push(`<option value="${esc(c.iface)}" selected>${esc(c.iface)} (nicht verbunden)</option>`);
-  return `<label class="camnet muted">Verbindung <select class="camnetsel" data-id="${c.id}">${opts.join("")}</select></label>`;
+  return `<span class="camnet"><select class="camnetsel" data-id="${c.id}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz" aria-label="Verbindung">${opts.join("")}</select></span>`;
 }
 function renderCams(list){
   const box=$("cams");
@@ -499,8 +533,9 @@ function renderCams(list){
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
     box.innerHTML=list.length?list.map(c=>
-      `<div class="cam" data-cid="${c.id}"><div class="top"><span><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
-      <span class="muted"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code>${camNetHtml(c)}</div>`).join("")
+      `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
+      <span class="cn">${camNetHtml(c)}</span>
+      <span class="muted cr"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code></div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -874,16 +909,24 @@ async function wifiLoad(){
   const nets=(d.scan&&d.scan.nets)||[];
   const bars=p=>"▂▄▆█".split("").map((c,i)=>`<span style="color:${p>=(i+1)*25-12?"var(--ok)":"var(--line)"}">${c}</span>`).join("");
   $("wifinets").innerHTML=nets.length?`<div class="muted" style="margin-bottom:4px">Gefundene Netze – Zeile anklicken zum Übernehmen:</div><div class="wlist">`+nets.map(n=>
-    `<a href="#" class="wrow${n.in_use?" cur":""}" data-ssid="${esc(n.ssid)}"><span class="wname">${esc(n.ssid)}</span><span class="wsig">${bars(n.signal)} ${n.signal} %</span><span class="wsec">${n.security&&n.security!=="offen"?"🔒 "+esc(n.security):"offen"}</span>${n.in_use?'<span class="wuse">verbunden</span>':""}</a>`).join("")+"</div>":"";
-  $("wifisaved").innerHTML=(d.saved||[]).length?"Gespeicherte Netze: "+d.saved.map(s=>`${esc(s)} <a href="#" data-forget="${esc(s)}">vergessen</a>`).join(" · "):"";
+    `<a href="#" class="wrow${n.in_use?" cur":""}" data-ssid="${esc(n.ssid)}"><span class="wname">${esc(n.ssid)}</span><span class="wsig">${bars(n.signal)} ${n.signal} %</span><span class="wsec">${n.security&&n.security!=="offen"?"🔒 "+esc(n.security):"offen"}${(d.saved||[]).includes(n.ssid)?" · gespeichert":""}</span>${n.in_use?'<span class="wuse">verbunden</span>':""}</a>`).join("")+"</div>":"";
+  // Ein gespeichertes Netz lässt sich hier anklicken (übernimmt den Namen) und mit leerem Passwort verbinden: es gilt dann das gespeicherte Passwort
+  $("wifisaved").innerHTML=(d.saved||[]).length?"Gespeicherte Netze (Name anklicken, Passwort leer lassen und „Verbinden“): "+d.saved.map(s=>`<a href="#" data-ssid="${esc(s)}">${esc(s)}</a> <a href="#" data-forget="${esc(s)}" class="muted">vergessen</a>`).join(" · "):"";
+  wifiPwHint();
   $("wifimsg").textContent=d.helper_installed?(d.message||""):"Der WLAN-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
   $("w_scan").disabled=$("w_connect").disabled=$("w_disc").disabled=!d.helper_installed||d.state==="working";
   if(d.state==="working"){ $("wifimsg").textContent="Läuft …"; clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); }
+}
+function wifiPwHint(){
+  const saved=((wifiData&&wifiData.saved)||[]).includes($("w_ssid").value);
+  $("w_pw").placeholder=saved?"leer = gespeichertes Passwort verwenden":"leer bei offenem Netz";
 }
 async function wifiDo(body,busy){
   $("wifimsg").textContent=busy;
   try{ await srtlaCall("POST","/api/wifi",body); }catch(x){ $("wifimsg").textContent=x.message; return; }
   clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1200);
+  // Nach dem Verbinden braucht die Karte einen Moment (Adresse, Signal): die Anzeige danach noch zweimal auffrischen
+  [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
 }
 $("w_scan").addEventListener("click",()=>wifiDo({action:"scan",iface:$("w_if").value},"Suche läuft …"));
 $("w_connect").addEventListener("click",async()=>{
@@ -891,6 +934,7 @@ $("w_connect").addEventListener("click",async()=>{
   await wifiDo(body,"Verbinde …"); $("w_pw").value="";
 });
 $("w_disc").addEventListener("click",()=>wifiDo({action:"disconnect",iface:$("w_if").value},"Trenne …"));
+$("w_ssid").addEventListener("input",wifiPwHint);
 $("wificard").addEventListener("change",async e=>{
   const iface=e.target.dataset&&e.target.dataset.wup; if(!iface||!srtlaData) return;
   const st=srtlaData.settings, ups=new Set(st.uplinks); e.target.checked?ups.add(iface):ups.delete(iface);
@@ -902,13 +946,69 @@ $("wificard").addEventListener("change",async e=>{
 });
 $("wificard").addEventListener("click",e=>{
   const a=e.target.closest("a"); if(!a) return; e.preventDefault();
-  if(a.dataset.ssid!==undefined) $("w_ssid").value=a.dataset.ssid;
+  if(a.dataset.ssid!==undefined){ $("w_ssid").value=a.dataset.ssid; wifiPwHint(); }
   if(a.dataset.forget!==undefined) wifiDo({action:"forget",ssid:a.dataset.forget},"Wird vergessen …");
 });
 wifiLoad(); setInterval(()=>{ if(due("wifi","netcard",60000)&&!["w_if","w_ssid","w_pw"].includes(document.activeElement.id)) wifiLoad(); },10000);
 
 const FREE_ID="5";
 let posFree={1:{x:500,y:500},2:{x:500,y:500},3:{x:500,y:500}};
+// ---- Aussehen der kleinen Bilder: Deckkraft, Beschnitt, Rahmen (je Stelle 1 bis 3). Beschnitt in Pixeln eines Bildes von 1920 x 1080 (Bezugsgröße
+// jeder Kamera), Rahmendicke und Rundung in Pixeln eines 1920 Pixel breiten Hauptbildes; der Rahmen liegt innen auf dem Bild.
+const STYLE_DEF=()=>({visible:true,opacity:100,crop:{l:0,r:0,t:0,b:0},border:{enabled:false,width:6,color:"#ffffff",opacity:100,radius:12}});
+const CROP_W=1920, CROP_H=1080, CROP_KEEP=32;
+let pipStyles={1:STYLE_DEF(),2:STYLE_DEF(),3:STYLE_DEF()};
+const styleOf=k=>pipStyles[k]||(pipStyles[k]=STYLE_DEF());
+const clampN=(v,lo,hi,d)=>{ v=Math.round(+v); return isNaN(v)?d:Math.max(lo,Math.min(hi,v)); };
+const hexRgba=(h,a)=>{ const n=parseInt(String(h).slice(1),16)||0; return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; };
+function styleBlockHtml(){
+  const num=(f,l,min,max,step)=>`<label class="muted">${l}<input type="number" data-f="${f}" min="${min}" max="${max}" step="${step||1}"></label>`;
+  return `<summary>Aussehen <span class="pvs-sum"></span></summary>
+    <label class="muted" style="display:block;margin-top:6px"><input type="checkbox" data-f="vis"> Bild einblenden</label>
+    <label class="muted dl"><span>Deckkraft: <b data-o="op">100</b> %</span><span class="dlrow"><input type="range" data-f="op" min="0" max="100" step="1"></span></label>
+    <div class="sech">Beschneiden</div>
+    <div class="pvs-info muted">Pixel, die links, rechts, oben und unten abgeschnitten werden, wie bei einem Bild von 1920 × 1080.</div>
+    <div class="pvs-grid">${num("cl","Links",0,1888,2)}${num("cr","Rechts",0,1888,2)}${num("ct","Oben",0,1048,2)}${num("cb","Unten",0,1048,2)}</div>
+    <div class="pvs-info muted" data-o="cropinfo"></div>
+    <div class="sech">Rahmen</div>
+    <label class="muted"><input type="checkbox" data-f="be"> Rahmen um dieses Bild</label>
+    <div class="pvs-grid" data-o="bopts">${num("bw","Dicke (Pixel)",1,40)}<label class="muted">Farbe<input type="color" data-f="bc"></label>${num("bo","Deckkraft (%)",10,100)}${num("br","Eckenrundung (Pixel)",0,60)}</div>`;
+}
+function styleFill(k,force){
+  const st=styleOf(k), box=document.querySelector(`.pvs[data-k="${k}"]`); if(!box) return;
+  const put=(f,v)=>{ const e=box.querySelector(`[data-f="${f}"]`); if(!e||(!force&&document.activeElement===e)) return; if(e.type==="checkbox") e.checked=!!v; else e.value=v; };
+  put("vis",st.visible); put("op",st.opacity); put("cl",st.crop.l); put("cr",st.crop.r); put("ct",st.crop.t); put("cb",st.crop.b);
+  put("be",st.border.enabled); put("bw",st.border.width); put("bc",st.border.color); put("bo",st.border.opacity); put("br",st.border.radius);
+  box.querySelector('[data-o="op"]').textContent=st.opacity;
+  const c=st.crop, cropped=c.l||c.r||c.t||c.b;
+  box.querySelector('[data-o="cropinfo"]').textContent=cropped?`Bild nach dem Beschneiden: ${CROP_W-c.l-c.r} × ${CROP_H-c.t-c.b} Pixel. Der Maßstab bleibt, es wird nur abgeschnitten.`:"Nicht beschnitten.";
+  box.querySelector('[data-o="bopts"]').style.opacity=st.border.enabled?1:.5;
+  box.querySelectorAll('[data-o="bopts"] input').forEach(e=>e.disabled=!st.border.enabled);
+  const parts=[st.visible?"":"ausgeblendet",st.visible&&st.opacity<100?st.opacity+" %":"",cropped?"beschnitten":"",st.border.enabled?"Rahmen "+st.border.width+" px":""].filter(Boolean);
+  box.querySelector(".pvs-sum").textContent=parts.length?"· "+parts.join(", "):"· Standard";
+}
+document.querySelectorAll(".pvs").forEach(box=>{
+  const k=+box.dataset.k; box.innerHTML=styleBlockHtml();
+  const edit=ev=>{
+    const el=ev.target, f=el.dataset&&el.dataset.f; if(!f) return;
+    const st=styleOf(k);
+    if(f==="vis") st.visible=el.checked;
+    else if(f==="op") st.opacity=clampN(el.value,0,100,100);
+    else if(f.length===2&&f[0]==="c"){               // Beschnitt: gerade Werte; links plus rechts und oben plus unten lassen mindestens 32 Pixel stehen
+      const key=f[1], opp={l:"r",r:"l",t:"b",b:"t"}[key], total=(key==="l"||key==="r")?CROP_W:CROP_H;
+      st.crop[key]=Math.floor(clampN(el.value,0,total-CROP_KEEP,0)/2)*2;
+      st.crop[key]=Math.max(0,Math.min(st.crop[key],total-CROP_KEEP-st.crop[opp]));
+    }
+    else if(f==="be") st.border.enabled=el.checked;
+    else if(f==="bw") st.border.width=clampN(el.value,1,40,6);
+    else if(f==="bc") st.border.color=/^#[0-9a-fA-F]{6}$/.test(el.value)?el.value.toLowerCase():"#ffffff";
+    else if(f==="bo") st.border.opacity=clampN(el.value,10,100,100);
+    else if(f==="br") st.border.radius=clampN(el.value,0,60,12);
+    styleFill(k,ev.type==="change"); renderPreview();
+  };
+  box.addEventListener("input",edit); box.addEventListener("change",edit);
+  styleFill(k,true);
+});
 let pipeData=null, pipeDirty=false, pipDelayDirty=false, pipLive={}, pipCams=[], pipCorners=[];
 const DL=[["p_delay","n_delay","v_delay","main_delay_ms"],["p_delay1","n_delay1","v_delay1","pip_delay_ms"],["p_delay2","n_delay2","v_delay2","pip2_delay_ms"],["p_delay3","n_delay3","v_delay3","pip3_delay_ms"]];
 function setDelays(vals){
@@ -935,11 +1035,16 @@ function renderPreview(){
   let out='<div class="pvmain">Hauptbild: '+esc(nm($("p_main").value))+'</div>';
   [["p_pip","p_corner",1],["p_pip2","p_corner2",2],["p_pip3","p_corner3",3]].forEach(([cs,co,k])=>{
     const cam=$(cs).value; if(!cam) return;
+    // Ein beschnittenes Bild behält seinen Maßstab: nur der Ausschnitt (cw x ch) wird gezeichnet und danach positioniert (wie im Baustein)
+    const st=styleOf(k), cr=st.crop, cw=pw*(CROP_W-cr.l-cr.r)/CROP_W, ch=ph*(CROP_H-cr.t-cr.b)/CROP_H, sc=W/1920;
+    const bw=st.border.enabled?Math.max(1,Math.round(st.border.width*sc)):0, rad=st.border.enabled?Math.min(Math.round(st.border.radius*sc),Math.min(cw,ch)/2):0;
     const c=+$(co).value, f=posFree[k]; let x,y;
-    if(c===5){ x=f.x/1000*(W-pw); y=f.y/1000*(H-ph); }
-    else if(c===4){ x=(W-pw)/2; y=H-ph-m; }
-    else { x=(c&1)?W-pw-m:m; y=(c&2)?H-ph-m:m; }
-    out+=`<div class="pvpip pv${k}" data-k="${k}" data-co="${co}" style="left:${x}px;top:${y}px;width:${pw}px;height:${ph}px"><b>${k}</b><span>${esc(nm(cam))}</span></div>`;
+    if(c===5){ x=f.x/1000*(W-cw); y=f.y/1000*(H-ch); }
+    else if(c===4){ x=(W-cw)/2; y=H-ch-m; }
+    else { x=(c&1)?W-cw-m:m; y=(c&2)?H-ch-m:m; }
+    out+=`<div class="pvpip pv${k}${st.visible?"":" off"}" data-k="${k}" data-co="${co}" style="left:${x}px;top:${y}px;width:${cw}px;height:${ch}px;opacity:${st.visible?st.opacity/100:.18};border-radius:${rad}px">`+
+      `<div class="pvin" style="left:${-pw*cr.l/CROP_W}px;top:${-ph*cr.t/CROP_H}px;width:${pw}px;height:${ph}px"></div><b>${k}</b><span>${esc(nm(cam))}${st.visible?"":" (ausgeblendet)"}</span>`+
+      (bw?`<i class="pvrim" style="border:${bw}px solid ${hexRgba(st.border.color,st.border.opacity/100)};border-radius:${rad}px"></i>`:"")+`</div>`;
   });
   box.innerHTML=out;
   $("pvnote").textContent=canFree?"Bilder mit Maus oder Finger ziehen. Danach „Bildaufbau speichern“.":"Freies Verschieben braucht den neuen Überlagerungs-Baustein (kommt beim Software-Update).";
@@ -1011,6 +1116,7 @@ async function pipeLoad(){
   if(document.activeElement.id!=="p_auto") $("p_auto").checked=c.auto_failover!==false;
   if(document.activeElement.id!=="p_swap") $("p_swap").value=String(c.swap_cams||0);
   posFree={1:{x:c.x??500,y:c.y??500},2:{x:c.x2??500,y:c.y2??500},3:{x:c.x3??500,y:c.y3??500}};
+  [1,2,3].forEach(k=>{ pipStyles[k]=Object.assign(STYLE_DEF(),(c.styles||{})[k]||{}); pipStyles[k].crop=Object.assign({l:0,r:0,t:0,b:0},pipStyles[k].crop); pipStyles[k].border=Object.assign(STYLE_DEF().border,pipStyles[k].border); styleFill(k); });
   pipConstrain({main:c.main,pip:c.pip,pip2:c.pip2,pip3:c.pip3,c1:c.corner,c2:c.corner2??2,c3:c.corner3??0});
   if(document.activeElement.id!=="p_size") $("p_size").value=c.size_pct;
   renderPreview();
@@ -1025,6 +1131,8 @@ async function pipeLoad(){
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
   let info=c.main?`Gespeichert: ${c.type==="pip"?"Bild-in-Bild":"eine Kamera"}, Hauptbild ${c.main}${c.type==="pip"?", kleines Bild "+c.pip+(c.pip2?(c.pip3?", ":" und ")+c.pip2:"")+(c.pip3?" und "+c.pip3:""):""}.`:"Noch keine Pipeline gespeichert.";
+  // Deckkraft, Beschnitt und Rahmen gibt es erst, wenn der installierte Überlagerungs-Baustein sie kennt (er wird beim Software-Update neu gebaut); bis dahin bleiben die Felder weg
+  document.querySelectorAll(".pvs").forEach(e=>e.hidden=d.plugin_present&&d.plugin_style===false);
   if(d.needs_plugin&&!d.plugin_present) info+=" Bild-in-Bild braucht den Überlagerungs-Baustein, der noch nicht auf der Box installiert ist.";
   $("pipeinfo").textContent=info;
 }
@@ -1056,7 +1164,7 @@ $("pipecard").addEventListener("change",async e=>{
 });
 async function pipSave(){
   $("pipeerr").textContent="";
-  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,...delayBody()};
+  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,styles:pipStyles,...delayBody()};
   try{ const r=await srtlaCall("POST","/api/pipeline",body); pipeDirty=false; pipDelayDirty=false; $("pipeerr").textContent=(r&&r.note)||"Gespeichert."; }catch(x){ $("pipeerr").textContent=x.message; }
   pipeLoad();
 }
@@ -1227,23 +1335,57 @@ $("r_copy").addEventListener("click",async()=>{
   setTimeout(()=>$("r_copy").textContent="Kopieren",2500);
 });
 (function rLoop(){ (rBusy||due("r","rcard",60000)?rLoad():Promise.resolve()).finally(()=>setTimeout(rLoop,rBusy?2000:6000)); })();
-let swFirst=null, swWasInstalling=false;
+let swFirst=null, swPending=0;
+// swPending: Zeitpunkt (ms), seit dem DIESER Browser ein Update, einen Wechsel oder einen Rückschritt ausgelöst hat (0 = nichts). Er wird nur zurückgesetzt, wenn
+// das Ergebnis feststeht (neue Version läuft: Seite lädt von selbst neu; abgelehnt oder fehlgeschlagen; nach 15 Minuten). Früher hing das Neuladen an dem Zustand
+// "installiert gerade", der kurz nach dem Klick noch nicht gesetzt war: dann blieb die alte Seite stehen und man musste selbst neu laden.
+const SW_TERMINAL=["failed","refused","rolledback"];
+function swBegin(text){
+  swPending=Date.now();
+  ["sw_install","sw_check","sw_switch","sw_rollback"].forEach(id=>$(id).disabled=true);          // sofort sperren, damit nichts doppelt ausgelöst wird
+  $("sw_badge").textContent="läuft …"; $("sw_badge").className="badge attn";
+  $("sw_msg").textContent=text; $("sw_msg").style.color="";
+}
+// Gliedert den Text der Änderungen (Auszug aus der CHANGELOG.md): Überschrift je Version, Aufzählungspunkte, fette Stichworte, Code. Der Text wird zuerst
+// maskiert; nur die hier erzeugten Auszeichnungen gelangen ins Dokument.
+function fmtNotes(t){
+  const inl=x=>esc(x).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>");
+  let out="", list=false; const close=()=>{ if(list){ out+="</ul>"; list=false; } };
+  String(t||"").split("\n").forEach(raw=>{
+    const l=raw.replace(/\s+$/,"");
+    if(/^##\s+/.test(l)){ close(); out+=`<h4>${inl(l.replace(/^##\s+/,""))}</h4>`; }
+    else if(/^\s*[-*]\s+/.test(l)){ if(!list){ out+="<ul>"; list=true; } out+=`<li>${inl(l.replace(/^\s*[-*]\s+/,""))}</li>`; }
+    else if(!l.trim()) close();
+    else if(list&&/^\s+\S/.test(l)) out=out.replace(/<\/li>$/," "+inl(l.trim())+"</li>");     // Fortsetzung eines Punktes
+    else { close(); out+=`<p>${inl(l)}</p>`; }
+  });
+  close(); return out;
+}
 async function swLoad(force){
   let d;
   try{ d=await srtlaCall("GET","/api/swupdate"+(force?"?check=1":"")); }
-  catch(e){ if(swWasInstalling) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
+  catch(e){ if(swPending) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
   if(swFirst===null) swFirst=d.current;
-  if(swFirst!==d.current && swWasInstalling){ location.reload(); return; }     // neue Version läuft: Seite neu laden
+  if(swPending){
+    const age=Date.now()-swPending;
+    if(swFirst!==d.current){                       // die neue Version läuft: Seite von selbst neu laden, damit die Änderungen sichtbar sind
+      try{ sessionStorage.setItem("pb_updated",d.current); }catch(e){}
+      location.reload(); return;
+    }
+    if(age>10000&&SW_TERMINAL.includes(d.state)) swPending=0;                // abgelehnt oder fehlgeschlagen (ältere Meldungen in den ersten Sekunden zählen nicht)
+    else if(age>25000&&d.state==="done") swPending=0;                          // fertig, aber ohne neue Version
+    else if(age>900000) swPending=0;                                            // nach 15 Minuten aufgeben, damit nie etwas dauerhaft gesperrt bleibt
+  }
   { const dot=$("hdr_upd");                      // gelber Punkt in der Kopfleiste, solange eine neuere Version auf GitHub liegt
     dot.hidden=!d.newer;
     if(d.newer){ const t="Neue Version "+(d.latest?"v"+d.latest+" ":"")+"verfügbar (jetzt v"+d.current+")."+(d.sending?" Einspielen geht nicht während der Übertragung.":" Zum Software-Update."); dot.title=t; dot.setAttribute("aria-label",t); } }
-  const busy=d.state==="installing";
+  const busy=d.state==="installing"||!!swPending;
   $("stagefoot").textContent="IRL4YOU BOX Version "+d.current+(d.stage?" ("+d.stage+")":"")+(d.stage?" – Funktionen und Bedienung können sich noch ändern.":"");
   $("sw_cur").textContent="v"+d.current+(d.stage?" ("+d.stage+")":"");
   $("sw_latest").textContent=d.latest?"v"+d.latest:(d.error?"–":"wird geprüft …");
   $("sw_badge").textContent=busy?"läuft …":(d.error?"unbekannt":(d.newer?"Update verfügbar":"aktuell"));
   $("sw_badge").className="badge "+(d.newer||busy?"attn":"ok");
-  const n=$("sw_notes"); n.hidden=!(d.newer&&d.notes); n.textContent=d.newer?d.notes:"";
+  const n=$("sw_notes"); n.hidden=!(d.newer&&d.notes); if(d.newer&&d.notes) setHtml(n,fmtNotes(d.notes)); else if(n.dataset.h){ n.dataset.h=""; n.innerHTML=""; }
   $("sw_install").disabled=busy||!d.newer||d.sending||!d.helper_installed;
   $("sw_check").disabled=busy;
   $("sw_rollback").hidden=!d.backup_version||busy;
@@ -1251,21 +1393,20 @@ async function swLoad(force){
   let msg="";
   if(!d.helper_installed) msg="Der Update-Helfer ist nicht installiert. Bitte install.sh einmal erneut ausführen.";
   else if(d.error) msg=d.error;
-  else if(busy) msg=(d.step||"Update läuft")+" …";
+  else if(busy) msg=(d.state==="installing"?(d.step||"Update läuft"):"Update wird gestartet")+" … Die Seite lädt danach von selbst neu.";
   else if(d.state==="done"||d.state==="rolledback") msg=d.message;
   else if(d.state==="refused"||d.state==="failed") msg=d.message;
   else if(d.sending&&d.newer) msg="Update gesperrt: Es wird gerade gesendet.";
   else if(d.newer) msg="Eine neue Version ist da. Installieren geht nur, wenn nicht gesendet wird.";
   else if(d.latest) msg="Sie haben die neueste Version."+(d.checked_at?" Zuletzt geprüft um "+new Date(d.checked_at*1000).toLocaleTimeString("de-DE")+".":"");
   $("sw_msg").textContent=msg;
-  $("sw_msg").style.color=(d.state==="failed"||d.state==="refused"||d.error)?"var(--crit)":"";
+  $("sw_msg").style.color=(d.state==="failed"||d.state==="refused"||d.error)&&!swPending?"var(--crit)":"";
   swVersions=d.versions||[]; swCurrent=d.current;
   const dl=$("sw_vers"); const sig=JSON.stringify(swVersions.map(v=>[v.version,v.local,v.github]));
   if(dl.dataset.sig!==sig){ dl.dataset.sig=sig;
     dl.innerHTML=swVersions.filter(v=>!v.current).map(v=>`<option value="${esc(v.version)}">${esc(v.version)} · ${v.relation}${v.local?" · gesichert":""}${v.github?" · GitHub":""}${v.date?" · "+esc(v.date):""}</option>`).join(""); }
   $("sw_switch").disabled=busy||d.sending||!d.helper_installed;
   swShowInfo();
-  swWasInstalling=busy;
 }
 let swVersions=[], swCurrent="";
 function swFind(v){ v=(v||"").trim().replace(/^v/,""); return swVersions.find(x=>x.version===v); }
@@ -1284,7 +1425,8 @@ $("sw_switch").addEventListener("click",async()=>{
   const older=x.relation==="älter";
   if(!confirm(`Auf Version ${x.version} wechseln?\n\n`+(older?"ACHTUNG: Das ist eine ÄLTERE Version als die installierte ("+swCurrent+"). Neuere Funktionen und Korrekturen fehlen dann.\n\n":"")
       +"• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu.\n• Die jetzige Version wird vorher gesichert, Sie können wieder zurück.")) return;
-  try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); swWasInstalling=true; $("sw_msg").textContent="Wechsel gestartet …"; }catch(e){ $("sw_msg").textContent=e.message; }
+  swBegin("Wechsel wird gestartet …");
+  try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); }catch(e){ swPending=0; $("sw_msg").textContent=e.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
 try{ const hd=document.querySelector("header"), setH=()=>document.documentElement.style.setProperty("--hdrh",hd.offsetHeight+"px");   // Höhe der festen Kopfleiste für den Scroll-Abstand der Karten
@@ -1294,15 +1436,19 @@ $("hdr_upd").addEventListener("click",e=>{ e.preventDefault(); const c=$("swcard
 $("sw_check").addEventListener("click",()=>{ $("sw_msg").textContent="Suche …"; swLoad(true); });
 $("sw_install").addEventListener("click",async()=>{
   if(!confirm("Software-Update installieren?\n\n• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu (etwa eine halbe Minute).\n• Kameras und Einstellungen bleiben erhalten; der Kamera-Dienst startet nur neu, wenn sich seine Dateien ändern.\n• Die jetzige Version wird gesichert, Sie können zurückgehen.")) return;
-  try{ await srtlaCall("POST","/api/swupdate",{action:"install",confirm:true}); swWasInstalling=true; $("sw_msg").textContent="Update gestartet …"; }catch(x){ $("sw_msg").textContent=x.message; }
+  swBegin("Update wird gestartet …");
+  try{ await srtlaCall("POST","/api/swupdate",{action:"install",confirm:true}); }catch(x){ swPending=0; $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
 $("sw_rollback").addEventListener("click",async()=>{
   if(!confirm("Zur vorherigen Version zurückgehen?\n\nDie Oberfläche startet dabei kurz neu. Es darf nicht gesendet werden.")) return;
-  try{ await srtlaCall("POST","/api/swupdate",{action:"rollback",confirm:true}); swWasInstalling=true; $("sw_msg").textContent="Wird zurückgestellt …"; }catch(x){ $("sw_msg").textContent=x.message; }
+  swBegin("Wird zurückgestellt …");
+  try{ await srtlaCall("POST","/api/swupdate",{action:"rollback",confirm:true}); }catch(x){ swPending=0; $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
-(function swLoop(){ (swWasInstalling||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swWasInstalling?2000:8000)); })();
+(function swLoop(){ (swPending||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending?2000:8000)); })();
+// Nach dem automatischen Neuladen kurz bestätigen, dass das Update geklappt hat
+try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent="✔ Update installiert: Die Box läuft jetzt mit Version "+v+"."; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}
 async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}

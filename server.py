@@ -530,6 +530,137 @@ def plugin_swap():
     return _SWAP["ok"]
 
 
+_STYLE = {"mtime": None, "ok": True}
+
+
+def plugin_style():
+    """Kennt der installierte Baustein Beschnitt, Deckkraft und Rahmen je kleinem Bild (Eigenschaften "style1" bis "style3")?
+    Ein alter Baustein (z. B. wenn der Neubau beim Update scheiterte) würde die Eigenschaft nicht kennen und die Sendekette
+    nicht starten: dann bleibt sie aus dem Pipeline-Text weg. Ohne Baustein (Entwicklungsrechner) ja."""
+    try:
+        mt = os.stat(PLUGIN_SO).st_mtime
+        if _STYLE["mtime"] != mt:
+            with open(PLUGIN_SO, "rb") as f:
+                data = f.read()
+            _STYLE.update(mtime=mt, ok=b"style1" in data and b"style3" in data)
+    except OSError:
+        return True
+    return _STYLE["ok"]
+
+
+# Aussehen der kleinen Bilder (Deckkraft, Beschnitt, Rahmen), je Stelle 1 bis 3 im Bild-in-Bild. Beschnitt in Pixeln eines Bildes von
+# 1920 x 1080 (so groß ist die Bezugsgröße jeder Kamera; der Baustein rechnet auf die verkleinerte Größe um), Rahmenbreite und Rundung
+# in Pixeln eines 1920 Pixel breiten Hauptbildes.
+STYLE_SLOTS = ("1", "2", "3")
+CROP_REF_W, CROP_REF_H, CROP_KEEP = 1920, 1080, 32          # Bezugsgröße des Beschnitts, so viele Pixel bleiben mindestens stehen
+STYLE_DEFAULT = {"visible": True, "opacity": 100, "crop": {"l": 0, "r": 0, "t": 0, "b": 0},
+                 "border": {"enabled": False, "width": 6, "color": "#ffffff", "opacity": 100, "radius": 12}}
+STYLE_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _style_copy(st):
+    return {"visible": st["visible"], "opacity": st["opacity"], "crop": dict(st["crop"]), "border": dict(st["border"])}
+
+
+def clean_style(src, old=None, strict=False):
+    """Eine Stileinstellung prüfen und ergänzen. strict (Anfrage der Oberfläche): Fehler werden gemeldet. Sonst (gespeicherte Datei,
+    pipeline.json gehört dem Benutzer pipbox, build() läuft auch als root): alles wird in feste Bereiche gezwungen, es gelangt nie
+    ein Text in den Pipeline-Text. old: bisherige Werte für fehlende Felder."""
+    st = _style_copy(old if isinstance(old, dict) and "crop" in old and "border" in old else STYLE_DEFAULT)
+    if src is None:
+        src = {}
+    if not isinstance(src, dict):
+        if strict:
+            raise ValueError("Aussehen des kleinen Bildes: ungültige Angabe")
+        src = {}
+
+    def num(v, lo, hi, cur, what):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) and not (isinstance(v, str) and v.strip().lstrip("-").isdigit()):
+            if strict:
+                raise ValueError(f"{what} muss eine Zahl sein")
+            return cur
+        n = int(float(v))
+        if strict and not lo <= n <= hi:
+            raise ValueError(f"{what}: {lo} bis {hi}")
+        return max(lo, min(hi, n))
+    if "visible" in src:
+        if isinstance(src["visible"], bool):
+            st["visible"] = src["visible"]
+        elif strict:
+            raise ValueError("Kleines Bild zeigen: ja oder nein")
+    if "opacity" in src:
+        st["opacity"] = num(src["opacity"], 0, 100, st["opacity"], "Deckkraft")
+    crop = src.get("crop")
+    if isinstance(crop, dict):
+        for k, lbl in (("l", "links"), ("r", "rechts"), ("t", "oben"), ("b", "unten")):
+            if k in crop:
+                st["crop"][k] = num(crop[k], 0, 1900, st["crop"][k], f"Beschnitt {lbl}") // 2 * 2     # gerade: Chroma ist halb so groß
+    elif crop is not None and strict:
+        raise ValueError("Beschnitt: ungültige Angabe")
+    c = st["crop"]
+    for a, b, total in (("l", "r", CROP_REF_W), ("t", "b", CROP_REF_H)):
+        room = total - CROP_KEEP
+        if c[a] + c[b] > room:
+            if strict:
+                raise ValueError(f"Beschnitt: {'links plus rechts' if a == 'l' else 'oben plus unten'} höchstens {room} Pixel "
+                                 f"(es bleiben mindestens {CROP_KEEP} Pixel stehen)")
+            k = room / float(c[a] + c[b])
+            c[a], c[b] = int(c[a] * k) // 2 * 2, int(c[b] * k) // 2 * 2
+    border = src.get("border")
+    if isinstance(border, dict):
+        b = st["border"]
+        if "enabled" in border:
+            if isinstance(border["enabled"], bool):
+                b["enabled"] = border["enabled"]
+            elif strict:
+                raise ValueError("Rahmen: ein oder aus")
+        if "width" in border:
+            b["width"] = num(border["width"], 1, 40, b["width"], "Rahmendicke")
+        if "color" in border:
+            if isinstance(border["color"], str) and STYLE_COLOR_RE.match(border["color"]):
+                b["color"] = border["color"].lower()
+            elif strict:
+                raise ValueError("Rahmenfarbe: Farbe wie #ffffff")
+        if "opacity" in border:
+            b["opacity"] = num(border["opacity"], 10, 100, b["opacity"], "Rahmendeckkraft")
+        if "radius" in border:
+            b["radius"] = num(border["radius"], 0, 60, b["radius"], "Eckenrundung")
+    elif border is not None and strict:
+        raise ValueError("Rahmen: ungültige Angabe")
+    return st
+
+
+def clean_styles(src, old=None, strict=False):
+    """Die Stile der Stellen 1 bis 3 (Schlüssel "1", "2", "3")."""
+    if src is not None and not isinstance(src, dict):
+        if strict:
+            raise ValueError("Aussehen der kleinen Bilder: ungültige Angabe")
+        src = None
+    old = old if isinstance(old, dict) else {}
+    return {k: clean_style((src or {}).get(k), old.get(k), strict) for k in STYLE_SLOTS}
+
+
+def style_text(st):
+    """Eigenschaft style<N> des Bausteins (Format siehe gst/gstpbpip.c), nur mit Werten, die vom Standard abweichen; leer, wenn alles
+    Standard ist. st ist eine geprüfte Stileinstellung (clean_style): nur Zahlen und eine Hex-Farbe gelangen in den Text."""
+    parts = []
+    op = st["opacity"] if st["visible"] else 0
+    if op != 100:
+        parts.append(f"op={int(op)}")
+    for key, name in (("l", "cl"), ("r", "cr"), ("t", "ct"), ("b", "cb")):
+        if st["crop"][key]:
+            parts.append(f"{name}={int(st['crop'][key])}")
+    b = st["border"]
+    if b["enabled"]:
+        parts.append(f"bw={int(b['width'])}")
+        parts.append(f"bc={b['color'][1:]}")
+        if b["opacity"] != 100:
+            parts.append(f"bo={int(b['opacity'])}")
+        if b["radius"]:
+            parts.append(f"br={int(b['radius'])}")
+    return ",".join(parts)
+
+
 def pip_size(pct):
     """Breite/Höhe des kleinen Bildes in Pixel (gerade, durch 16 teilbar in der Breite)."""
     w = max(16, int(round(1920 * pct / 100.0 / 16.0)) * 16)
@@ -586,6 +717,7 @@ class PipelineStore:
                 self.cfg.update(json.load(f))
         except (OSError, ValueError):
             pass
+        self.cfg["styles"] = clean_styles(self.cfg.get("styles"))        # ältere Dateien kennen sie noch nicht
 
     def save(self):
         tmp = self.path + ".tmp"
@@ -647,6 +779,7 @@ class PipelineStore:
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
                "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False, "swap_cams": 0}
+        cfg["styles"] = clean_styles(req.get("styles"), self.cfg.get("styles"), strict=True)       # Deckkraft, Beschnitt, Rahmen je kleinem Bild
         if t == "pip":
             try:
                 swap = int(req.get("swap_cams", 0) or 0)
@@ -738,6 +871,7 @@ class PipelineStore:
         if out["swap_cams"] not in (2, 4):
             out["swap_cams"] = 0
         out["type"] = "pip" if out.get("type") == "pip" else "single"
+        out["styles"] = clean_styles(out.get("styles"))
         return out
 
     @classmethod
@@ -819,6 +953,7 @@ class PipelineStore:
             if corner_ != FREE:
                 return ""
             return f" {kx}={int(cfg_.get(kx, 500))} {ky}={int(cfg_.get(ky, 500))}"
+        sty = self._style_props(c)
         out = []
         # Hauptbild (samt Ton) verzögern: die kleinen Bilder treffen dann zeitlich besser auf das Hauptbild.
         # Die Wartezeit sitzt NACH dem Auspacken (dort haben die Pakete die Zeitstempel der Kamera) und gilt für
@@ -845,17 +980,17 @@ class PipelineStore:
                     f"leaky=downstream" + (f" min-threshold-time={th * 1000000}" if d else ""))
         plan = self.swap_plan(c) if pip else None
         if plan:
-            return self._build_dual(c, plan, base, small, xy, pip2, pip3)
+            return self._build_dual(c, plan, base, small, xy, pip2, pip3, sty)
         out.append(f"rtmpsrc location={base}/{c['main']} do-timestamp=true !\nflvdemux name=demux\n")
         if pip:
             # Kein videorate/textoverlay: sie halten das Hauptbild fest, dann wäre das Hineinschreiben
             # nicht mehr in-place (gemessen: bremst). Die Kameras liefern ohnehin 30 fps.
             v = (f"demux.video !\n{qv} !\nidentity name=v_delay signal-handoffs=TRUE ! h264parse ! mppvideodec !\n"
                  "video/x-raw,format=NV12 !\n"
-                 f"pbpipmix name=pipmix corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}"
-                 + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}" if pip2 and multi else "")
-                 + (f" slot3=2 corner3={c['corner3']}{xy(c, 'x3', 'y3', c['corner3'])}" if pip3 else "") + " !\n"
-                 + (f"pbpipmix name=pipmix2 slot=1 corner={c['corner2']}{xy(c, 'x', 'y', c['corner2'])} width-pct={c['size_pct']} !\n" if pip2 and not multi else "") +
+                 f"pbpipmix name=pipmix corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}{sty(0, 1)}"
+                 + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}{sty(1, 2)}" if pip2 and multi else "")
+                 + (f" slot3=2 corner3={c['corner3']}{xy(c, 'x3', 'y3', c['corner3'])}{sty(2, 3)}" if pip3 else "") + " !\n"
+                 + (f"pbpipmix name=pipmix2 slot=1 corner={c['corner2']}{xy(c, 'x', 'y', c['corner2'])} width-pct={c['size_pct']}{sty(1, 1)} !\n" if pip2 and not multi else "") +
                  "queue max-size-time=500000000 max-size-buffers=4 leaky=downstream !\n")
         else:
             v = (f"demux.video !\n{q} !\nidentity name=v_delay signal-handoffs=TRUE ! h264parse ! mppvideodec !\n"
@@ -905,7 +1040,17 @@ class PipelineStore:
         out.append("mpegtsmux name=mux !\nappsink name=appsink\n")
         return "\n".join(out)
 
-    def _build_dual(self, c, plan, base, small, xy, pip2, pip3):
+    @staticmethod
+    def _style_props(c):
+        """Funktion (Stelle 0 bis 2, Nummer der Eigenschaft) -> Text " styleN=\"...\"" für pbpipmix, leer bei Standardaussehen oder wenn der
+        installierte Baustein die Eigenschaft nicht kennt."""
+        texts = [style_text(c["styles"][k]) for k in STYLE_SLOTS] if plugin_style() else ["", "", ""]
+
+        def sty(pos, n):
+            return f' style{n}="{texts[pos]}"' if texts[pos] else ""
+        return sty
+
+    def _build_dual(self, c, plan, base, small, xy, pip2, pip3, sty):
         """Pipeline für den Tausch ohne Unterbrechung (siehe swap_plan). Jede Kamera der Gruppe liefert ihr Bild zweimal: groß in den
         Umschalter vsel (Hauptbild), klein in einen eigenen Platz des Bild-in-Bild (Platz = Kamera + 3 mod 4: Kamera 0 -> 3, 1 -> 0 ...).
         Welche Kamera gerade Hauptbild ist und wo die anderen kleiner erscheinen, schreibt vsel in jedes Bild; pbpipmix liest es dort.
@@ -917,9 +1062,9 @@ class PipelineStore:
         out = []
         out.append(f"pbpipsel name=vsel tag-offset=true force-key=true state={plan['state']} !\n"
                    "identity name=v_delay signal-handoffs=TRUE !\nvideo/x-raw,format=NV12 !\n"
-                   f"pbpipmix name=pipmix follow-tag=true corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}"
-                   + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}" if pip2 else "")
-                   + (f" slot3=2 corner3={c['corner3']}{xy(c, 'x3', 'y3', c['corner3'])}" if pip3 else "") + " !\n"
+                   f"pbpipmix name=pipmix follow-tag=true corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}{sty(0, 1)}"
+                   + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}{sty(1, 2)}" if pip2 else "")
+                   + (f" slot3=2 corner3={c['corner3']}{xy(c, 'x3', 'y3', c['corner3'])}{sty(2, 3)}" if pip3 else "") + " !\n"
                    "queue max-size-time=500000000 max-size-buffers=4 leaky=downstream !\n"
                    "mpph265enc zero-copy-pkt=0 qp-max=51 gop=60 name=venc_bps !\n"
                    f"h265parse config-interval=-1 ! {q} ! mux.\n")
@@ -960,7 +1105,7 @@ class PipelineStore:
 
     def status(self, cams):
         keys = [c["key"] for c in cams]
-        return {"config": dict(self.cfg), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown")} for c in cams],
+        return {"config": dict(self.cfg, styles=clean_styles(self.cfg.get("styles"))), "plugin_style": plugin_style(), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown")} for c in cams],
                 "corners": list(pip_corners()), "preview": self.build() if self.cfg.get("main") in keys else "",
                 "needs_plugin": self.cfg.get("type") == "pip", "plugin_present": os.path.exists("/opt/pipbox/gst/libgstpbpip.so")}
 
@@ -2002,6 +2147,30 @@ class SwUpdate:
                 break
         return "\n".join(out)
 
+    @classmethod
+    def _sections_since(cls, text, current, max_sections=6, max_lines=160):
+        """Die Änderungen aller Versionen, die neuer sind als die installierte (neueste zuerst), aus dem Text der CHANGELOG.md. Wer mehrere
+        Versionen übersprungen hat, sieht so alles, was neu ist. Ist keine neuer (oder die Überschriften sind unbekannt), gilt der erste Abschnitt."""
+        def num(v):
+            m = re.match(r"^(\d+)\.(\d+)\.(\d+)", v or "")
+            return tuple(int(x) for x in m.groups()) if m else None
+        cur = num(current)
+        out, keep, sections = [], False, 0
+        for l in text.splitlines():
+            if l.startswith("## "):
+                m = re.match(r"^##\s+(\d+\.\d+\.\d+)", l)
+                v = num(m.group(1)) if m else None
+                keep = v is not None and cur is not None and v > cur
+                if keep:
+                    sections += 1
+                    if sections > max_sections:
+                        break
+            if keep:
+                out.append(l.rstrip())
+                if len(out) >= max_lines:
+                    break
+        return "\n".join(out) if out else cls._first_section(text)
+
     def check(self, force=False):
         """Fragt die neueste Version auf GitHub ab (höchstens alle 6 Stunden und nie während einer Übertragung, außer force)."""
         with self.lock:
@@ -2021,7 +2190,7 @@ class SwUpdate:
                     raise ValueError("ungültige Versionsnummer")
                 res["latest"] = v
                 try:
-                    res["notes"] = self._first_section(self._get("CHANGELOG.md", 20000))
+                    res["notes"] = self._sections_since(self._get("CHANGELOG.md", 60000), self.version)
                 except OSError:
                     res["notes"] = ""
             except (OSError, ValueError):
@@ -2755,6 +2924,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
             if path == "/api/pipeline":
                 before = dict(self.pipeline.cfg)
+                before["styles"] = clean_styles(before.get("styles"))        # eine unveränderte Einstellung ohne Stile gilt nicht als Änderung
                 self.pipeline.set(d, [c["key"] for c in self.cams.cams])
                 restarted, note = (False, "")
                 if self.pipeline.cfg != before:

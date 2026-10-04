@@ -131,16 +131,31 @@ def do_scan(iface):
     return f"{len(nets)} Netze gefunden"
 
 
+def connect_saved(iface, ssid):
+    """Ein gespeichertes Netz ohne neue Passworteingabe mit seinem gespeicherten Passwort auf der gewählten Karte einschalten. Früher wurde das
+    Profil hier gelöscht und ohne Passwort neu versucht: das schlug mit "Password" fehl, und das gespeicherte Netz war danach weg."""
+    nm("con", "modify", "id", ssid, "connection.interface-name", iface)      # das Profil gilt auch für eine andere Karte, wenn man es dort wählt
+    r = nm("con", "up", "id", ssid, "ifname", iface, timeout=60)
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip()[:160] or "unbekannter Fehler"
+        raise RuntimeError(f"Verbinden mit dem gespeicherten Netz „{ssid}“ fehlgeschlagen: {msg}. Hat sich das Passwort geändert, bitte neu eingeben.")
+    nm("con", "modify", "id", ssid, "connection.autoconnect", "yes", "ipv4.route-metric", "600")
+    return f"Mit „{ssid}“ verbunden (gespeichertes Netz)"
+
+
 def do_connect(req):
     iface, ssid, pw = req.get("iface"), req.get("ssid"), req.get("password", "")
     check_iface(iface)
     check_ssid(ssid)
     check_password(pw)
-    if ssid in saved_wifi():                        # altes Profil ersetzen (z. B. geändertes Passwort)
+    hidden = req.get("hidden") is True
+    if ssid in saved_wifi():
         check_not_camera_profile(ssid)
-        nm("con", "delete", "id", ssid)
+        if not pw and not hidden:
+            return connect_saved(iface, ssid)
+        nm("con", "delete", "id", ssid)             # neues Passwort eingegeben: altes Profil ersetzen
     args = ["--ask", "dev", "wifi", "connect", ssid, "ifname", iface]
-    if req.get("hidden") is True:
+    if hidden:
         args += ["hidden", "yes"]
     r = nm(*args, stdin=(pw + "\n") if pw else None, timeout=60)
     if r.returncode != 0:

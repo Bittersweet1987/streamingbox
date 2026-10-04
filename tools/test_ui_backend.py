@@ -248,6 +248,59 @@ class HelperChecks(unittest.TestCase):
             with self.assertRaises(ValueError, msg=str(bad)):
                 self.h.check_ssid(bad)
 
+    def connect(self, req, saved, rc=0, err=""):
+        """Ruft do_connect mit nachgebautem nmcli auf; gibt die Liste der nmcli-Aufrufe zurück (Argumente, Eingabe) und das Ergebnis."""
+        calls = []
+
+        def nm(*args, stdin=None, timeout=60):
+            calls.append((args, stdin))
+            fail = rc if args[:2] in (("con", "up"), ("--ask", "dev")) else 0
+            return mock.Mock(returncode=fail, stdout="", stderr=err if fail else "")
+        with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: saved), \
+                mock.patch.object(self.h, "check_iface", lambda i: None), mock.patch.object(self.h, "check_not_camera_profile", lambda s: None):
+            try:
+                return calls, self.h.do_connect(req), None
+            except RuntimeError as e:
+                return calls, None, str(e)
+
+    def test_saved_network_without_password_uses_the_saved_profile_and_is_never_deleted(self):
+        """Issue #8: Ein gespeichertes Netz ohne neues Passwort wurde gelöscht und ohne Passwort neu versucht ("Password"), danach war es weg."""
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Bittersweet_EXT", "password": ""}, ["Bittersweet_EXT", "Anderes"])
+        self.assertIsNone(err)
+        self.assertIn("gespeichert", msg)
+        names = [c[0] for c in calls]
+        self.assertNotIn(("con", "delete", "id", "Bittersweet_EXT"), names)                      # nichts gelöscht
+        self.assertIn(("con", "modify", "id", "Bittersweet_EXT", "connection.interface-name", "wlan1"), names)
+        self.assertIn(("con", "up", "id", "Bittersweet_EXT", "ifname", "wlan1"), names)
+        self.assertFalse(any(a[0] == "--ask" for a in names))                                    # kein Versuch ohne Passwort
+        self.assertTrue(all(c[1] is None for c in calls))                                         # nichts über stdin
+
+    def test_failed_saved_connection_keeps_the_profile_and_says_what_to_do(self):
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": ""}, ["Heim"], rc=4, err="Error: Secrets were required")
+        self.assertIsNone(msg)
+        self.assertIn("gespeicherten Netz", err)
+        self.assertIn("Passwort", err)
+        self.assertNotIn(("con", "delete", "id", "Heim"), [c[0] for c in calls])
+
+    def test_new_password_replaces_the_saved_profile_as_before(self):
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": "neues-Passwort1"}, ["Heim"])
+        self.assertIsNone(err)
+        names = [c[0] for c in calls]
+        self.assertEqual(names[0], ("con", "delete", "id", "Heim"))
+        self.assertEqual(names[1][:3], ("--ask", "dev", "wifi"))
+        self.assertEqual(calls[1][1], "neues-Passwort1\n")                                         # Passwort nur über stdin, nie als Argument
+        self.assertFalse(any("neues-Passwort1" in " ".join(n) for n in names))
+
+    def test_unknown_network_is_connected_as_before(self):
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Neu", "password": "abcdefgh"}, ["Heim"])
+        self.assertIsNone(err)
+        self.assertNotIn(("con", "delete", "id", "Neu"), [c[0] for c in calls])
+        self.assertEqual(calls[0][0][:3], ("--ask", "dev", "wifi"))
+
+    def test_hidden_saved_network_still_goes_through_the_full_connect(self):
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": "", "hidden": True}, ["Heim"])
+        self.assertEqual(calls[0][0], ("con", "delete", "id", "Heim"))
+
     def test_terse_split_unescapes(self):
         self.assertEqual(self.h.split_terse(r"*:Mein\:WLAN:80:WPA2"), ["*", "Mein:WLAN", "80", "WPA2"])
 
@@ -1084,6 +1137,51 @@ class HeaderControls(unittest.TestCase):
         self.assertIn("text-overflow:ellipsis", self.html[self.html.index("#camlights .row .nm"):][:200])    # langer Name wird gekürzt
         self.assertIn("const any=list.some(c=>c.battery!=null)", self.html)               # ohne Akkustand keine Spalte
 
+    def test_saved_wlan_networks_can_be_picked_and_connected_without_a_password(self):
+        """Issue #8: Gespeicherte Netze sind anklickbar, in der Netzliste markiert, das Passwortfeld sagt, dass das gespeicherte gilt."""
+        h = self.html
+        self.assertIn('<a href="#" data-ssid="${esc(s)}">${esc(s)}</a> <a href="#" data-forget="${esc(s)}"', h)
+        self.assertIn('(d.saved||[]).includes(n.ssid)?" · gespeichert":""', h)
+        self.assertIn("leer = gespeichertes Passwort verwenden", h)
+        self.assertIn('$("w_ssid").addEventListener("input",wifiPwHint)', h)
+        self.assertIn("[6000,14000].forEach(ms=>setTimeout(wifiLoad,ms))", h)           # Anzeige nach dem Verbinden noch zweimal auffrischen
+
+    def test_camera_row_has_the_connection_as_a_column_before_the_signal(self):
+        """Issue #10: Name | Verbindung | Signal | Entfernen in einer Zeile (spart die Zeile darunter)."""
+        h = self.html
+        row = h[h.index('`<div class="cam" data-cid'):][:1400]
+        order = [row.index(x) for x in ('class="cl"', '<span class="cn">${camNetHtml(c)}</span>', 'class="muted cr"><span class="dyn">')]
+        self.assertEqual(order, sorted(order))
+        self.assertLess(row.index("camNetHtml(c)"), row.index('<span class="dyn">'))           # Verbindung vor dem Signal
+        self.assertNotIn("</div><code>${esc(c.url)}</code>${camNetHtml(c)}</div>", h)          # nicht mehr als eigene Zeile unter der Adresse
+        self.assertIn("min-width:9.6em", h[h.index(".cam .top .dyn{"):][:200])               # Signal: feste Breite, gleich breite Ziffern
+        self.assertIn("tabular-nums", h[h.index(".cam .top .dyn{"):][:200])
+
+    def test_bildaufbau_preview_is_square_and_shows_what_is_sent(self):
+        """Issue #7: Hauptbild und kleine Bilder in der Vorschau nicht abgerundet, ohne eigenen Rahmen und Schatten."""
+        h = self.html
+        pvbox = h[h.index(".pvbox{"):][:400].split("}")[0]
+        pvpip = h[h.index(".pvpip{"):][:400].split("}")[0]
+        self.assertNotIn("border-radius", pvbox)
+        for bad in ("border-radius", "border:", "box-shadow"):
+            self.assertNotIn(bad, pvpip)
+        # Rundung und Rahmen kommen nur aus der Einstellung des Bildes (Rahmen innen, Rundung begrenzt)
+        self.assertIn("border-radius:${rad}px", h)
+        self.assertIn("class=\"pvrim\"", h)
+
+    def test_each_small_picture_has_an_appearance_block_with_opacity_crop_and_border(self):
+        h = self.html
+        for k in (1, 2, 3):
+            self.assertIn('<details class="pvs" data-k="%d"></details>' % k, h)
+        block = h[h.index("function styleBlockHtml"):][:2600]
+        for f in ('data-f="vis"', 'data-f="op"', '"cl"', '"cr"', '"ct"', '"cb"', 'data-f="be"', '"bw"', 'data-f="bc"', '"bo"', '"br"'):
+            self.assertIn(f, block)
+        self.assertIn("styles:pipStyles", h)                                   # wird mit dem Bildaufbau gespeichert
+        self.assertIn("CROP_KEEP=32", h)                                       # wie auf dem Server: mindestens 32 Pixel bleiben
+        self.assertIn("Math.floor(clampN(el.value,0,total-CROP_KEEP,0)/2)*2", h)   # gerade Werte
+        self.assertIn('document.querySelectorAll(".pvs").forEach(e=>e.hidden=d.plugin_present&&d.plugin_style===false)', h)   # mit altem Baustein bleiben die Felder weg
+        self.assertNotIn("pvstylenote", h)
+
     def test_upload_rows_in_the_status_use_one_grid_with_fixed_number_columns(self):
         """Die Upload-Zeilen im Status wackelten, weil sich die Breite der Zahlen änderte: jetzt ein gemeinsames Raster mit festen Spalten."""
         h = self.html
@@ -1614,6 +1712,132 @@ class AutoSystemCheck(unittest.TestCase):
             m.do_autocheck({"state": "never"})
         self.assertEqual((saved["state"], saved["available"], saved["mode"]), ("done", 7, "check"))
         self.assertIn("last_check", saved)
+
+
+class UpdateNotes(unittest.TestCase):
+    """Issue #9: Das Update zeigt die Änderungen aller Versionen, die neuer sind als die installierte."""
+    LOG = ("# Änderungen\n\n## 0.9.58 (Beta)\n- **Neu:** Eins.\n  Fortsetzung.\n\n## 0.9.57 (Beta)\n- Zwei.\n\n## 0.9.56 (Beta)\n- Drei.\n\n"
+           "## 0.9.55 (Beta)\n- Vier.\n")
+
+    def test_everything_since_the_installed_version_newest_first(self):
+        n = server.SwUpdate._sections_since(self.LOG, "0.9.56")
+        self.assertEqual([l for l in n.splitlines() if l.startswith("## ")], ["## 0.9.58 (Beta)", "## 0.9.57 (Beta)"])
+        self.assertNotIn("Drei", n)
+        self.assertIn("Fortsetzung.", n)
+
+    def test_one_new_version_and_nothing_new(self):
+        self.assertEqual(server.SwUpdate._sections_since(self.LOG, "0.9.57").splitlines()[0], "## 0.9.58 (Beta)")
+        self.assertEqual(server.SwUpdate._sections_since(self.LOG, "0.9.58").splitlines()[0], "## 0.9.58 (Beta)")     # nichts neuer: erster Abschnitt wie bisher
+        self.assertEqual(server.SwUpdate._sections_since(self.LOG, "unbekannt").splitlines()[0], "## 0.9.58 (Beta)")
+
+    def test_number_of_versions_is_limited(self):
+        log = "\n".join("## 0.9.%d (Beta)\n- x\n" % i for i in range(60, 20, -1))
+        n = server.SwUpdate._sections_since(log, "0.9.1", max_sections=3)
+        self.assertEqual(len([l for l in n.splitlines() if l.startswith("## ")]), 3)
+
+    def test_update_card_formats_the_notes_and_reloads_by_itself(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn("function fmtNotes(", h)
+        self.assertIn("setHtml(n,fmtNotes(d.notes))", h)
+        self.assertNotIn('n.textContent=d.newer?d.notes:""', h)                       # nicht mehr als roher Text
+        self.assertIn("swPending", h)                                                  # Sperre und Neuladen hängen an einem Zustand, der nicht von selbst zurückgesetzt wird
+        self.assertIn("location.reload()", h[h.index("async function swLoad"):][:1500])
+        self.assertNotIn("swWasInstalling", h)
+
+
+class PictureStyle(unittest.TestCase):
+    """Issue #7: Deckkraft, Beschnitt und Rahmen je kleinem Bild (Stellen 1 bis 3): prüfen, speichern, in den Pipeline-Text bringen."""
+    STY = {"1": {"visible": True, "opacity": 50, "crop": {"l": 400, "r": 0, "t": 0, "b": 0},
+                 "border": {"enabled": True, "width": 6, "color": "#FF8800", "opacity": 70, "radius": 24}},
+           "2": {"visible": False},
+           "3": {"border": {"enabled": True, "width": 3}}}
+
+    def build(self, styles=None, **kw):
+        cfg = dict(server.PipelineStore.DEFAULT, **BASE, **kw)
+        if styles is not None:
+            cfg["styles"] = styles
+        return server.PipelineStore(os.devnull).build(cfg)
+
+    def test_default_look_changes_nothing_in_the_pipeline_text(self):
+        self.assertNotIn("style", self.build())
+        self.assertNotIn("style", self.build(styles=server.clean_styles(None)))
+
+    def test_pipeline_text_carries_the_style_of_each_position(self):
+        t = self.build(server.clean_styles(self.STY, strict=True))
+        mix = [l for l in t.split("\n") if l.startswith("pbpipmix")][0]
+        self.assertIn('width-pct=25 style1="op=50,cl=400,bw=6,bc=ff8800,bo=70,br=24"', mix)
+        self.assertIn('slot2=1 corner2=2 style2="op=0"', mix)                         # nicht sichtbar: Deckkraft 0
+        self.assertIn('slot3=2 corner3=3 style3="bw=3,bc=ffffff,br=12"', mix)
+        self.assertEqual(t.count("style1="), 1)
+
+    def test_old_plugin_never_gets_the_property(self):
+        with mock.patch.object(server, "plugin_style", lambda: False):
+            self.assertNotIn("style", self.build(server.clean_styles(self.STY, strict=True)))
+
+    def test_old_two_mixer_form_gives_the_second_picture_its_own_style_as_style1(self):
+        with mock.patch.object(server, "plugin_multi", lambda: False):
+            t = self.build(server.clean_styles(self.STY, strict=True))
+        self.assertIn('pbpipmix name=pipmix2 slot=1 corner=2 width-pct=25 style1="op=0"', t)
+
+    def test_swap_pipeline_has_the_styles_on_the_following_mixer(self):
+        t = self.build(server.clean_styles(self.STY, strict=True), swap_cams=2)
+        mix = [l for l in t.split("\n") if l.startswith("pbpipmix")][0]
+        self.assertIn("follow-tag=true", mix)
+        self.assertIn('style1="op=50,cl=400,bw=6,bc=ff8800,bo=70,br=24"', mix)
+        self.assertIn('style2="op=0"', mix)
+
+    def test_requests_are_checked(self):
+        bad = ({"opacity": 101}, {"opacity": -1}, {"opacity": "viel"}, {"visible": "ja"}, {"crop": {"l": 2000}}, {"crop": {"l": 1000, "r": 900}},
+               {"crop": {"t": 600, "b": 500}}, {"crop": "links"}, {"border": {"enabled": "ein"}}, {"border": {"width": 0}},
+               {"border": {"width": 41}}, {"border": {"color": "rot"}}, {"border": {"color": "#12345"}}, {"border": {"opacity": 5}},
+               {"border": {"radius": 61}}, {"border": 7})
+        for b in bad:
+            with self.assertRaises(ValueError, msg=str(b)):
+                server.clean_style(b, strict=True)
+        with self.assertRaises(ValueError):
+            server.clean_styles({"1": "x"}, strict=True)
+        with self.assertRaises(ValueError):
+            server.clean_styles(["x"], strict=True)
+
+    def test_crop_is_made_even_and_leaves_at_least_32_pixels(self):
+        st = server.clean_style({"crop": {"l": 401, "r": 3, "t": 5, "b": 1043}}, strict=True)
+        self.assertEqual(st["crop"], {"l": 400, "r": 2, "t": 4, "b": 1042})
+        st = server.clean_style({"crop": {"l": 1888, "r": 0}}, strict=True)                  # genau am Rand erlaubt: 32 Pixel bleiben
+        self.assertEqual(st["crop"]["l"], 1888)
+
+    def test_saved_files_are_forced_into_ranges_and_never_reach_the_text(self):
+        evil = {"1": {"opacity": "100 ! fakesink", "visible": "x", "crop": {"l": "5; rm", "r": 9999, "t": -5, "b": None},
+                      "border": {"enabled": True, "color": "#fff; rm -rf", "width": "9;", "opacity": 1000, "radius": [1]}},
+                "2": {"opacity": 1e9, "border": {"enabled": True, "width": 99999, "color": "#00ff00"}}, "3": "kaputt"}
+        t = self.build(evil)
+        self.assertNotIn("100 ! fakesink", t)
+        self.assertNotIn("rm -rf", t)
+        for m in __import__("re").findall(r'style\d="([^"]*)"', t):
+            self.assertRegex(m, r"^[a-z0-9=,]*$")
+        st = server.clean_styles(evil)
+        self.assertTrue(0 <= st["1"]["opacity"] <= 100 and 1 <= st["2"]["border"]["width"] <= 40)
+        self.assertEqual(st["2"]["border"]["color"], "#00ff00")
+        self.assertEqual(st["3"], server.clean_style(None))
+
+    def test_style_is_saved_kept_and_reported(self):
+        s = store()
+        s.set(dict(BASE, styles=self.STY), KEYS)
+        self.assertEqual(s.cfg["styles"]["1"]["border"]["color"], "#ff8800")
+        self.assertFalse(s.cfg["styles"]["2"]["visible"])
+        s.set(dict(BASE), KEYS)                                            # eine Anfrage ohne Stile (z. B. ein anderer Client) lässt sie stehen
+        self.assertEqual(s.cfg["styles"]["1"]["crop"]["l"], 400)
+        s.set(dict(BASE, type="single", pip="", pip2="", pip3=""), KEYS)  # auch beim Wechsel auf eine Kamera
+        self.assertEqual(s.cfg["styles"]["1"]["opacity"], 50)
+        st = s.status([{"key": k, "name": k} for k in KEYS])
+        self.assertEqual(st["config"]["styles"]["1"]["opacity"], 50)
+        self.assertIn("plugin_style", st)
+        with self.assertRaises(ValueError):
+            s.set(dict(BASE, styles={"1": {"opacity": 500}}), KEYS)
+        self.assertEqual(s.cfg["styles"]["1"]["opacity"], 50)             # ein abgelehnter Versuch ändert nichts
+
+    def test_older_saved_pipeline_without_styles_gets_the_defaults(self):
+        s = store()
+        self.assertEqual(s.status([])["config"]["styles"], server.clean_styles(None))
 
 
 if __name__ == "__main__":
