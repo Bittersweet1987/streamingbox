@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.38 (Beta)
+- Behoben: Im Kasten "System" waren der sichtbare Abstand von der Oberkante bis zur Überschrift (gemessen bis zur Oberkante der Buchstaben: 15 Pixel) und der Abstand vom unteren Balken bis zur Unterkante (11 Pixel) nicht gleich. Der Innenabstand der
+  Kästen ist jetzt oben 8 und unten 12 Pixel; sichtbar sind es dadurch oben und unten gleich 13 Pixel.
+
 ## 0.9.37 (Beta)
 - Geändert: Auch die gewählte Hauptkamera hat in der Auswahl des Hauptbilds den Punkt vor dem Namen (grün = sendet, rot = fehlt), mit einem dunklen Rand, damit er auf der hellen Füllung gut zu sehen ist.
 
