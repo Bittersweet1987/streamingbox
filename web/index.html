@@ -725,8 +725,8 @@ function btRender(d){
   let h="";
   if(!d.available) h=`<div class="wstat bad"><span class="wdot"></span><span class="wgrow">${esc(d.reason||"Der Bluetooth-Dienst ist nicht erreichbar")}</span></div>`;
   else{
-    h=ad.map(a=>`<div class="wstat${a.powered?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(a.name||(a.usb_id?"Bluetooth-Stick":"Eingebauter Bluetooth-Adapter"))}</b>${devDet(a)} · ${a.powered?"bereit":"ausgeschaltet"}</span></div>`).join("")+
-      pr.map(x=>`<div class="wstat bad"><span class="wdot"></span><span class="wgrow"><b>${esc(x.name)}</b> <span class="muted">(${esc(x.id)})</span> · nicht nutzbar<div class="muted" style="margin-top:3px">${esc(x.hint)}</div></span></div>`).join("");
+    h=ad.map(a=>`<div class="wstat${a.powered?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(a.label||a.name||(a.usb_id?"Bluetooth-Stick":"Eingebauter Bluetooth-Adapter"))}</b>${devDet(a)}${dnLink(a)} · ${a.powered?"bereit":"ausgeschaltet"}</span></div>`).join("")+
+      pr.map(x=>`<div class="wstat bad"><span class="wdot"></span><span class="wgrow"><b>${esc(x.label||x.name)}</b> <span class="muted">(${esc(x.id)})</span>${dnLink(x)} · nicht nutzbar<div class="muted" style="margin-top:3px">${esc(x.hint)}</div></span></div>`).join("");
     if(!ad.length&&!pr.length) h='<div class="wstat bad"><span class="wdot"></span><span class="wgrow">Kein Bluetooth-Adapter gefunden. Für DJI-Kameras einen USB-Bluetooth-Stick einstecken.</span></div>';
     if(drTxt) h+=`<div class="ph"${dr.state==="failed"||dr.state==="unsupported"?' style="color:var(--crit)"':""}>${esc(drTxt)}</div>`;
   }
@@ -884,19 +884,29 @@ srtlaLoad();
 // ---- WLAN ----
 // Name des Sticks hinter einer Netzwerkkarte bzw. einem Bluetooth-Adapter, so wie er sich meldet (Produktname), mit Hersteller und USB-Kennung
 // in Klammern; bei einer eingebauten Karte stattdessen der Treiber. Leer, wenn nichts bekannt ist.
-function devDet(c){ const det=[c.vendor,c.usb_id].filter(Boolean).join(", "); return det?` <span class="muted">(${esc(det)})</span>`:""; }
+function devDet(c){ const det=[c.usb_id].filter(Boolean).join(", "); return det?` <span class="muted">(${esc(det)})</span>`:""; }
+// "umbenennen": der Stick kennt seinen Handelsnamen (z. B. Logilink) oft nicht, dann vergibt man ihn selbst; gilt für alle Anzeigen dieses Sticks
+const dnLink=c=>c.key?` <a href="#" class="dn muted" data-dn="${esc(c.key)}" data-dnname="${esc(c.custom?(c.label||""):"")}" data-dnlabel="${esc(c.label||c.name||"")}" title="Eigenen Namen für dieses Gerät vergeben (leer = Standardname)">umbenennen</a>`:"";
 function devInfo(c){
-  if(c.name) return ` · ${esc(c.name)}${devDet(c)}`;
-  if(c.usb_id) return ` · <span class="muted">USB ${esc(c.usb_id)}</span>`;
-  return c.driver?` · <span class="muted">Treiber ${esc(c.driver)}</span>`:"";
+  const label=c.label||c.name;
+  if(label) return ` · ${esc(label)}${devDet(c)}${dnLink(c)}`;
+  if(c.usb_id) return ` · <span class="muted">USB ${esc(c.usb_id)}</span>${dnLink(c)}`;
+  return (c.driver?` · <span class="muted">Treiber ${esc(c.driver)}</span>`:"")+dnLink(c);
 }
+async function devRename(a){
+  const cur=a.dataset.dnname||a.dataset.dnlabel||"";
+  const n=prompt("Name dieses Geräts (leer lassen = Standardname):",cur); if(n===null) return;
+  try{ await srtlaCall("POST","/api/devname",{key:a.dataset.dn,name:n}); }catch(x){ alert(x.message); return; }
+  wifiLoad(); djiLoad();
+}
+document.addEventListener("click",e=>{ const a=e.target.closest&&e.target.closest("a.dn"); if(a){ e.preventDefault(); devRename(a); } });
 let wifiData=null, wifiTimer=null, wifiSig=null;
 async function wifiLoad(){
   let d; try{ d=await srtlaCall("GET","/api/wifi"); }catch(e){ return; }
   wifiData=d;
   const sel=$("w_if"), cur=sel.value, usable=d.cards.filter(c=>!c.camera_net);
   if(document.activeElement!==sel){
-    sel.innerHTML=usable.map(c=>`<option value="${esc(c.iface)}">${esc(c.iface)}${c.name?" · "+esc(c.name):(c.ip?" · "+esc(c.ip):"")}</option>`).join("")||'<option value="">keine WLAN-Karte</option>';
+    sel.innerHTML=usable.map(c=>`<option value="${esc(c.iface)}">${esc(c.iface)}${(c.label||c.name)?" · "+esc(c.label||c.name):(c.ip?" · "+esc(c.ip):"")}</option>`).join("")||'<option value="">keine WLAN-Karte</option>';
     if(usable.some(c=>c.iface===cur)) sel.value=cur;
   }
   const ups=((srtlaData&&srtlaData.settings)||{}).uplinks||[];

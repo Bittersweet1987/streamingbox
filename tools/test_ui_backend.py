@@ -1157,6 +1157,14 @@ class HeaderControls(unittest.TestCase):
         self.assertIn("min-width:9.6em", h[h.index(".cam .top .dyn{"):][:200])               # Signal: feste Breite, gleich breite Ziffern
         self.assertIn("tabular-nums", h[h.index(".cam .top .dyn{"):][:200])
 
+    def test_devices_can_be_renamed_in_the_wlan_and_bluetooth_lists(self):
+        """Issue #11: Der Stick kennt seinen Handelsnamen oft nicht: man kann ihn selbst vergeben ("umbenennen"), er gilt überall."""
+        h = self.html
+        self.assertIn("function devRename(", h)
+        self.assertIn('"/api/devname"', h)
+        self.assertEqual(h.count("${dnLink("), 4)                       # WLAN-Übersicht (devInfo: dreimal) und Bluetooth (Adapter und Problem-Sticks) tragen den Link
+        self.assertIn("a.label||a.name", h)                              # Bluetooth-Adapter: eigener Name vor dem gemeldeten
+
     def test_bildaufbau_preview_is_square_and_shows_what_is_sent(self):
         """Issue #7: Hauptbild und kleine Bilder in der Vorschau nicht abgerundet, ohne eigenen Rahmen und Schatten."""
         h = self.html
@@ -1217,7 +1225,7 @@ class HeaderControls(unittest.TestCase):
         """Issue #6: Die Namen der WLAN-Sticks (z. B. 802.11ac NIC) stehen in der Übersicht und in der Auswahl der WLAN-Karte."""
         self.assertIn("${devInfo(c)} · Kameranetz", self.html)
         self.assertIn("<b>${esc(c.iface)}</b>${devInfo(c)} · ${c.ip?", self.html)
-        self.assertIn('${c.name?" · "+esc(c.name):(c.ip?" · "+esc(c.ip):"")}', self.html)
+        self.assertIn('${(c.label||c.name)?" · "+esc(c.label||c.name):(c.ip?" · "+esc(c.ip):"")}', self.html)
 
     def test_wifi_cards_carry_name_vendor_usb_id_and_driver(self):
         info = {"usb_id": "0bda:c811", "name": "802.11ac NIC", "vendor": "Realtek", "driver": "rtl8821cu"}
@@ -1743,6 +1751,102 @@ class UpdateNotes(unittest.TestCase):
         self.assertIn("swPending", h)                                                  # Sperre und Neuladen hängen an einem Zustand, der nicht von selbst zurückgesetzt wird
         self.assertIn("location.reload()", h[h.index("async function swLoad"):][:1500])
         self.assertNotIn("swWasInstalling", h)
+
+
+class DeviceNaming(unittest.TestCase):
+    """Issues #11 und #12: Gerätenamen von WLAN- und Bluetooth-Sticks: Standardname mit Hersteller, bereinigte Zeichen, eigene Namen."""
+
+    def test_generic_names_get_the_vendor_in_front(self):
+        import dji
+        self.assertEqual(dji.device_label("802.11ac NIC", "Realtek"), "Realtek 802.11ac NIC")      # Standardbezeichnung statt Gerätename
+        self.assertEqual(dji.device_label("Bluetooth Radio", "Realtek"), "Realtek Bluetooth Radio")
+        self.assertEqual(dji.device_label("WLAN", "Ralink"), "Ralink WLAN")
+        self.assertEqual(dji.device_label("ASUS USB-BT500", "Realtek"), "ASUS USB-BT500")          # echter Name: unverändert
+        self.assertEqual(dji.device_label("TP-Link UB500 Adapter", "Realtek"), "TP-Link UB500 Adapter")
+        self.assertEqual(dji.device_label("802.11ac NIC", "Realtek 802"), "Realtek 802 802.11ac NIC")
+        self.assertEqual(dji.device_label("Realtek 802.11ac NIC", "Realtek"), "Realtek 802.11ac NIC")   # Hersteller steht schon drin
+        self.assertEqual(dji.device_label("", "Realtek"), "Realtek")
+        self.assertEqual(dji.device_label("", ""), "")
+
+    def test_typographic_dashes_and_control_characters_are_cleaned(self):
+        import dji
+        for dash in "\u2010\u2011\u2012\u2013\u2014\u2212\uff0d":
+            self.assertEqual(dji.clean_devname("TP%sLink UB500 Adapter" % dash), "TP-Link UB500 Adapter")
+        self.assertEqual(dji.clean_devname("  Mein \x00Stick\n  v2 "), "Mein Stick v2")
+        self.assertEqual(dji.clean_devname(None), "")
+        self.assertEqual(len(dji.clean_devname("x" * 200)), 60)
+
+    def test_unreadable_bytes_in_the_usb_name_do_not_break_reading(self):
+        import dji
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "idVendor"), "w") as f:
+            f.write("2357\n")
+        with open(os.path.join(d, "idProduct"), "w") as f:
+            f.write("0604\n")
+        with open(os.path.join(d, "product"), "wb") as f:
+            f.write(b"TP\x96Link UB500 Adapter\n")                      # kein UTF-8
+        info = dji.usb_device_above(d)
+        self.assertEqual(info["usb_id"], "2357:0604")
+        self.assertIn("Link UB500 Adapter", info["name"])
+        self.assertNotIn("%", info["name"])
+
+    def test_own_names_are_checked_stored_and_removed(self):
+        n = server.DeviceNames(tempfile.mkdtemp())
+        n.set("usb:0bda:c811", "  Logilink   WL0237 ")
+        self.assertEqual(n.label("usb:0bda:c811", "Standard"), "Logilink WL0237")                  # Leerzeichen zusammengefasst
+        self.assertEqual(n.label("usb:2357:0604", "Standard"), "Standard")
+        n.set("bt:AA:BB:CC:DD:EE:FF", "Mein Stick")
+        n.set("if:wlan1", "Hotspot-Stick")
+        n.set("usb:0bda:c811", "")                                                                  # leer = Standardname
+        self.assertEqual(n.label("usb:0bda:c811", "Standard"), "Standard")
+        self.assertEqual(n.label("if:wlan1", "x"), "Hotspot-Stick")
+        for bad_key in ("", None, "wlan0", "usb:xyz", "usb:0BDA:c811", "if:../../etc", "bt:AA", "../x"):
+            with self.assertRaises(ValueError, msg=str(bad_key)):
+                n.set(bad_key, "Name")
+        for bad_name in ("x" * 41, "a\x00b", "a\nb\x07", 5, None):
+            with self.assertRaises(ValueError, msg=str(bad_name)):
+                n.set("usb:0bda:c811", bad_name)
+
+    def test_wifi_cards_carry_key_and_label_with_the_own_name_first(self):
+        names = server.DeviceNames(tempfile.mkdtemp())
+        w = server.Wifi(tempfile.mkdtemp(), False, mock.Mock(iface="eth1"), names)
+        info = {"usb_id": "0bda:c811", "name": "802.11ac NIC", "vendor": "Realtek", "driver": "rtl8821cu"}
+
+        def cards():
+            with mock.patch("os.listdir", lambda p: ["wlan0"]), mock.patch("os.path.isdir", lambda p: p.endswith("wlan0/wireless")), \
+                    mock.patch.object(server, "iface_ips", lambda: []), mock.patch.object(server, "read", lambda p, d="": "up"), \
+                    mock.patch.object(server.dji, "netdev_info", lambda n: dict(info)):
+                return w.cards()
+        c = cards()[0]
+        self.assertEqual((c["key"], c["label"], c["custom"]), ("usb:0bda:c811", "Realtek 802.11ac NIC", False))
+        names.set("usb:0bda:c811", "Logilink WL0237")
+        c = cards()[0]
+        self.assertEqual((c["label"], c["custom"]), ("Logilink WL0237", True))
+        info.update(usb_id="", name="", vendor="")                                                   # eingebaute Karte: Schlüssel ist die Schnittstelle
+        self.assertEqual(cards()[0]["key"], "if:wlan0")
+
+    def test_bluetooth_adapters_get_labels_in_the_api(self):
+        names = server.DeviceNames(tempfile.mkdtemp())
+        names.set("usb:2357:0604", "Mein UB500")
+        st = {"adapters": [{"usb_id": "2357:0604", "name": "TP\u2011Link UB500 Adapter", "vendor": "Realtek", "address": "AA:BB:CC:DD:EE:FF", "powered": True},
+                           {"usb_id": "0b05:190e", "name": "ASUS USB-BT500", "vendor": "Realtek", "address": "AA:BB:CC:DD:EE:00", "powered": True},
+                           {"usb_id": "0bda:8771", "name": "Bluetooth Radio", "vendor": "Realtek", "address": "AA:BB:CC:DD:EE:01", "powered": True},
+                           {"usb_id": "", "name": "", "vendor": "", "address": "11:22:33:44:55:66", "powered": True}],
+              "adapter_problems": [{"id": "33fa:0010", "name": "BARROT Bluetooth 5.4 Adapter", "hint": "x"}]}
+        out = server.label_bluetooth(st, names)["adapters"]
+        self.assertEqual([(a["key"], a["label"], a["custom"]) for a in out],
+                         [("usb:2357:0604", "Mein UB500", True), ("usb:0b05:190e", "ASUS USB-BT500", False),
+                          ("usb:0bda:8771", "Realtek Bluetooth Radio", False), ("bt:11:22:33:44:55:66", "Eingebauter Bluetooth-Adapter", False)])
+        self.assertEqual(st["adapter_problems"][0]["label"], "BARROT Bluetooth 5.4 Adapter")
+        # der gemeldete Name wird nur bereinigt, wenn der eigene fehlt: der typografische Strich wird zum Bindestrich
+        names.set("usb:2357:0604", "")
+        self.assertEqual(server.label_bluetooth(st, names)["adapters"][0]["label"], "TP-Link UB500 Adapter")
+        self.assertEqual(server.label_bluetooth({"adapters": [], "adapter_problems": []}, None)["adapters"], [])        # ohne Namensspeicher
+
+    def test_handler_uses_the_labelling_and_has_a_checked_name_endpoint(self):
+        src = open(server.__file__, encoding="utf-8").read()
+        self.assertIn("label_bluetooth(self.djisvc.status(), self.names)", src)
+        self.assertIn('if path == "/api/devname":', src)
 
 
 class PictureStyle(unittest.TestCase):

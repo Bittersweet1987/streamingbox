@@ -22,10 +22,35 @@ BARROT_HINT = ("Dieser Stick hat einen BARROT-Chip (zum Beispiel UGREEN Bluetoot
 
 def _read1(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:       # Stick-Namen können Zeichen außerhalb von ASCII enthalten
             return f.read().strip()
     except OSError:
         return ""
+
+
+# Typografische Striche, die manche Sticks in ihrem Namen melden, werden zum normalen Bindestrich (sonst erscheint z. B. "TP‑Link" mit einem
+# Zeichen, das die Schrift nicht kennt); Steuerzeichen und doppelte Leerzeichen verschwinden.
+_DASHES = dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe63\uff0d"), "-")
+_GENERIC_NAME = re.compile(r"^(802\.11|wlan\b|wireless|wi-?fi\b|bluetooth|usb\b|nic\b|network|adapter)", re.I)
+
+
+def clean_devname(text, limit=60):
+    """Name eines Geräts, wie es sich meldet, für die Anzeige bereinigt."""
+    s = str(text or "").translate(_DASHES)
+    s = "".join(ch if ch.isprintable() else " " for ch in s)
+    return re.sub(r"\s+", " ", s).strip()[:limit]
+
+
+def device_label(name, vendor=""):
+    """Standardname für die Anzeige: der gemeldete Produktname. Ist er nur eine Standardbezeichnung (z. B. "802.11ac NIC" oder "Bluetooth
+    Radio"), steht der Hersteller davor ("Realtek 802.11ac NIC"). Den Handelsnamen des Sticks (z. B. Logilink) kennt der Stick selbst oft nicht:
+    dafür kann man in der Oberfläche einen eigenen Namen vergeben."""
+    name, vendor = clean_devname(name), clean_devname(vendor, 40)
+    if not name:
+        return vendor
+    if vendor and vendor.lower() not in name.lower() and (_GENERIC_NAME.match(name) or len(name) < 8):
+        return f"{vendor} {name}"
+    return name
 
 
 def usb_bluetooth_devices(root=None):
@@ -68,7 +93,7 @@ def usb_device_above(path):
     for _ in range(12):
         vid, pid = _read1(f"{p}/idVendor").lower(), _read1(f"{p}/idProduct").lower()
         if vid and pid:
-            return {"usb_id": f"{vid}:{pid}", "name": _read1(f"{p}/product")[:60], "vendor": _read1(f"{p}/manufacturer")[:40]}
+            return {"usb_id": f"{vid}:{pid}", "name": clean_devname(_read1(f"{p}/product")), "vendor": clean_devname(_read1(f"{p}/manufacturer"), 40)}
         up = os.path.dirname(p)
         if up == p:
             break

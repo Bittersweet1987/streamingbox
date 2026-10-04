@@ -1840,6 +1840,72 @@ class Remote:
             f.write(action + "\n")
 
 
+class DeviceNames:
+    """Eigene Namen für WLAN- und Bluetooth-Sticks (der Stick kennt seinen Handelsnamen, zum Beispiel Logilink, meist nicht). Schlüssel: die USB-Kennung
+    ("usb:0bda:c811"; zwei gleiche Sticks teilen sich den Namen), sonst die Schnittstelle ("if:wlan0") oder die Adresse des Bluetooth-Adapters
+    ("bt:AA:BB:CC:DD:EE:FF"). Die Datei steht im Zustandsordner; es sind keine Geheimnisse."""
+    KEY_RE = re.compile(r"^(usb:[0-9a-f]{4}:[0-9a-f]{4}|if:[a-z0-9]{2,15}|bt:([0-9A-F]{2}:){5}[0-9A-F]{2})$")
+
+    def __init__(self, state_dir):
+        self.path = os.path.join(state_dir, "device-names.json")
+        self.lock = threading.Lock()
+
+    def _all(self):
+        try:
+            with open(self.path) as f:
+                d = json.load(f)
+            return {k: v for k, v in d.items() if isinstance(k, str) and self.KEY_RE.match(k) and isinstance(v, str)} if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    @staticmethod
+    def key(usb_id="", iface="", address=""):
+        if usb_id:
+            return "usb:" + usb_id
+        if iface:
+            return "if:" + iface
+        return "bt:" + address.upper() if address else ""
+
+    def label(self, key, default):
+        return self._all().get(key) or default
+
+    def set(self, key, name):
+        """Name setzen (leer = Standardname). Prüft Schlüssel und Name streng."""
+        if not isinstance(key, str) or not self.KEY_RE.match(key):
+            raise ValueError("Gerät unbekannt")
+        if not isinstance(name, str):
+            raise ValueError("Name ungültig")
+        name = " ".join(name.split())
+        if len(name) > 40 or any(not ch.isprintable() for ch in name):
+            raise ValueError("Name: höchstens 40 Zeichen, keine Sonderzeichen")
+        with self.lock:
+            d = self._all()
+            if name:
+                d[key] = name
+            else:
+                d.pop(key, None)
+            tmp = self.path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+            with os.fdopen(fd, "w") as f:
+                json.dump(d, f, indent=1, ensure_ascii=False)
+            os.replace(tmp, self.path)
+
+
+def label_bluetooth(st, names):
+    """Anzeigenamen der Bluetooth-Adapter und der Sticks ohne Adapter in der Antwort des Bluetooth-Dienstes: eigener Name (names), sonst der
+    Standardname aus der Meldung des Sticks (Hersteller davor, wenn der Name nur eine Standardbezeichnung ist)."""
+    for a in st.get("adapters") or []:
+        a["key"] = DeviceNames.key(a.get("usb_id", ""), "", a.get("address", ""))
+        default = dji.device_label(a.get("name", ""), a.get("vendor", "")) or ("Eingebauter Bluetooth-Adapter" if not a.get("usb_id") else "Bluetooth-Stick")
+        a["label"] = names.label(a["key"], default) if names and a["key"] else default
+        a["custom"] = a["label"] != default
+    for x in st.get("adapter_problems") or []:
+        x["key"] = DeviceNames.key(x.get("id", ""))
+        default = dji.device_label(x.get("name", ""), "")
+        x["label"] = names.label(x["key"], default) if names and x["key"] else default
+    return st
+
+
 class Wifi:
     """WLAN-Verbindung (z. B. Handy-Hotspot als weiterer Sendeweg). Lesen darf dieser Dienst, Verbinden macht der
     Root-Helfer pipbox-wifi.py über eine Auslösedatei (0600, wird dort sofort gelöscht). Das Passwort liegt nur
@@ -1847,9 +1913,9 @@ class Wifi:
     STATUS = "/run/pipbox-wifi/status.json"
     ACTIONS = ("scan", "connect", "forget", "disconnect")
 
-    def __init__(self, state_dir, demo, netchoice):
+    def __init__(self, state_dir, demo, netchoice, names=None):
         self.req = os.path.join(state_dir, "wifi-request")
-        self.demo, self.netchoice = demo, netchoice
+        self.demo, self.netchoice, self.names = demo, netchoice, names
 
     def cards(self):
         out = []
@@ -1865,6 +1931,7 @@ class Wifi:
                             "up": (read(f"/sys/class/net/{n}/operstate", "") or "").strip() == "up",
                             "ssid": "", "signal": None, "name": info["name"], "vendor": info["vendor"],
                             "usb_id": info["usb_id"], "driver": info["driver"]})
+                self._name(out[-1])
         if out:                                        # Name und Signal des verbundenen Netzes (Profilname = SSID)
             try:
                 r = subprocess.run(["nmcli", "-t", "-f", "DEVICE,CONNECTION", "dev"], capture_output=True, text=True, timeout=4)
@@ -1884,10 +1951,19 @@ class Wifi:
                 pass
         return out
 
+    def _name(self, card):
+        """Schlüssel und Anzeigename der Karte: eigener Name, sonst der Standardname aus der Meldung des Sticks."""
+        card["key"] = DeviceNames.key(card.get("usb_id", ""), card["iface"])
+        default = dji.device_label(card.get("name", ""), card.get("vendor", ""))
+        card["label"] = self.names.label(card["key"], default) if self.names else default
+        card["custom"] = bool(self.names and card["label"] != default)
+
     def status(self):
         if self.demo:
-            return {"helper_installed": True, "cards": [{"iface": "wlan0", "ip": "10.0.0.5", "camera_net": False, "up": True, "ssid": "Demo-Hotspot", "signal": 80,
-                                "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "rtl8821cu"}],
+            demo_card = {"iface": "wlan0", "ip": "10.0.0.5", "camera_net": False, "up": True, "ssid": "Demo-Hotspot", "signal": 80,
+                         "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "rtl8821cu"}
+            self._name(demo_card)
+            return {"helper_installed": True, "cards": [demo_card],
                     "state": "idle", "message": "", "scan": {"iface": "wlan0", "nets": [
                         {"ssid": "Demo-Hotspot", "signal": 80, "security": "WPA2", "in_use": False},
                         {"ssid": "Mein Handy", "signal": 62, "security": "WPA2 WPA3", "in_use": False},
@@ -2742,6 +2818,7 @@ class Handler(BaseHTTPRequestHandler):
     updates = None
     djisvc = None
     netchoice = None
+    names = None
     srtla = None
     pipeline = None
     send = None
@@ -2854,7 +2931,8 @@ class Handler(BaseHTTPRequestHandler):
                 print("auto_check (Anmeldung):", e)
             return self.reply(200, self.updates.status())
         if path == "/api/dji":
-            return self.reply(200, self.djisvc.status())
+            st = label_bluetooth(self.djisvc.status(), self.names)
+            return self.reply(200, st)
         if path == "/api/network":
             return self.reply(200, self.netchoice.status())
         if path == "/api/srtla":
@@ -2906,6 +2984,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True})
             if path == "/api/wifi":
                 self.wifi.request(d)
+                return self.reply(200, {"ok": True})
+            if path == "/api/devname":
+                if self.names is None:
+                    raise ValueError("Namen sind hier nicht verfügbar")
+                self.names.set(d.get("key"), d.get("name", ""))
                 return self.reply(200, {"ok": True})
             if path == "/api/remote":
                 self.remote.request(d.get("action"), d.get("confirm") is True, d.get("public") is True)
@@ -3023,7 +3106,8 @@ def main():
         threading.Thread(target=Handler.swupdate.auto_loop, daemon=True).start()
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
-    Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice)
+    Handler.names = DeviceNames(args.state)
+    Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
     Handler.autostart = AutoStart(args.state, Handler.send, args.demo)

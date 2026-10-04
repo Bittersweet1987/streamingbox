@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.60 (Beta)
+Meldungen aus den GitHub-Issues #11 und #12 (Namen von WLAN- und Bluetooth-Sticks).
+- Geändert (Issue #11): **Der WLAN-Stick zeigt einen Gerätenamen statt der Standardbezeichnung.** Viele Sticks melden als Namen nur ihre Funknorm ("802.11ac NIC"). Ist der gemeldete Name so eine Standardbezeichnung ("802.11…", "WLAN", "Wireless", "Bluetooth Radio" und ähnlich), steht jetzt der Hersteller davor ("Realtek 802.11ac NIC"). Den **Handelsnamen** (zum Beispiel Logilink) kennt der Stick selbst meist nicht, darum gibt es hinter jedem Stick den Link **"umbenennen"**: Man vergibt einen eigenen Namen (bis 40 Zeichen, leer = Standardname). Er gilt überall, wo der Stick steht: in der WLAN-Übersicht, in der Auswahl "WLAN-Karte" und im Abschnitt "Bluetooth". Gespeichert wird je USB-Kennung (zwei gleiche Sticks teilen sich den Namen), bei einer eingebauten Karte je Schnittstelle oder Adresse.
+- Geändert (Issue #12): **Bluetooth-Namen werden bereinigt.** "TP%Link UB500 Adapter" zeigte ein falsches Zeichen im Namen. Typografische Striche (zum Beispiel der geschützte Bindestrich), Steuerzeichen und doppelte Leerzeichen im gemeldeten Namen werden jetzt zum normalen Bindestrich bzw. entfernt, und Zeichen, die kein gültiges UTF-8 sind, bringen das Auslesen nicht mehr durcheinander. **Steht das Prozentzeichen wirklich so in den Daten des Sticks, ändert das nichts am gemeldeten Namen**: Dann hilft der neue Link "umbenennen". Zur Ursache bitte im Issue die Rohdaten schicken (`cat /sys/bus/usb/devices/*/product`).
+- Tests: Standardnamen mit Hersteller, bereinigte Striche und Steuerzeichen, nicht lesbare Bytes, eigene Namen (Prüfung von Schlüssel und Name, Speichern, Löschen), Beschriftung der Bluetooth-Adapter und der WLAN-Karten.
+- Hinweis zum Einspielen: Diese Version ändert `dji.py`; der Bluetooth-Dienst wird dabei einmal neu gestartet, die Kameras verbinden sich danach von selbst. Das Update läuft nicht während einer Sendung.
+
 ## 0.9.59 (Beta)
 - Neu (Issue #7, Rest): **Deckkraft, Ein-/Ausblenden, Beschnitt und Rahmen pro kleinem Bild.** Im Bildaufbau hat jedes kleine Bild einen Block "Aussehen":
   - **Bild einblenden** (ein Schalter, die eingestellte Deckkraft bleibt erhalten) und **Deckkraft** 0 bis 100 %.
