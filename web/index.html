@@ -24,6 +24,9 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
+.updlink{display:inline-block;margin-left:10px;padding:4px;line-height:0;vertical-align:middle;border-radius:50%}
+.updlink .dot{margin:0;width:11px;height:11px;box-shadow:0 0 0 2px rgba(245,158,11,.35)}
+.updlink:focus-visible{outline:2px solid var(--warn);outline-offset:1px}
 #alerts{display:grid;gap:8px}
 #alerts:empty{display:none}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
@@ -138,7 +141,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 </style>
 </head>
 <body>
-<header><h1>IRL4YOU BOX</h1><span class="hdr">
+<header><h1>IRL4YOU BOX<a id="hdr_upd" class="updlink" href="#swcard" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span></a></h1><span class="hdr">
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
   <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <span id="mode" class="badge">verbinde…</span> <button class="del" id="logout">Abmelden</button></span></header>
 <main>
@@ -1033,6 +1036,9 @@ async function swLoad(force){
   catch(e){ if(swWasInstalling) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
   if(swFirst===null) swFirst=d.current;
   if(swFirst!==d.current && swWasInstalling){ location.reload(); return; }     // neue Version läuft: Seite neu laden
+  { const dot=$("hdr_upd");                      // gelber Punkt in der Kopfleiste, solange eine neuere Version auf GitHub liegt
+    dot.hidden=!d.newer;
+    if(d.newer){ const t="Neue Version "+(d.latest?"v"+d.latest+" ":"")+"verfügbar (jetzt v"+d.current+")."+(d.sending?" Einspielen geht nicht während der Übertragung.":" Zum Software-Update."); dot.title=t; dot.setAttribute("aria-label",t); } }
   const busy=d.state==="installing";
   $("stagefoot").textContent="IRL4YOU BOX Version "+d.current+(d.stage?" ("+d.stage+")":"")+(d.stage?" – Funktionen und Bedienung können sich noch ändern.":"");
   $("sw_cur").textContent="v"+d.current+(d.stage?" ("+d.stage+")":"");
@@ -1083,6 +1089,7 @@ $("sw_switch").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); swWasInstalling=true; $("sw_msg").textContent="Wechsel gestartet …"; }catch(e){ $("sw_msg").textContent=e.message; }
   setTimeout(()=>swLoad(false),1500);
 });
+$("hdr_upd").addEventListener("click",e=>{ e.preventDefault(); const c=$("swcard"); if(c){ c.open=true; c.scrollIntoView({behavior:"smooth",block:"start"}); } });
 $("sw_check").addEventListener("click",()=>{ $("sw_msg").textContent="Suche …"; swLoad(true); });
 $("sw_install").addEventListener("click",async()=>{
   if(!confirm("Software-Update installieren?\n\n• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu (etwa eine halbe Minute).\n• Kameras und Einstellungen bleiben erhalten; der Kamera-Dienst startet nur neu, wenn sich seine Dateien ändern.\n• Die jetzige Version wird gesichert, Sie können zurückgehen.")) return;

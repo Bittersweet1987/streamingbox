@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.46 (Beta)
+- Neu: **Gelber Punkt in der Kopfleiste, wenn es ein Update für die Oberfläche gibt.** Er steht hinter dem Titel "IRL4YOU BOX" und erscheint, sobald auf GitHub eine neuere Version liegt (auch bei zugeklappter Karte "Software-Update"). Beim Darüberfahren steht die neue und die jetzige Version
+  (und, dass das Einspielen während einer Übertragung nicht geht, falls gesendet wird); ein Klick öffnet die Karte "Software-Update". Der Punkt verschwindet, wenn die Box aktuell ist. Die Abfrage bei GitHub bleibt wie bisher: höchstens alle 6 Stunden und nie während einer Übertragung.
+  Er meint nur das Update dieser Oberfläche, nicht die System-Updates der BELABOX.
+
 ## 0.9.45 (Beta)
 - Neu: **Treiber für Realtek-Bluetooth-Sticks, die der Kernel 5.10 nicht kennt (TP-Link UB500 u. a.), richtet die Box beim Einstecken selbst ein.** Ohne ihn starten diese Sticks ohne Firmware, finden keine Kameras und wirken tot. Beim Einstecken (udev-Regel) oder beim Start (Zeitgeber nach 3 Minuten, danach alle 15 Minuten)
   prüft der neue Root-Helfer `pipbox-btdriver.py`, ob ein solcher Stick steckt; wenn ja, baut er aus den mitgelieferten, **unveränderten Kernelquellen** (`bluetooth-src/`, v5.10.160, GPL-2.0, SHA-256 geprüft) das Modul `btusb` neu, mit zusätzlichen Zeilen `BTUSB_REALTEK` für `2357:0604` (TP-Link UB500), `2550:8761`, `2c4e:0115` (Mercusys MA530), `0bda:8771`, `0bda:a725`, `2b89:8761` und
