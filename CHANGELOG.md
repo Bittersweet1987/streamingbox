@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.35 (Beta)
+- Geändert: Die Auswahl des Hauptbilds sieht jetzt aus wie ein Schalter: Unter der Überschrift "Hauptbild" stehen die Kameras, die im Bild sind, als Knöpfe nebeneinander (feste Reihenfolge der Kameraliste). Die Kamera, die gerade das Hauptbild ist, ist
+  hervorgehoben; ein Klick auf eine andere macht sie zum Hauptbild. Der Punkt vor dem Namen zeigt, ob die Kamera sendet. Das ersetzt die Zeile "Hauptbild tauschen mit:" aus 0.9.34.
+
 ## 0.9.34 (Beta)
 - Geändert: **Hauptbild gegen eine frei gewählte Kamera tauschen.** In der Live-Karte steht (bei Bild-in-Bild) "Hauptbild tauschen mit:" und ein Knopf je Kamera, die gerade als kleines Bild im Bild ist (zum Beispiel "⇄ Action 6").
   Ein Klick tauscht das Hauptbild mit genau dieser Kamera; Kamera und Verzögerung bleiben beisammen, Ecke, Größe, Position und die Wahl des Tons bleiben am Platz. Der Knopf "Bilder tauschen" aus 0.9.33 (immer das erste kleine Bild) entfällt.
