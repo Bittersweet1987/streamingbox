@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.32 (Beta)
+- Geändert: Im Kasten "Upload" sitzt der Strich über der Zeile "Summe" jetzt direkt an der Zeile und braucht keinen eigenen Platz mehr. Die Summenzeile ist so hoch wie die anderen Zeilen und liegt auf der gleichen Höhe wie
+  die Zeilen im Kasten "Kameras".
+
 ## 0.9.31 (Beta)
 - Geändert: Abstände in der Karte "Status". Zwischen dem Kartenkopf und den Kästen sind es jetzt 10 statt 22 Pixel (eine leere Meldungsfläche belegt keinen Platz mehr), zwischen der Überschrift eines Kastens und seiner
   ersten Zeile 4 statt 8 Pixel. Im Kasten "System" ist der Abstand über der Überschrift und unter dem unteren Balken gleich (je 11 Pixel).

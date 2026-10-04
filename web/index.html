@@ -1074,7 +1074,7 @@ async function tick(){
       `<div class="row"><span>${upDot(m.uplinks&&m.uplinks[n])}${esc(n)}</span><span><b>${fmt(r.tx_mbit)}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(r.rx_mbit)} ↓</span></div>`).join("");
     if(nets.length>1){   // Summe über alle verbundenen Netzwerkkarten (Ethernet, WLAN, USB/Mobilfunk)
       const sum=k=>nets.reduce((a,[n,r])=>a+(+r[k]||0),0);
-      netHtml+=`<div class="row" style="border-top:1px solid var(--line);margin-top:4px;padding-top:6px"><span><b>Summe</b> <span class="unit">(${nets.length} ${nets.length===1?"Netz":"Netze"})</span></span><span><b>${fmt(sum("tx_mbit"))}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(sum("rx_mbit"))} ↓</span></div>`;
+      netHtml+=`<div class="row" style="box-shadow:0 -1px 0 var(--line)"><span><b>Summe</b> <span class="unit">(${nets.length} ${nets.length===1?"Netz":"Netze"})</span></span><span><b>${fmt(sum("tx_mbit"))}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(sum("rx_mbit"))} ↓</span></div>`;
     }
     $("net").innerHTML=netHtml||'<span class="muted">keine Daten</span>';
     setRates(m.net);
