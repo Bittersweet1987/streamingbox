@@ -1,4 +1,4 @@
-"""Tests für die mobile Ansicht (Issue #19): Fußleiste mit "Live"/"Stop" sowie Kamera- und Ton-Knöpfen, einzeilige Kopfleiste, keine Rückfrage
+"""Tests für die mobile Ansicht (Issue #19, #21, #22): Hilfstexte hinter "i", Reihenfolge im Status; Fußleiste mit "Live"/"Stop" sowie Kamera- und Ton-Knöpfen, einzeilige Kopfleiste, keine Rückfrage
 beim Start der Sendung. Die Seitenskripte laufen, wenn die JavaScript-Maschine von macOS (jsc) da ist, in einer Attrappe der Seite."""
 import json
 import os
@@ -197,6 +197,75 @@ class FooterBehaviour(unittest.TestCase):
         i = PAGE.index("#mfoot{display:flex;position:fixed")
         self.assertNotIn("flex-direction:column", PAGE[i:PAGE.index("}", i)])                         # eine Reihe wie in der BELABOX-Oberfläche: "Live" links, Knöpfe rechts
         self.assertLess(PAGE.index('id="mf_live"'), PAGE.index('id="mf_tools"'))
+
+
+class StatusOrder(unittest.TestCase):
+    def test_upload_then_cameras_then_system(self):                                         # Issue #22
+        i = PAGE.index('<div class="statgrid">')
+        grid = PAGE[i:PAGE.index("</details>", i)]
+        pos = [grid.index(m) for m in ('<div class="sech">Upload', 'id="camlights"', '<div class="sech">System</div>')]
+        self.assertEqual(pos, sorted(pos))
+        self.assertEqual(grid.count('<div class="statbox">'), 3)
+        for needle in ('id="net"', 'id="cpu"', 'id="mem"', 'id="cpubar"', 'id="membar"'):                 # nichts ging beim Umstellen verloren
+            self.assertEqual(grid.count(needle), 1, needle)
+
+
+@unittest.skipUnless(JSC, "keine JavaScript-Maschine (jsc) auf diesem Rechner")
+class HelpTexts(unittest.TestCase):
+    """Hilfstexte hinter einem "i" (Issue #21): nur auf dem Handy, nur feste Beschreibungen unter einer Überschrift."""
+    def owner(self, build):
+        src = PAGE[PAGE.index("function hlpOwner(ph){"):PAGE.index("\n}\n", PAGE.index("function hlpOwner(ph){")) + 3]
+        code = """
+function Node(tag, cls, attrs) { this.tagName = tag; this.cls = (cls || "").split(" "); this.attrs = attrs || {}; this.parentElement = null; this.kids = [];
+  var self = this; this.classList = {contains: function (c) { return self.cls.indexOf(c) >= 0; }}; }
+Node.prototype.hasAttribute = function (a) { return a in this.attrs; };
+Object.defineProperty(Node.prototype, "previousElementSibling", {get: function () { if (!this.parentElement) return this.prev || null; var k = this.parentElement.kids, i = k.indexOf(this); return i > 0 ? k[i - 1] : null; }});
+function add(parent, child) { child.parentElement = parent; parent.kids.push(child); return child; }
+var card = new Node("DETAILS", "card");
+""" + src + build + "\nprint(r === null ? 'null' : r.tag);\n"
+        return run_js(code)
+
+    def test_text_right_after_a_heading_or_a_card_header_belongs_to_it(self):
+        self.assertEqual(self.owner("var h = add(card, new Node('DIV', 'sech')); h.tag = 'ueberschrift'; var p = add(card, new Node('DIV', 'ph')); var r = hlpOwner(p);"), "ueberschrift")
+        self.assertEqual(self.owner("var h = add(card, new Node('SUMMARY', '')); h.tag = 'kopf'; var p = add(card, new Node('DIV', 'ph')); var r = hlpOwner(p);"), "kopf")
+
+    def test_text_as_first_child_of_the_block_after_a_heading(self):
+        self.assertEqual(self.owner("var h = add(card, new Node('DIV', 'sech')); h.tag = 'ueberschrift'; var box = add(card, new Node('DIV', '')); var p = add(box, new Node('DIV', 'ph')); var r = hlpOwner(p);"),
+                         "ueberschrift")
+
+    def test_text_further_down_stays_visible(self):
+        self.assertEqual(self.owner("add(card, new Node('DIV', 'sech')); add(card, new Node('DIV', 'zeilen')); var p = add(card, new Node('DIV', 'ph')); var r = hlpOwner(p);"), "null")
+        self.assertEqual(self.owner("var p = add(card, new Node('DIV', 'ph')); var r = hlpOwner(p);"), "null")
+
+    def test_marked_text_finds_the_heading_before_it_even_further_down(self):
+        self.assertEqual(self.owner("var h = add(card, new Node('DIV', 'sech')); h.tag = 'ueberschrift'; add(card, new Node('DIV', 'zeilen')); add(card, new Node('FORM', '')); "
+                                    "var p = add(card, new Node('DIV', 'ph', {'data-hlp': ''})); var r = hlpOwner(p);"), "ueberschrift")
+        self.assertEqual(self.owner("var h = add(card, new Node('DIV', 'sech')); h.tag = 'ueberschrift'; var box = add(card, new Node('DIV', '')); add(box, new Node('DIV', 'zeilen')); "
+                                    "var p = add(box, new Node('DIV', 'ph', {'data-hlp': ''})); var r = hlpOwner(p);"), "ueberschrift")
+        self.assertEqual(self.owner("add(card, new Node('DIV', 'zeilen')); var p = add(card, new Node('DIV', 'ph', {'data-hlp': ''})); var r = hlpOwner(p);"), "null")
+
+
+class HelpTextMarkup(unittest.TestCase):
+    def test_messages_and_labelled_texts_are_never_hidden(self):
+        self.assertIn('const HLP_SEL=".card .ph:not([id]):not([role])";', PAGE)             # Meldungen haben eine Kennung oder role="status"
+
+    def test_only_on_phones(self):
+        self.assertRegex(PAGE, r"\.ibtn\{display:none\}")                                      # am Rechner kein "i", alle Texte sichtbar
+        phone = re.search(r"@media\(max-width:620px\)\{\.wform\{grid-template-columns:1fr\}.*?\.hlp:not\(\.open\)\{display:none\}\}", PAGE, re.S)
+        self.assertIsNotNone(phone)
+        self.assertIn(".ibtn{display:inline-block", phone.group(0))
+
+    def test_the_i_button_does_not_fold_the_card_and_is_labelled(self):
+        i = PAGE.index('document.addEventListener("click",e=>{\n    const b=e.target.closest&&e.target.closest(".ibtn")')
+        block = PAGE[i:PAGE.index("},true);", i)]
+        self.assertIn("e.preventDefault(); e.stopPropagation();", block)
+        self.assertIn('aria-expanded', block)
+        self.assertIn('Hilfe ausblenden', block)
+        self.assertIn('b.setAttribute("aria-label","Hilfe anzeigen")', PAGE)
+
+    def test_the_two_long_texts_without_a_heading_right_above_are_marked(self):
+        self.assertIn('<div class="ph" data-hlp>Die Kamera sendet an die angezeigte RTMP-Adresse.', PAGE)
+        self.assertIn('<div class="ph" data-hlp>Kamera einschalten und wach halten', PAGE)
 
 
 if __name__ == "__main__":

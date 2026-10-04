@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.80 (Beta)
+- Neu (Issue #21): **Hilfstexte auf dem Handy hinter einem "i"** (Breite bis 620 Pixel). Das "i" steht hinter der Überschrift (oder dem Kartennamen), ein Klick zeigt den Text, noch ein Klick blendet ihn aus. Meldungen und Warnungen bleiben sichtbar, am Rechner ändert sich nichts.
+- Geändert (Issue #22): Im Status stehen die Kästen jetzt in der Reihenfolge **Upload, Kameras, System**.
+- Tests in `tools/test_mobile.py` (27).
+
 ## 0.9.79 (Beta)
 - Neu (Issue #20): **Einstellungen sichern und einspielen** (Karte "Einstellungen sichern"), zum Beispiel nach dem Neu-Aufspielen der SD-Karte.
   - Dabei: Kameras, Bildaufbau, SRTLA-Server, automatischer Start, Namen der Sticks, DJI-Kameras (Einstellungen), Hotspots, gespeicherte WLAN-Netze. Nie dabei: Passwort der Oberfläche, SSH, Schlüssel. Nicht übertragbar: Bluetooth-Kopplung der DJI-Kameras, Unternehmens-WLANs.

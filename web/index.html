@@ -72,7 +72,11 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .wform select,.wform input{width:100%;height:38px;box-sizing:border-box}
 .bkform{grid-template-columns:1fr 1fr}
 .bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
-@media(max-width:620px){.wform{grid-template-columns:1fr}}
+.ibtn{display:none}
+@media(max-width:620px){.wform{grid-template-columns:1fr}
+  .ibtn{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+  .ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
+  .hlp:not(.open){display:none}}
 .wstat{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);margin-top:8px}
 .wstat .wdot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.wstat.ok .wdot{background:var(--ok)}
 .wstat.bad .wdot{background:var(--crit)}
@@ -279,6 +283,8 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   <details class="card wide" id="c_status" open><summary><span class="sumh">Status</span></summary>
     <div id="alerts"></div>
     <div class="statgrid">
+      <div class="statbox"><div class="sech">Upload (Verbindungen zum Senden)</div><div id="net"></div></div>
+      <div class="statbox"><div id="camlights"><div class="sech">Kameras</div></div></div>
       <div class="statbox"><div class="sech">System</div>
     <div class="row" style="padding-bottom:0"><span class="muted">CPU</span><span class="muted"><span id="cpumax"></span> · <span id="temp">–</span> °C</span></div>
     <div class="row" style="padding-top:0"><span class="big"><span id="cpu">–</span><span class="unit"> %</span></span></div>
@@ -288,8 +294,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="row" style="padding-top:0"><span class="big"><span id="mem">–</span><span class="unit"> % belegt</span></span></div>
     <div class="bar"><i id="membar" style="width:0"></i></div>
   </div>
-      <div class="statbox"><div id="camlights"><div class="sech">Kameras</div></div></div>
-      <div class="statbox"><div class="sech">Upload (Verbindungen zum Senden)</div><div id="net"></div></div>
     </div>
   </details>
 
@@ -302,7 +306,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button type="submit">Kamera hinzufügen</button>
     </form>
     <div id="formerr" class="err"></div>
-    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
+    <div class="ph" data-hlp>Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
     <div class="sech">Hauptverbindung</div>
     <div class="ph" style="margin-top:0">Gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung (Handy, Drohne, DJI-Kamera und so weiter). Eine andere Verbindung wählt man je Kamera in der Liste „RTMP-Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
     <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
@@ -313,7 +317,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="djicams"></div>
     <div class="actions"><button id="d_scan" type="button">Nach DJI-Kameras suchen</button><span id="djiscanning" class="muted" hidden></span></div>
     <div id="djiscan"></div>
-    <div class="ph">Kamera einschalten und wach halten, Kopplung an der Kamera bestätigen. Sie tritt dem gewählten WLAN bei und streamt zu dieser Box. Unterstützt: Osmo Action 3, 4, 5 Pro, 6, Osmo 360, Osmo Pocket 3 und 4. Welche Kamera Hauptbild oder Bild-in-Bild ist, wählen Sie in der Karte „Bildaufbau“.</div>
+    <div class="ph" data-hlp>Kamera einschalten und wach halten, Kopplung an der Kamera bestätigen. Sie tritt dem gewählten WLAN bei und streamt zu dieser Box. Unterstützt: Osmo Action 3, 4, 5 Pro, 6, Osmo 360, Osmo Pocket 3 und 4. Welche Kamera Hauptbild oder Bild-in-Bild ist, wählen Sie in der Karte „Bildaufbau“.</div>
     <div id="djierr" class="err"></div>
   </div>
   </details>
@@ -1828,6 +1832,36 @@ document.querySelectorAll('input[name="logmode"]').forEach(r=>r.addEventListener
 }));
 $("c_logs").addEventListener("toggle",()=>{ if($("c_logs").open) logLoad(); });
 logLoad();
+
+// Hilfstexte: auf dem Handy hinter einem "i" (Issue #21). Gemeint sind die festen Beschreibungen direkt unter einer Überschrift oder unter dem Kartenkopf.
+const HLP_SEL=".card .ph:not([id]):not([role])";
+function hlpOwner(ph){                                             // die Überschrift, zu der der Text gehört (sonst null: der Text bleibt sichtbar)
+  const isHead=e=>!!e&&(e.tagName==="SUMMARY"||(e.classList&&e.classList.contains("sech")));
+  if(ph.hasAttribute("data-hlp")){                                 // ausdrücklich gekennzeichnet: die nächste Überschrift davor in derselben Karte
+    for(let e=ph;e&&!(e.classList&&e.classList.contains("card"));e=e.parentElement)
+      for(let p=e.previousElementSibling;p;p=p.previousElementSibling) if(isHead(p)) return p;
+    return null;
+  }
+  let prev=ph.previousElementSibling;
+  if(!prev&&ph.parentElement&&ph.parentElement.tagName==="DIV") prev=ph.parentElement.previousElementSibling;
+  return isHead(prev)?prev:null;
+}
+(function(){
+  document.querySelectorAll(HLP_SEL).forEach(ph=>{
+    const head=hlpOwner(ph); if(!head) return;
+    const host=head.tagName==="SUMMARY"?(head.querySelector(".sumh")||head):head;
+    let b=host.querySelector(":scope>.ibtn");
+    if(!b){ b=document.createElement("button"); b.type="button"; b.className="ibtn"; b.textContent="i"; b.setAttribute("aria-expanded","false"); b.setAttribute("aria-label","Hilfe anzeigen"); b.title="Hilfe"; b._hlp=[]; host.appendChild(b); }
+    b._hlp.push(ph); ph.classList.add("hlp");
+  });
+  document.addEventListener("click",e=>{
+    const b=e.target.closest&&e.target.closest(".ibtn"); if(!b) return;
+    e.preventDefault(); e.stopPropagation();                      // im Kartenkopf nicht die Karte auf- oder zuklappen
+    const open=b.getAttribute("aria-expanded")!=="true";
+    b.setAttribute("aria-expanded",String(open)); b.setAttribute("aria-label",open?"Hilfe ausblenden":"Hilfe anzeigen");
+    (b._hlp||[]).forEach(p=>p.classList.toggle("open",open));
+  },true);
+})();
 
 // ---- Einstellungen sichern und einspielen (Karte "Einstellungen sichern", Issue #20) ----
 let bkDoc=null, bkInfo=null, bkSending=false, bkPw="";
