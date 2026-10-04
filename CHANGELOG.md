@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.9.24 (Beta)
+- Neu: **Mindestanteil je Sendeweg** bei der Verteilung "alle" (Schalter "Alle Leitungen gleichzeitig nutzen, auch langsamere"). Bisher bekam der beste Weg fast alles (bei einem Test zu Hause 94 %, die
+  beiden Mobilfunkwege 4 % und 2 %), und die schwächeren Wege waren nicht eingefahren, wenn der beste ausfiel. Jetzt bekommt jeder **geeignete** Weg (innerhalb des Laufzeitabstands, frische Messung,
+  freies Fenster) mindestens 10 Prozent der Pakete. Das gilt in beide Richtungen: schwächerer Mobilfunk neben gutem DSL ebenso wie schwächeres Starlink neben gutem 5G. Ein Weg außerhalb des
+  Laufzeitabstands oder mit vollem Fenster bekommt keinen Mindestanteil. Bei "beste" gilt nichts davon. Neu: `srtla/srtla_send-min-share.patch` (AGPL-3.0, zweiter Patch nach der Wegewahl),
+  `install.sh` baut den Sender neu, wenn ein Patch neuer ist (schlägt der Bau fehl, bleibt der bisherige). Der Sendedienst setzt `SRTLA_MIN_SHARE_PCT=10` nur bei "alle", die Änderung der Verteilung
+  gilt wie bisher nach dem nächsten "Live gehen".
+- Tests: Prüfprogramm `srtla/test_min_share.c` (Aufteilung 80/10/10 bei 10 Prozent, 100 Prozent beim besten Weg ohne Mindestanteil, Weg außerhalb des Abstands und Weg mit vollem Fenster ohne Anteil),
+  Zuordnung der Umgebungsvariable zur Verteilung "alle".
+
 ## 0.9.23 (Beta)
 - Geändert: Die Kameraliste zeigt den Zustand nur noch über die Farbe des Punktes (grün, gelb, rot, grau), der Text "im Bild" / "wartet noch ..." ist weg. Beim Darüberfahren (am Handy: langer Tipp)
   erscheint die Erklärung als Hinweis.

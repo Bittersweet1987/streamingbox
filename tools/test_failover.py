@@ -252,6 +252,15 @@ class WaitLeft(unittest.TestCase):
         self.assertTrue(0 < st["failover"]["wait"]["cam-p"] <= 60)
 
 
+
+class SrtlaEnv(unittest.TestCase):
+    def test_min_share_only_with_spread_all(self):
+        src = open(os.path.join(os.path.dirname(HERE), "pipbox_send.py"), encoding="utf-8").read()
+        self.assertIn('SRTLA_MIN_SHARE_PCT="10"', src)
+        # nur im Zweig der Verteilung "alle" (gleiche Zeile wie die 300 ms)
+        line = next(l for l in src.splitlines() if "SRTLA_MIN_SHARE_PCT" in l)
+        self.assertIn("SRTLA_LAT_MARGIN_MS", line)
+
 class SenderNote(unittest.TestCase):
     def test_stall_messages(self):
         s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"])

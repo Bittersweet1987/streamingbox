@@ -40,9 +40,9 @@ und liest das BELABOX-Passwort nur zur Anmeldeprüfung.
 
 ### SRTLA-Sender (AGPL-3.0)
 
-Der Ordner `srtla/` enthält einen Patch für `srtla_send.c` aus [BELABOX/srtla](https://github.com/BELABOX/srtla)
+Der Ordner `srtla/` enthält zwei Patches für `srtla_send.c` aus [BELABOX/srtla](https://github.com/BELABOX/srtla)
 (Commit 37862da, GNU Affero General Public License v3). Die Patches und das damit gebaute Programm stehen ebenfalls unter
-AGPL-3.0; der Quelltext ist der Upstream-Commit plus dieser Patch (siehe `srtla/README.md`). Das Original-Programm des
+AGPL-3.0; der Quelltext ist der Upstream-Commit plus diese Patches (siehe `srtla/README.md`). Das Original-Programm des
 BELABOX-Pakets bleibt unverändert unter `/usr/bin` liegen; der gepatchte Sender wird nach `/usr/local/bin` installiert.
 
 ### belacoder-Encoder mit tolerantem Regler und Stall-Wächter (GPL-3.0)

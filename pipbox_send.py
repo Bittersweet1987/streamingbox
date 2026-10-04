@@ -431,8 +431,8 @@ class Sender:
         env = dict(os.environ, GST_PLUGIN_PATH=PLUGIN_DIR)
         senv = None
         if self.plan.get("spread") == "all":
-            # Alle Wege gleichzeitig: auch Leitungen mit höherer Laufzeit mitnutzen (bis 300 ms schlechter als die beste)
-            senv = dict(os.environ, SRTLA_LAT_MARGIN_MS="300")
+            # Alle Wege gleichzeitig: auch Leitungen mit höherer Laufzeit mitnutzen (bis 300 ms schlechter als die beste); jeder geeignete Weg bekommt mindestens 10 Prozent der Pakete
+            senv = dict(os.environ, SRTLA_LAT_MARGIN_MS="300", SRTLA_MIN_SHARE_PCT="10")
         self.senv = senv
         self.spawn("srtla_send", self.args("srtla_send"), env=senv)
         self.write_status()          # Zustand "startet" sofort sichtbar machen

@@ -90,11 +90,15 @@ case "${1:-install}" in
     # Leitungen). Wird nur gebaut, wenn der Patch neuer ist; schlägt das fehl, bleibt der Original-Sender aktiv.
     install -d /opt/pipbox/srtla
     srtla_changed=0
-    cmp -s "$HERE/srtla/srtla_send-latency-aware.patch" /opt/pipbox/srtla/srtla_send-latency-aware.patch || srtla_changed=1
+    for sp in srtla_send-latency-aware.patch srtla_send-min-share.patch; do
+      cmp -s "$HERE/srtla/$sp" "/opt/pipbox/srtla/$sp" || srtla_changed=1
+    done
     [ -x /usr/local/bin/srtla_send ] || srtla_changed=1
     if [ "$srtla_changed" = 1 ]; then
       if sh "$HERE/srtla/build.sh"; then
-        install -m 644 "$HERE/srtla/srtla_send-latency-aware.patch" /opt/pipbox/srtla/srtla_send-latency-aware.patch
+        for sp in srtla_send-latency-aware.patch srtla_send-min-share.patch; do
+          install -m 644 "$HERE/srtla/$sp" "/opt/pipbox/srtla/$sp"
+        done
       else
         echo "WARNUNG: Der latenzbewusste Sender konnte nicht gebaut werden (braucht git, gcc, make, patch, Internet). Es bleibt der Original-Sender."
       fi

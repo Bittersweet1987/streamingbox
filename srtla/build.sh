@@ -1,5 +1,5 @@
 #!/bin/sh
-# Baut den latenzbewussten srtla_send (BELABOX/srtla, Commit 37862da, AGPL-3.0) mit dem Patch aus diesem Ordner.
+# Baut den latenzbewussten srtla_send (BELABOX/srtla, Commit 37862da, AGPL-3.0) mit den Patches aus diesem Ordner (latenzbewusste Wegewahl, Mindestanteil).
 # Braucht gcc, make, git, patch und Internet. Installiert nach /usr/local/bin/srtla_send (das Original aus dem
 # BELABOX-Paket bleibt unter /usr/bin unberührt und dient als Rückfall). Als root ausführen.
 # SRTLA_OUT=/anderer/Ordner installiert dorthin (zum Testen).
@@ -13,7 +13,8 @@ git clone --quiet https://github.com/BELABOX/srtla "$D/srtla"
 cd "$D/srtla"
 git checkout --quiet "$COMMIT"
 patch -p1 --quiet < "$HERE/srtla_send-latency-aware.patch"
-make srtla_send CFLAGS='-O2 -Wall -DVERSION=\"irl4you-lat-2+37862da\"' >/dev/null
+patch -p1 --quiet < "$HERE/srtla_send-min-share.patch"
+make srtla_send CFLAGS='-O2 -Wall -DVERSION=\"irl4you-lat-3+37862da\"' >/dev/null
 mkdir -p "$OUT"
 install -m 755 srtla_send "$OUT/srtla_send.new"
 mv -f "$OUT/srtla_send.new" "$OUT/srtla_send"      # ersetzen statt überschreiben: ein laufender Sender bleibt heil
