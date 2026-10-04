@@ -2234,10 +2234,20 @@ class SwUpdate:
         self.version = (read(os.path.join(here, "VERSION"), "") or "0.0.0").strip()
         self.fake = {}
 
+    CONTENTS = "https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/%s?ref=main"
+
     def _get(self, name, limit):
-        req = urllib.request.Request(self.RAW + name, headers={"User-Agent": "irl4you-box"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return r.read(limit + 1)[:limit].decode("utf-8", "replace")
+        """Eine Datei des Repositorys lesen. Zuerst über die API von GitHub (immer der aktuelle Stand), dann über raw.githubusercontent.com: Dort liegt
+        eine neue Version bis zu fünf Minuten im Zwischenspeicher, die Box zeigte kurz nach einer Veröffentlichung noch die vorherige Version als neueste."""
+        last = None
+        for url, extra in ((self.CONTENTS % name, {"Accept": "application/vnd.github.raw+json"}), (self.RAW + name, {})):
+            try:
+                req = urllib.request.Request(url, headers=dict(extra, **{"User-Agent": "irl4you-box"}))
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    return r.read(limit + 1)[:limit].decode("utf-8", "replace")
+            except OSError as e:                      # auch HTTP-Fehler (z. B. 403 bei erreichter Anfragegrenze): dann der nächste Weg
+                last = e
+        raise last
 
     @staticmethod
     def _first_section(text):
@@ -2282,6 +2292,8 @@ class SwUpdate:
         with self.lock:
             early = time.time() - self.started < self.EARLY_SECONDS
             wait = (self.RETRY_EARLY if early else self.RETRY_AFTER_ERROR) if self.cache and self.cache.get("error") else self.CHECK_EVERY
+            if self.cache and self.cache.get("stale"):
+                wait = self.RETRY_EARLY                    # die Antwort war älter als die installierte Version: bald noch einmal fragen
             if not force and self.cache and (time.time() - self.cache_t < wait or self.send._active()):
                 return self.cache
             if not force and not self.cache and not self.demo and self.send._active():
@@ -2295,6 +2307,10 @@ class SwUpdate:
                 if not VERSION_RE.match(v):
                     raise ValueError("ungültige Versionsnummer")
                 res["latest"] = v
+                if vkey(v) < vkey(self.version):
+                    # Die Antwort von GitHub ist älter als die installierte Version (veralteter Zwischenspeicher, kurz nach einer Veröffentlichung): Die
+                    # installierte Version ist dann die neueste, die wir kennen; nach wenigen Minuten wird noch einmal gefragt.
+                    res["latest"], res["stale"] = self.version, True
                 try:
                     res["notes"] = self._sections_since(self._get("CHANGELOG.md", 60000), self.version)
                 except OSError:

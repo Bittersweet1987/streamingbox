@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.65 (Beta)
+- Behoben: **Die Karte "Software-Update" zeigte nach einem Update "installiert 0.9.64" und "Neueste auf GitHub 0.9.63".** Die Box fragte die neueste Version über `raw.githubusercontent.com`; dort liegt eine neue Version bis zu fünf Minuten im Zwischenspeicher, und die Antwort blieb zusätzlich sechs Stunden gespeichert. Das Update selbst lädt immer den aktuellen Stand, deshalb passten Anzeige und Wirklichkeit nicht zusammen.
+  - **Frischer Stand:** Die Box fragt jetzt zuerst die **API von GitHub** (immer der aktuelle Stand) und nimmt `raw.githubusercontent.com` nur als Ersatz, etwa wenn die Anfragegrenze der API erreicht ist.
+  - **Nie älter als installiert:** Ist die Antwort trotzdem älter als die installierte Version, gilt die installierte Version als neueste (kein "neuer" Hinweis, keine Anzeige einer älteren "neuesten" Version), und nach etwa drei Minuten wird noch einmal gefragt, nicht erst nach sechs Stunden.
+- Tests: Antwort älter als die installierte Version, erneute Nachfrage nach der kurzen Wartezeit, normale Antworten bleiben stundenlang gespeichert, API zuerst und Rückfall auf raw.
+
 ## 0.9.64 (Beta)
 - Geändert (Issue #7): **Die Skalierung eines kleinen Bildes ist von 1 bis 100 % frei einstellbar** (vorher 15 bis 40 %). Das Feld heißt jetzt "Skalierung (%)" (nicht mehr "Größe (% der Breite)"); 100 % ist so groß wie das Hauptbild. Sehr große Bilder brauchen mehr Rechenleistung (Hinweis im Tooltip).
   - **Sehr kleine Bilder:** Der Hardware-Decoder der Box verkleinert nur bis etwa 1:16 (auf der Box gemessen: ab 120 Pixeln Breite geht es, darunter "No valid frames decoded"). Unter 128 Pixel Breite (etwa 6,7 %) verkleinert er deshalb auf 128 × 72 und eine Software-Stufe (`videoscale`) macht den Rest; bei dieser Größe kostet sie fast nichts. Mit dem echten Decoder und dem neuen Baustein geprüft (2 %-Bild mit Rahmen in der Ecke, 100 %-Bild füllt das Bild).

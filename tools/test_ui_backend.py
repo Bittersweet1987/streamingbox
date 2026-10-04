@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1759,6 +1760,96 @@ class AutoSystemCheck(unittest.TestCase):
             m.do_autocheck({"state": "never"})
         self.assertEqual((saved["state"], saved["available"], saved["mode"]), ("done", 7, "check"))
         self.assertIn("last_check", saved)
+
+
+class UpdateVersionCheck(unittest.TestCase):
+    """Die Karte "Software-Update" zeigte nach einem Update "installiert 0.9.64" und "neueste auf GitHub 0.9.63": Die Antwort kam aus einem veralteten
+    Zwischenspeicher (raw.githubusercontent.com hält eine neue Version bis zu fünf Minuten zurück)."""
+
+    def sw(self, version, answers):
+        send = mock.Mock(_active=lambda: False)
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, send)
+        sw.version = version
+        calls = []
+
+        def get(name, limit):
+            calls.append(name)
+            if name == "VERSION":
+                return answers.pop(0) if len(answers) > 1 else answers[0]
+            return "## 0.9.64 (Beta)\n- x\n"
+        return sw, calls, mock.patch.object(sw, "_get", get)
+
+    def test_latest_is_never_older_than_the_installed_version(self):
+        sw, calls, patch = self.sw("0.9.64", ["0.9.63\n"])
+        with patch:
+            st = sw.check(force=True)
+        self.assertEqual(st["latest"], "0.9.64")                 # nicht "0.9.63" neben "installiert 0.9.64"
+        self.assertTrue(st.get("stale"))
+        with patch:
+            out = sw.status()
+        self.assertEqual((out["current"], out["latest"], out["newer"]), ("0.9.64", "0.9.64", False))
+
+    def test_a_stale_answer_is_asked_again_soon_and_the_real_latest_shows_up(self):
+        sw, calls, patch = self.sw("0.9.64", ["0.9.63\n", "0.9.65\n"])
+        with patch:
+            sw.check(force=True)
+            n = len(calls)
+            sw.check()                                             # gerade erst gefragt: noch der gespeicherte Wert
+            self.assertEqual(len(calls), n)
+            sw.cache_t -= sw.RETRY_EARLY + 5                       # nach der kurzen Wartezeit (nicht erst nach sechs Stunden)
+            st = sw.check()
+        self.assertEqual(st["latest"], "0.9.65")
+        self.assertFalse(st.get("stale"))
+        self.assertTrue(server.vkey(st["latest"]) > server.vkey(sw.version))
+
+    def test_a_normal_answer_is_kept_for_hours(self):
+        sw, calls, patch = self.sw("0.9.60", ["0.9.64\n"])
+        with patch:
+            st = sw.check(force=True)
+            self.assertEqual((st["latest"], st.get("stale")), ("0.9.64", None))
+            sw.cache_t -= 3600
+            n = len(calls)
+            sw.check()
+        self.assertEqual(len(calls), n)
+
+    def test_files_come_from_the_github_api_first_and_from_raw_only_as_a_fallback(self):
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, mock.Mock(_active=lambda: False))
+        urls = []
+
+        class Resp:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self, n):
+                return self.body[:n]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def opener(req, timeout=0):
+            urls.append((req.full_url, req.headers.get("Accept")))
+            if "api.github.com" in req.full_url and opener.fail_api:
+                raise urllib.error.HTTPError(req.full_url, 403, "rate limit", {}, None)
+            return Resp(b"0.9.64\n")
+        opener.fail_api = False
+        with mock.patch.object(server.urllib.request, "urlopen", opener):
+            self.assertEqual(sw._get("VERSION", 64).strip(), "0.9.64")
+            self.assertEqual(urls[0][0], "https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/VERSION?ref=main")
+            self.assertEqual(urls[0][1], "application/vnd.github.raw+json")
+            self.assertEqual(len(urls), 1)
+            opener.fail_api = True                                   # Anfragegrenze erreicht: dann über raw
+            urls.clear()
+            self.assertEqual(sw._get("VERSION", 64).strip(), "0.9.64")
+            self.assertEqual([u for u, _ in urls], ["https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/VERSION?ref=main",
+                                                     "https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/VERSION"])
+            def fail_all(req, timeout=0):
+                raise urllib.error.URLError("kein Netz")
+            with mock.patch.object(server.urllib.request, "urlopen", fail_all):
+                with self.assertRaises(OSError):
+                    sw._get("VERSION", 64)
 
 
 class UpdateNotes(unittest.TestCase):
