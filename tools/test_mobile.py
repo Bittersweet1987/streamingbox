@@ -69,7 +69,7 @@ def run_js(code):
 
 
 def foot_source():
-    return PAGE[PAGE.index("const FIC=(()=>{"):PAGE.index("async function footAct(b,long){")]
+    return PAGE[PAGE.index("const FIC=(()=>{"):PAGE.index("async function footAct(b,long,dbl){")]
 
 
 STUBS = """
@@ -128,6 +128,19 @@ class FooterScripts(unittest.TestCase):
         self.assertIn("<span>Ton: Osmo</span>", r)
         self.assertEqual(r.count('data-kind="aud"'), 1)
 
+    def test_deactivated_camera_is_marked_and_never_green(self):
+        cams = [dict(c) for c in self.CAMS]
+        cams[2]["inactive"] = True
+        cams[2]["state"] = "live"
+        r = self.render({"cams": cams, "audio": {"key": "a", "name": "Osmo Action 4", "mute": False, "next": "pip"}})["html"]
+        mine = re.search(r'<button type="button" class="([^"]*)" data-kind="cam" data-key="c".*?data-inactive="(\d)"', r)
+        self.assertIn("off", mine.group(1).split())
+        self.assertEqual(mine.group(2), "1")
+        self.assertIn(".mf-cam.off.live{color:#e2e8f0}", PAGE)                                    # auch wenn sie sendet: nicht grün
+        self.assertIn(".mf-cam.off{opacity:.55;border-style:dashed}", PAGE)
+        others = re.findall(r'class="([^"]*)" data-kind="cam" data-key="(a|b)".*?data-inactive="(\d)"', r)
+        self.assertTrue(all("off" not in c.split() and i == "0" for c, k, i in others))
+
     def test_states_main_hidden_sending_and_muted_are_marked(self):
         r = self.render({"cams": self.CAMS, "audio": {"key": "b", "name": "iPhone hinten", "mute": True, "next": "pip2"}})["html"]
         btn = re.findall(r'<button type="button" class="([^"]*)" data-kind="cam" data-key="(\w)".*?data-slot="(\d)" data-main="(\d)" data-hidden="(\d)"', r)
@@ -164,7 +177,7 @@ class FooterBehaviour(unittest.TestCase):
         self.assertIn("touch-action:manipulation", PAGE)                                            # kein Zoomen durch Doppeltippen
 
     def test_requests_of_the_buttons(self):
-        i = PAGE.index("async function footAct(b,long){")
+        i = PAGE.index("async function footAct(b,long,dbl){")
         body = PAGE[i:PAGE.index("(function(){", i)]
         self.assertIn('"/api/pipeline/swap",{with:b.dataset.key}', body)                            # lang auf eine Kamera: Hauptbild tauschen
         self.assertIn('"/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}}', body)   # kurz: aus-/einblenden
@@ -173,8 +186,20 @@ class FooterBehaviour(unittest.TestCase):
         self.assertIn("Das Hauptbild lässt sich nicht ausblenden", body)
         self.assertIn("Stumm schalten geht nur während der Sendung.", body)
 
+    def test_double_tap_deactivates_and_a_single_tap_waits_for_it(self):
+        i = PAGE.index("let tapT=null, tapKey=\"\";")
+        block = PAGE[i:PAGE.index("});", PAGE.index("tapT=setTimeout", i)) + 3]
+        self.assertIn("footAct(b,false,true)", block)                                           # zweiter Tipp: deaktivieren
+        self.assertIn("setTimeout(()=>{ tapT=null; footAct(b,false); },300)", block)            # sonst nach 300 ms der kurze Tipp
+        self.assertIn('b.dataset.kind!=="cam"', block)                                          # der Ton-Knopf wartet nicht
+        j = PAGE.index("async function footAct(b,long,dbl){")
+        body = PAGE[j:PAGE.index("(function(){", j)]
+        self.assertIn('"/api/pipeline/active",{key:b.dataset.key,active:on}', body)
+        self.assertIn("Das Hauptbild lässt sich nicht deaktivieren.", body)
+        self.assertIn("on=b.dataset.inactive===\"1\"", body)
+
     def test_question_only_when_a_change_would_interrupt_the_picture(self):
-        i = PAGE.index("async function footAct(b,long){")
+        i = PAGE.index("async function footAct(b,long,dbl){")
         body = PAGE[i:PAGE.index("(function(){", i)]
         self.assertIn("d.active&&!seamlessTo(mainKey,b.dataset.key)&&!confirm(", body)             # Tausch ohne Unterbrechung geht ohne Frage
         self.assertIn("d.active&&!d.view_live&&!confirm(", body)                                    # ausblenden live: ohne Frage

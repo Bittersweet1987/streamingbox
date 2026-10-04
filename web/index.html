@@ -188,6 +188,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-cam.live{color:var(--ok)}
 .mf-cam.hid{color:var(--blue)}
 .mf-cam.ismain{border-color:var(--blue)}
+.mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:#e2e8f0}      /* deaktiviert: blass, gestrichelt, nie grün */
 .mf-aud{color:var(--text)}
 .mf-aud.muted{color:var(--crit);border-color:var(--crit)}
 .mf-msg{position:absolute;left:12px;right:12px;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
@@ -1407,7 +1408,7 @@ async function sendLoad(){
   $("live_go").disabled=!d.can_start;
   const why=[]; if(d.state==="refused"&&d.message) why.push(d.message);
   if(!d.active) why.push(...d.reasons);
-  if(d.active&&d.failover&&d.failover.waiting) why.push("Keine Kamera sendet, warte auf ein Signal");
+  if(d.active&&d.failover&&d.failover.waiting) why.push((d.failover.inactive||[]).length?"Keine aktive Kamera sendet, warte auf ein Signal":"Keine Kamera sendet, warte auf ein Signal");
   else if(d.active&&d.failover&&d.failover.degraded){ const nm=k=>(camsByKey[k]||{}).name||k; why.push("Notbetrieb: es senden "+d.failover.layout.map(nm).join(", ")+" (fehlende Kameras kommen nach 60 s stabilem Signal zurück)"); }
   if(d.active&&d.last&&d.last_age!=null&&d.last_age<180) why.push(d.last);      // alte Meldungen verschwinden von selbst
   if(d.active&&d.restarts){ const e=d.restarts.belacoder||0, n=d.restarts.srtla_send||0;
@@ -1474,7 +1475,8 @@ async function liveToggle(){                                       // Kopfleiste
 $("hdr_live").addEventListener("click",liveToggle);
 $("mf_live").addEventListener("click",liveToggle);
 // Fußleiste am Handy: Knöpfe für Kameras und Ton, nur bei der Art "Bild in Bild" (Issue #19)
-//   Kamera:  kurz = kleines Bild aus-/einblenden (blaues Symbol = ausgeblendet), lang = zur Hauptkamera machen (blauer Rahmen = Hauptbild); grün = sendet
+//   Kamera:  kurz = kleines Bild aus-/einblenden (blaues Symbol = ausgeblendet), lang = zur Hauptkamera machen (blauer Rahmen = Hauptbild), doppelt = deaktivieren
+//            (blass und gestrichelt: springt bei Ausfall nicht als Ersatz fürs Hauptbild ein); grün = sendet
 //   Ton:     kurz = nächste Tonspur (Haupt, Klein 1 bis 3, dann wieder Haupt), lang = diese Tonspur stumm (rot durchgestrichen) und wieder laut
 const FIC=(()=>{ const o='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">', x='<path d="M4 4l16 16"/></svg>';
   const cam='<path d="M3 8.5A2.5 2.5 0 0 1 5.5 6H8l1.5-2h5L16 6h2.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.6"/>',
@@ -1498,17 +1500,23 @@ function renderFoot(d){
   const L=camLabels(f.cams);
   const cams=f.cams.map(c=>{
     const full=c.name||c.key;
-    const tip=full+(c.main?" ist das Hauptbild (lässt sich nicht ausblenden).":(c.hidden?" ist ausgeblendet. Kurz drücken blendet das kleine Bild ein.":" ist als kleines Bild zu sehen. Kurz drücken blendet es aus.")+" Lang drücken macht es zum Hauptbild.");
-    return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
+    const tip=full+(c.main?" ist das Hauptbild (lässt sich nicht ausblenden).":(c.hidden?" ist ausgeblendet. Kurz drücken blendet das kleine Bild ein.":" ist als kleines Bild zu sehen. Kurz drücken blendet es aus.")+" Lang drücken macht es zum Hauptbild. Doppelt tippen: "+(c.inactive?"wieder aktivieren.":"deaktivieren (springt bei Ausfall nicht als Ersatz ein)."));
+    return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.inactive?" off":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" data-inactive="${c.inactive?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
   const a=f.audio||{}, an=a.name||a.key||"", atip="Ton von "+an+(a.mute?" (stumm). Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":". Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm.");
   const aud=`<button type="button" class="mf-t mf-aud${a.mute?" muted":""}" data-kind="aud" data-mute="${a.mute?1:0}" data-next="${esc(a.next||"main")}" title="${esc(atip)}" aria-label="${esc(atip)}">${a.mute?FIC.micoff:FIC.spk}<span>Ton: ${esc(L[a.key]||an)}</span></button>`;
   box.hidden=false; setHtml(box,cams+aud); sizeFoot();
 }
-async function footAct(b,long){
+async function footAct(b,long,dbl){
   const d=sendData||{}, f=d.footer||{cams:[]}, mainKey=(f.cams.find(c=>c.main)||{}).key;
   try{
     let r;
     if(b.dataset.kind==="cam"){
+      if(dbl){
+        if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht deaktivieren.");
+        const on=b.dataset.inactive==="1";
+        r=await srtlaCall("POST","/api/pipeline/active",{key:b.dataset.key,active:on});
+        return footMsg(on?"Aktiviert.":"Deaktiviert: springt bei Ausfall nicht als Ersatz ein.");
+      }
       if(long){
         if(b.dataset.main==="1") return footMsg("Das ist schon das Hauptbild.");
         if(d.active&&!seamlessTo(mainKey,b.dataset.key)&&!confirm("Hauptbild: "+b.dataset.label+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
@@ -1538,9 +1546,13 @@ async function footAct(b,long){
     timer=setTimeout(()=>{ timer=null; fired=true; try{ if(navigator.vibrate) navigator.vibrate(25); }catch(x){} footAct(b,true); },550); });
   box.addEventListener("pointermove",e=>{ if(timer&&Math.hypot(e.clientX-x0,e.clientY-y0)>12){ stop(); footBusy=false; } });
   ["pointerup","pointercancel"].forEach(n=>box.addEventListener(n,()=>{ stop(); if(!fired) setTimeout(()=>{ footBusy=false; },400); }));
+  let tapT=null, tapKey="";
   box.addEventListener("click",e=>{ const b=e.target.closest(".mf-t"); if(!b) return;
     if(fired){ fired=false; e.preventDefault(); return; }                  // dem langen Druck folgt ein Klick: ignorieren
-    footAct(b,false); });
+    if(b.dataset.kind!=="cam"){ footAct(b,false); return; }
+    if(tapT&&tapKey===b.dataset.key){ clearTimeout(tapT); tapT=null; footAct(b,false,true); return; }      // zweiter Tipp: deaktivieren oder aktivieren
+    clearTimeout(tapT); tapKey=b.dataset.key; footBusy=true;               // kurz warten, ob ein zweiter Tipp folgt
+    tapT=setTimeout(()=>{ tapT=null; footAct(b,false); },300); });
   box.addEventListener("contextmenu",e=>e.preventDefault());              // kein Auswahl- oder Kontextmenü beim langen Druck
 })();
 sendLoad(); setInterval(()=>{ if(!document.hidden) sendLoad(); },2000);

@@ -593,6 +593,136 @@ class FooterSwapEndpoint(Endpoint):
         self.assertEqual(json.loads(h.out.data)["note"], "Getauscht, ohne Unterbrechung.")
 
 
+class Deactivate(unittest.TestCase):
+    """Kamera deaktivieren (Issue #19): springt bei Ausfall des Hauptbildes nicht als Ersatz ein."""
+    def make(self, cfg=None):
+        d = tempfile.mkdtemp()
+        pipeline = server.PipelineStore(os.path.join(d, "pipeline.json"))
+        pipeline.set(dict(CFG), KEYS)
+        pipeline.cfg.update(cfg or {})
+        cams = mock.Mock()
+        cams.listing = lambda host: cam_listing()
+        srtla = mock.Mock(data={})
+        srtla.public = lambda: {"servers": [], "selected": None}
+        self.send = server.SendControl(d, srtla, pipeline, cams, demo=True)
+        self.pipeline = pipeline
+        for p in (mock.patch.object(server, "plugin_multi", lambda: True), mock.patch.object(server, "plugin_swap", lambda: True)):
+            p.start()
+            self.addCleanup(p.stop)
+        return pipeline
+
+    def req(self, pl, **kw):
+        return dict(pl.cfg, **kw)
+
+    def test_set_and_clear(self):
+        pl = self.make()
+        pl.set_active("cam-b", False)
+        pl.set_active("cam-d", False)
+        self.assertEqual(pl.cfg["inactive"], ["cam-b", "cam-d"])
+        self.assertEqual(json.load(open(pl.path))["inactive"], ["cam-b", "cam-d"])
+        pl.set_active("cam-b", False)                                                      # zweimal ist nicht doppelt
+        self.assertEqual(pl.cfg["inactive"], ["cam-d", "cam-b"])
+        pl.set_active("cam-d", True)
+        pl.set_active("cam-b", True)
+        self.assertNotIn("inactive", pl.cfg)                                               # leer: der Schlüssel fehlt
+        self.assertNotIn("inactive", json.load(open(pl.path)))
+
+    def test_refuses_what_makes_no_sense(self):
+        pl = self.make()
+        for key, active, msg in (("cam-a", False, "Hauptbild"), ("cam-x", False, "nicht im Bild"), ("../x", False, "ungültig"), (5, False, "ungültig"),
+                                 ("cam-b", "ja", "ungültig"), ("cam-b", None, "ungültig")):
+            with self.assertRaisesRegex(ValueError, msg):
+                pl.set_active(key, active)
+        with self.assertRaisesRegex(ValueError, "Bild-in-Bild"):
+            self.make(dict(type="single")).set_active("cam-b", False)
+
+    def test_the_form_keeps_the_flag_and_does_not_count_as_a_change(self):
+        pl = self.make()
+        pl.set_active("cam-c", False)
+        before = dict(pl.cfg)
+        pl.set(self.req(pl, size_pct=25), KEYS)                                            # das Formular schickt "inactive" nicht mit
+        self.assertEqual(pl.cfg["inactive"], ["cam-c"])
+        self.assertEqual({k: v for k, v in pl.cfg.items() if k != "styles"}, {k: v for k, v in before.items() if k != "styles"})
+
+    def test_a_camera_that_leaves_the_picture_loses_the_flag(self):
+        pl = self.make()
+        pl.set_active("cam-c", False)
+        req = self.req(pl, pip2="", pip3="", swap_cams=2)
+        req.pop("inactive")
+        pl.set(req, KEYS)
+        self.assertNotIn("inactive", pl.cfg)
+
+    def test_the_form_may_set_it_and_junk_is_dropped(self):
+        pl = self.make()
+        pl.set(self.req(pl, inactive=["cam-b", "cam-a", "cam-x", 5, "cam-b"]), KEYS)
+        self.assertEqual(pl.cfg["inactive"], ["cam-b"])                                    # Doppelte fallen weg, nur kleine Bilder zählen
+        self.assertNotIn("cam-a", pl.cfg["inactive"])                                      # das Hauptbild nie
+        pl.set(self.req(pl, inactive="cam-b"), KEYS)
+        self.assertNotIn("inactive", pl.cfg)
+
+    def test_a_swap_makes_the_new_main_camera_active(self):
+        pl = self.make()
+        pl.set_active("cam-b", False)
+        pl.set_active("cam-c", False)
+        pl.swap_main_pip("cam-b")
+        self.assertEqual((pl.cfg["main"], pl.cfg["inactive"]), ("cam-b", ["cam-c"]))
+        pl.swap_main_pip("cam-c")
+        self.assertNotIn("inactive", pl.cfg)
+
+    def test_safe_cfg_cleans_the_list(self):
+        for junk, want in ((["cam-b", "x y", 5, "cam-c", "cam-d", "cam-e"], ["cam-b", "cam-c", "cam-d"]), ("cam-b", []), (None, []), ({"cam-b": 1}, [])):
+            self.assertEqual(server.PipelineStore._safe_cfg(dict(CFG, inactive=junk))["inactive"], want, str(junk))
+        self.assertNotIn("inactive", server.PipelineStore._safe_cfg(dict(CFG)))
+
+    def test_footer_reports_it_for_small_pictures_only(self):
+        pl = self.make()
+        pl.set_active("cam-c", False)
+        f = self.send.footer()
+        self.assertEqual({c["key"]: c["inactive"] for c in f["cams"]}, {"cam-a": False, "cam-b": False, "cam-c": True, "cam-d": False})
+
+    def test_start_check_counts_only_cameras_that_may_step_in(self):
+        pl = self.make()
+        self.send.srtla.public = lambda: {"servers": [{"id": "x"}], "selected": "x"}
+        pl.set_active("cam-b", False)
+        pl.set_active("cam-c", False)
+        pl.set_active("cam-d", False)
+        self.send.cams.listing = lambda host: cam_listing({"cam-a": "offline", "cam-b": "live", "cam-c": "offline", "cam-d": "live"})
+        with mock.patch.object(server.os.path, "exists", lambda p: True):
+            self.assertEqual(self.send.reasons(), ["Es sendet nur eine deaktivierte Kamera"])
+            self.send.cams.listing = lambda host: cam_listing({"cam-a": "live", "cam-b": "offline", "cam-c": "offline", "cam-d": "offline"})
+            self.assertEqual(self.send.reasons(), [])
+            self.send.cams.listing = lambda host: cam_listing({k: "offline" for k in KEYS})
+            self.assertEqual(self.send.reasons(), ["Keine Kamera sendet gerade"])
+            pl.set_active("cam-d", True)
+            self.send.cams.listing = lambda host: cam_listing({"cam-a": "offline", "cam-d": "live", "cam-b": "offline", "cam-c": "offline"})
+            self.assertEqual(self.send.reasons(), [])
+
+    def test_export_and_import_carry_it(self):
+        pl = self.make()
+        pl.set_active("cam-c", False)
+        self.assertEqual(pl.cfg["inactive"], ["cam-c"])
+        other = server.PipelineStore(os.path.join(tempfile.mkdtemp(), "p.json"))
+        other.set(dict(pl.cfg), KEYS)
+        self.assertEqual(other.cfg["inactive"], ["cam-c"])
+
+
+class DeactivateEndpoint(Endpoint):
+    def test_toggle_over_http(self):
+        h = self.handler("/api/pipeline/active", {"key": "cam-b", "active": False})
+        h.do_POST()
+        self.assertEqual(h.sent, [200])
+        self.assertEqual(self.pipeline.cfg["inactive"], ["cam-b"])
+        h = self.handler("/api/pipeline/active", {"key": "cam-b", "active": True})
+        h.do_POST()
+        self.assertNotIn("inactive", self.pipeline.cfg)
+
+    def test_errors_are_400(self):
+        for body in ({"key": "cam-a", "active": False}, {"key": "cam-b"}, {"active": False}, {"key": "cam-b", "active": "nein"}, {"key": ["x"], "active": True}):
+            h = self.handler("/api/pipeline/active", body)
+            h.do_POST()
+            self.assertEqual(h.sent, [400], str(body))
+
+
 class PluginSource(unittest.TestCase):
     SRC = open(os.path.join(ROOT, "gst", "gstpbpip.c"), encoding="utf-8").read()
 

@@ -478,5 +478,121 @@ class CornerGate(unittest.TestCase):
                 self.assertEqual(len(server.pip_corners()), 6)                      # Baustein mit freier Position
 
 
+class InactiveCameras(unittest.TestCase):
+    """Deaktivierte Kameras (Issue #19): springen bei Ausfall des Hauptbildes nicht als Ersatz ein, bleiben aber kleine Bilder."""
+    OFF = dict(CFG, inactive=["cam-p"])
+
+    def test_nothing_changes_while_the_main_camera_is_there(self):
+        eff, used = ps.effective_cfg(self.OFF, ALL)
+        self.assertEqual((eff["main"], used), ("cam-m", ("cam-m", "cam-p", "cam-q")))
+        self.assertEqual((eff["pip"], eff["pip2"]), ("cam-p", "cam-q"))
+
+    def test_the_next_active_camera_becomes_main_and_the_inactive_one_stays_small(self):
+        eff, used = ps.effective_cfg(self.OFF, {"cam-p", "cam-q"})
+        self.assertEqual((eff["main"], eff["pip"], used), ("cam-q", "cam-p", ("cam-q", "cam-p")))
+        self.assertEqual((eff["main_delay_ms"], eff["pip_delay_ms"]), (250, 120))             # die Verzögerung folgt der Kamera
+
+    def test_only_an_inactive_camera_left_means_nothing_is_sent(self):
+        self.assertEqual(ps.effective_cfg(self.OFF, {"cam-p"}), (None, ()))
+        self.assertEqual(ps.effective_cfg(self.OFF, {"cam-m"})[1], ("cam-m",))
+
+    def test_without_the_flag_the_old_behaviour_stays(self):
+        self.assertEqual(ps.effective_cfg(CFG, {"cam-p"})[1], ("cam-p",))
+        for junk in (None, [], [5], "cam-p", {"cam-p": 1}, 7):                              # nur eine Liste von Schlüsseln zählt
+            self.assertEqual(ps.effective_cfg(dict(CFG, inactive=junk), {"cam-p"})[1], ("cam-p",), str(junk))
+
+    def test_a_main_camera_chosen_by_hand_is_never_skipped(self):
+        cfg = dict(CFG, main="cam-p", pip="cam-m", inactive=["cam-p"])                    # der Nutzer hat die Kamera von Hand zum Hauptbild gemacht
+        self.assertEqual(ps.effective_cfg(cfg, ALL)[0]["main"], "cam-p")
+
+    def test_failover_does_not_promote_an_inactive_camera(self):
+        fo = ps.Failover(self.OFF, ps.effective_cfg(self.OFF, ALL)[1])
+        self.assertIsNone(fo.step(0, ALL))
+        live = {"cam-p", "cam-q"}                                                          # die Hauptkamera fällt aus
+        self.assertIsNone(fo.step(1, live))
+        self.assertEqual(fo.step(6, live), ("cam-q", "cam-p"))                             # cam-q wird Hauptbild, nicht cam-p
+        only = {"cam-p"}                                                                   # nun fällt auch cam-q aus: cam-p darf nicht Hauptbild werden
+        self.assertIsNone(fo.step(7, only))
+        self.assertEqual(fo.step(12, only), ())
+
+    def test_when_only_inactive_cameras_send_the_chain_waits(self):
+        fo = ps.Failover(self.OFF, ps.effective_cfg(self.OFF, ALL)[1])
+        fo.step(0, ALL)
+        fo.step(1, {"cam-p"})
+        self.assertEqual(fo.step(6, {"cam-p"}), ())                                        # warten statt eine deaktivierte Kamera als Hauptbild zu senden
+
+    def test_the_main_camera_comes_back_after_60_seconds_as_usual(self):
+        fo = ps.Failover(self.OFF, ps.effective_cfg(self.OFF, ALL)[1])
+        fo.step(0, ALL)
+        fo.step(1, {"cam-p", "cam-q"})
+        self.assertEqual(fo.step(6, {"cam-p", "cam-q"}), ("cam-q", "cam-p"))
+        self.assertIsNone(fo.step(7, ALL))
+        self.assertIsNone(fo.step(66, ALL))
+        self.assertEqual(fo.step(67, ALL), ("cam-m", "cam-p", "cam-q"))
+
+
+class InactiveSender(PrepareWithFailover):
+    def write_cfg(self, **kw):
+        super().write_cfg(**kw)
+
+    def sender(self, live=None, **kw):
+        self.write_cfg(**kw)
+        with mock.patch.object(ps, "live_keys", lambda: live):
+            *_, plan = ps.prepare()
+        return ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+
+    def test_start_refuses_when_only_an_inactive_camera_sends(self):
+        self.write_cfg(inactive=["cam-p"], main="cam-m")
+        with mock.patch.object(ps, "live_keys", lambda: {"cam-p"}):
+            with self.assertRaisesRegex(ps.Refuse, "nur eine deaktivierte Kamera"):
+                ps.prepare()
+        with mock.patch.object(ps, "live_keys", lambda: set()):
+            with self.assertRaisesRegex(ps.Refuse, "Keine Kamera sendet"):
+                ps.prepare()
+
+    def test_start_without_main_uses_the_next_active_camera(self):
+        s = self.sender(live={"cam-p", "cam-q"}, inactive=["cam-p"])
+        self.assertEqual(s.layout, ("cam-q", "cam-p"))
+
+    def test_the_change_is_picked_up_while_sending_without_a_restart(self):
+        import json
+        s = self.sender(live=ALL)
+        s.refresh_inactive()
+        path = os.path.join(self.state, "pipeline.json")
+        json.dump(dict(CFG, inactive=["cam-p"]), open(path, "w"))
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        self.assertTrue(s.refresh_inactive())
+        self.assertEqual(s.plan["cfg"]["inactive"], ["cam-p"])
+        self.assertIs(s.fo.cfg, s.plan["cfg"])
+        self.assertFalse(s.refresh_inactive())                                              # nichts Neues
+        json.dump(CFG, open(path, "w"))
+        os.utime(path, (time.time() + 10, time.time() + 10))
+        self.assertTrue(s.refresh_inactive())
+        self.assertNotIn("inactive", s.plan["cfg"])
+
+    def test_junk_in_the_file_is_ignored(self):
+        import json
+        s = self.sender(live=ALL)
+        path = os.path.join(self.state, "pipeline.json")
+        json.dump(dict(CFG, inactive=["../x", 5, "cam-q"]), open(path, "w"))
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        s.refresh_inactive()
+        self.assertEqual(s.plan["cfg"]["inactive"], ["cam-q"])
+
+    def test_without_automatic_switching_there_is_nothing_to_refresh(self):
+        s = self.sender(live=ALL, auto_failover=False)
+        self.assertIsNone(s.fo)
+        self.assertFalse(s.refresh_inactive())
+
+    def test_status_names_the_inactive_cameras(self):
+        import json
+        s = self.sender(live=ALL, inactive=["cam-q"])
+        run_dir = os.path.join(self.tmp, "run")
+        with mock.patch.object(ps, "RUN", run_dir), mock.patch.object(ps, "STATUS", os.path.join(run_dir, "status.json")):
+            s.write_status()
+            st = json.load(open(os.path.join(run_dir, "status.json")))
+        self.assertEqual(st["failover"]["inactive"], ["cam-q"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

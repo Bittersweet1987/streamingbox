@@ -134,6 +134,14 @@ def effective_cfg(cfg, use):
     ks = [k for k in configured_keys(cfg) if k in use]
     if not ks:
         return None, ()
+    # Eine deaktivierte Kamera springt nicht als Ersatz fürs Hauptbild ein (Issue #19): Hauptbild ist die eingestellte Hauptkamera, wenn sie da ist,
+    # sonst die erste Kamera, die nicht deaktiviert ist. Deaktivierte Kameras bleiben als kleine Bilder, solange sie senden.
+    ina = cfg.get("inactive")
+    off = {k for k in ina if isinstance(k, str)} if isinstance(ina, list) else set()
+    main = next((k for k in ks if k == cfg.get("main") or k not in off), None)
+    if main is None:
+        return None, ()
+    ks = [main] + [k for k in ks if k != main]
     delay = {}
     for key, name in (("main", "main_delay_ms"), ("pip", "pip_delay_ms"), ("pip2", "pip2_delay_ms"), ("pip3", "pip3_delay_ms")):
         if cfg.get(key):
@@ -306,7 +314,7 @@ def prepare():
     if auto and live is not None:
         eff, used = effective_cfg(cfg, live)
         if eff is None:
-            raise Refuse("Keine Kamera sendet gerade an die Box")
+            raise Refuse("Es sendet nur eine deaktivierte Kamera an die Box" if live else "Keine Kamera sendet gerade an die Box")
     else:
         eff, used = cfg, tuple(keys)
         for key in keys:
@@ -339,6 +347,7 @@ class Sender:
         self.senv = None
         self._ups_t = 0
         self._cfg_mt = None
+        self._inact_mt = None
         self.stats = collections.deque(maxlen=STATS_KEEP)    # (Zeit, Zeile)
         self.links = collections.deque(maxlen=300)           # Zustandszeilen der Wegewahl (srtla_send "links: ...")
         self.stop_ev = threading.Event()
@@ -427,7 +436,7 @@ class Sender:
                     "applied": self.plan.get("sig")}
         if self.fo is not None:
             keys = configured_keys(self.plan["cfg"])
-            data["failover"] = {"auto": True, "layout": list(self.layout), "configured": keys,
+            data["failover"] = {"auto": True, "layout": list(self.layout), "configured": keys, "inactive": list(self.plan["cfg"].get("inactive") or []),
                                 "waiting": self.waiting, "degraded": self.waiting or set(self.layout) != set(keys),
                                 "wait": self.fo.wait_left(time.time())}
         if extra:
@@ -536,6 +545,7 @@ class Sender:
                         self.state = "running"
             try:
                 self.sync_cfg()
+                self.refresh_inactive()
             except Exception as e:           # eine kaputte Datei darf die Übertragung nie beenden
                 print(f"send: Einstellung konnte nicht nachgeführt werden ({type(e).__name__})", flush=True)
             try:
@@ -548,6 +558,28 @@ class Sender:
             self.flush_stats()
             self.stop_ev.wait(2)
         self.shutdown()
+
+    def refresh_inactive(self):
+        """Wurde in der Oberfläche eine Kamera deaktiviert oder wieder aktiviert, gilt das sofort für die automatische Umschaltung, ohne Neustart der Sendung."""
+        if self.fo is None:
+            return False
+        try:
+            mt = os.stat(f"{STATE}/pipeline.json").st_mtime_ns
+        except OSError:
+            return False
+        if mt == self._inact_mt:
+            return False
+        self._inact_mt = mt
+        new = [k for k in (load_json(f"{STATE}/pipeline.json").get("inactive") or []) if isinstance(k, str) and server.KEY_RE.match(k)][:3]
+        if sorted(new) == sorted(self.plan["cfg"].get("inactive") or []):
+            return False
+        if new:
+            self.plan["cfg"]["inactive"] = new
+        else:
+            self.plan["cfg"].pop("inactive", None)
+        self.fo.cfg = self.plan["cfg"]
+        print("send: deaktivierte Kameras geändert: " + (", ".join(new) or "keine"), flush=True)
+        return True
 
     def sync_cfg(self):
         """Nach einem Tausch ohne Neustart hat sich pipeline.json geändert, die Kameras sind dieselben: die Einstellung der automatischen

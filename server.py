@@ -817,6 +817,12 @@ class PipelineStore:
             dk = self.SLOT_DELAY[slot]
             c["main"], c[slot] = c[slot], c["main"]
             c["main_delay_ms"], c[dk] = c.get(dk, 0), c.get("main_delay_ms", 0)
+            if c.get("inactive"):                                                    # die Hauptkamera ist nie deaktiviert
+                rest = [k for k in c["inactive"] if k != c["main"]]
+                if rest:
+                    c["inactive"] = rest
+                else:
+                    c.pop("inactive")
             # "Ausgeblendet" gehört zur Kamera: die bisherige Hauptkamera war sichtbar, also ist ihr kleines Bild nach dem Tausch sichtbar
             styles = clean_styles(c.get("styles"))
             idx = STYLE_SLOTS[list(self.SLOT_DELAY).index(slot)]
@@ -905,8 +911,34 @@ class PipelineStore:
                 cfg["pip3_delay_ms"] = 0
             if cfg["audio"] == "pip2" and not cfg["pip2"] or cfg["audio"] == "pip3" and not cfg["pip3"]:
                 raise ValueError("Ton: dieses kleine Bild ist nicht gewählt")
+        pips = {cfg.get(k) for k in ("pip", "pip2", "pip3")} - {""}
+        old = req.get("inactive") if "inactive" in req else self.cfg.get("inactive", [])
+        inactive = list(dict.fromkeys(k for k in (old if isinstance(old, list) else []) if isinstance(k, str) and k in pips))[:3]
+        if t == "pip" and inactive:                                                 # deaktivierte Kameras (Issue #19); ohne sie fehlt der Schlüssel
+            cfg["inactive"] = inactive
         with self.lock:
             self.cfg = cfg
+            self.save()
+
+    def set_active(self, key, active):
+        """Eine Kamera deaktivieren (sie springt bei Ausfall des Hauptbildes nicht als Ersatz ein) oder wieder aktivieren. Nur kleine Bilder."""
+        if not isinstance(active, bool) or not isinstance(key, str) or not KEY_RE.match(key):
+            raise ValueError("Kamera oder Zustand ungültig")
+        with self.lock:
+            c = self.cfg
+            if c.get("type") != "pip":
+                raise ValueError("Das gibt es nur bei der Art Bild-in-Bild")
+            if key == c.get("main"):
+                raise ValueError("Das Hauptbild lässt sich nicht deaktivieren")
+            if key not in (c.get("pip"), c.get("pip2"), c.get("pip3")):
+                raise ValueError("Diese Kamera ist nicht im Bild")
+            cur = [k for k in (c.get("inactive") or []) if k != key]
+            if not active:
+                cur.append(key)
+            if cur:
+                c["inactive"] = cur
+            else:
+                c.pop("inactive", None)
             self.save()
 
     @classmethod
@@ -937,6 +969,9 @@ class PipelineStore:
             out["swap_cams"] = 0
         out["type"] = "pip" if out.get("type") == "pip" else "single"
         out["styles"] = clean_styles(out.get("styles"))
+        if "inactive" in out:
+            ina = out["inactive"]
+            out["inactive"] = [k for k in ina if isinstance(k, str) and KEY_RE.match(k)][:3] if isinstance(ina, list) else []
         return out
 
     @classmethod
@@ -1304,9 +1339,10 @@ class SendControl:
             live = {c["key"]: c.get("state") for c in self.cams.listing("")}
             keys = [k for k in (cfg["main"], cfg.get("pip", ""), cfg.get("pip2", ""), cfg.get("pip3", "")) if k]
             if cfg.get("auto_failover", True) and len(set(keys)) > 1:
-                # Automatisch umschalten: es genügt, wenn mindestens eine Kamera sendet
-                if not any(live.get(k) == "live" for k in keys):
-                    r.append("Keine Kamera sendet gerade")
+                # Automatisch umschalten: es genügt, wenn mindestens eine Kamera sendet (eine deaktivierte nur, wenn sie das Hauptbild ist)
+                off = set(cfg.get("inactive") or [])
+                if not any(live.get(k) == "live" for k in keys if k == cfg["main"] or k not in off):
+                    r.append("Es sendet nur eine deaktivierte Kamera" if any(live.get(k) == "live" for k in keys) else "Keine Kamera sendet gerade")
             else:
                 for k in sorted(set(keys)):
                     if live.get(k) != "live":
@@ -1477,7 +1513,8 @@ class SendControl:
         listed = {x["key"]: x for x in self.cams.listing("")}
         keys = [k for k in listed if k in slot_of] + [k for k in slot_of if k not in listed]
         cams = [{"key": k, "name": (listed.get(k) or {}).get("name") or k, "state": (listed.get(k) or {}).get("state", "unknown"),
-                 "slot": slot_of[k], "main": slot_of[k] == 0, "hidden": slot_of[k] > 0 and bool(hide >> (slot_of[k] - 1) & 1)} for k in keys]
+                 "slot": slot_of[k], "main": slot_of[k] == 0, "hidden": slot_of[k] > 0 and bool(hide >> (slot_of[k] - 1) & 1),
+                 "inactive": slot_of[k] > 0 and k in (c.get("inactive") or [])} for k in keys]
         options = [k for k in order if place[k]]
         aud_key = place[src]
         return {"cams": cams,
@@ -4366,6 +4403,9 @@ class Handler(BaseHTTPRequestHandler):
                 if "visible" not in d and "audio" not in d and "mute" not in d:
                     raise ValueError("Nichts zu ändern")
                 return self.reply(200, dict(self.send.change_view(d.get("visible"), d.get("audio"), d.get("mute")), ok=True))
+            if path == "/api/pipeline/active":
+                self.pipeline.set_active(d.get("key"), d.get("active"))
+                return self.reply(200, {"ok": True})
             if path == "/api/pipeline/swap":
                 with_key = d.get("with")
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
