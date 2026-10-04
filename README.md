@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.65 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.66 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -102,7 +102,10 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Ampel für die Sendewege** (Kasten "Upload" in der Karte "Status"): **Grün** = der Weg trägt Pakete, **Gelb** = verbunden, aber in Reserve (Laufzeit zu hoch oder unruhig), **Rot** = nicht verbunden oder kein Netz, **Grau** = keine Sendung.
 - **Stabile Bitrate über gebündelte Mobilfunkleitungen:** Der Encoder bekommt einen toleranteren Regler (kleiner Patch auf BELABOX/belacoder, siehe
   `belacoder/README.md`), damit die Bitrate nach einer kurzen Überlast wieder hochkommt, und einen Stall-Wächter, der nur den Ausgang prüft (ein kurzer Aussetzer einer kleinen Kamera beendet die Sendung nicht mehr). Auch die Einstellungen des Empfängers (SRT-Latenz, Umordnungstoleranz) beeinflussen die Bitrate.
-- **Protokolle, in zwei Stufen** (Karte "Protokolle: Speicherkarte schonen"). *Sparsam* (Standard bei neuen Installationen): Journal
+- **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
+  oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
+  trotzdem kurz durchsehen).
+- **Protokolle, in zwei Stufen** (Karte "Protokolle"). *Sparsam* (Standard bei neuen Installationen): Journal
   und Zustandsprotokoll nur im Arbeitsspeicher, die Speicherkarte wird geschont, nach einem Absturz oder Stromausfall bleibt aber
   keine Spur. *Ausführlich* (zur Fehlersuche): Journal dauerhaft (30 MB/7 Tage) und Zustandsprotokoll
   (`/var/log/pipbox-health.log`, alle 10 Sekunden, höchstens 4 MB), damit nach einem Totalausfall sichtbar bleibt, was kurz
@@ -124,7 +127,7 @@ DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. 
 
 ## Bluetooth-Stick für die DJI-Kameras
 
-Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB-Stick besser. Der Abschnitt "Bluetooth" in der Karte "Netze zum Senden und WLAN" zeigt, welche Bluetooth-Sticks laufen (mit Name und USB-Kennung), ob ein Treiber gerade eingerichtet wird, und meldet einen Stick, aus dem der Kernel keinen Adapter macht (nicht unterstützt oder ohne Treiber).
+Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB-Stick besser. Der Abschnitt "Bluetooth" in der Karte "Verbindungen" zeigt, welche Bluetooth-Sticks laufen (mit Name und USB-Kennung), ob ein Treiber gerade eingerichtet wird, und meldet einen Stick, aus dem der Kernel keinen Adapter macht (nicht unterstützt oder ohne Treiber).
 
 | Stick | Chip | Stand |
 |---|---|---|

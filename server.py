@@ -2206,6 +2206,82 @@ class LogMode:
             f.write(mode + "\n")
 
 
+class LogBundle:
+    """Protokolle zum Herunterladen: eine einzige Textdatei mit den Journalen der IRL4YOU-Dienste, dem Zustandsprotokoll und
+    den Einstellungen, von Passwörtern, Stream-ID, WLAN-Namen und Adressen bereinigt. Dieser Dienst hat keine Root-Rechte und
+    kann die Journale nicht lesen: er legt nur das Stichwort "collect" in eine Auslösedatei, der Root-Helfer pipbox-logs.py
+    sammelt und legt das Ergebnis nach /run/pipbox-logs (nur root darf dort schreiben)."""
+    DIR = "/run/pipbox-logs"
+    FILE = DIR + "/bundle.txt"
+    STATUS = DIR + "/status.json"
+    HELPER = "/etc/systemd/system/pipbox-logs.path"
+    MAX_BYTES = 4_000_000
+    WAIT_SECONDS = 150                 # so lange darf das Sammeln dauern, bevor der Helfer als nicht erreichbar gilt
+
+    def __init__(self, state_dir, demo):
+        self.req = os.path.join(state_dir, "logs-request")
+        self.demo = demo
+        self.requested = 0.0
+        self.fake = None
+
+    def installed(self):
+        return self.demo or os.path.exists(self.HELPER)
+
+    def status(self):
+        out = {"helper_installed": self.installed(), "state": "idle", "message": "", "size": 0}
+        if self.demo:
+            if self.fake:
+                out.update(state="done", message="Fertig", size=len(self.fake.encode()), time=int(self.requested))
+            return out
+        try:
+            with open(self.STATUS) as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            st = None
+        waiting = self.requested and time.time() - self.requested < self.WAIT_SECONDS
+        if not isinstance(st, dict) or (self.requested and int(st.get("time", 0) or 0) < int(self.requested)):
+            # Der Helfer hat sich zu dieser Anfrage noch nicht gemeldet: ein altes Ergebnis zählt nicht
+            if self.requested:
+                out["state"], out["message"] = ("working", "Warte auf den Helfer …") if waiting else ("error", "Keine Antwort vom Helfer")
+            return out
+        state = st.get("state") if st.get("state") in ("working", "done", "error") else "error"
+        out.update(state=state, message=str(st.get("message", ""))[:200], time=int(st.get("time", 0) or 0))
+        if state == "done":
+            try:
+                out["size"] = os.stat(self.FILE).st_size
+            except OSError:
+                out["state"], out["message"] = "error", "Datei fehlt"
+        elif state == "working" and not waiting:
+            out["state"], out["message"] = "error", "Zeitüberschreitung beim Sammeln"
+        return out
+
+    def request(self):
+        if not self.installed():
+            raise ValueError("Der Helfer ist nicht installiert (Software-Update einspielen oder install.sh erneut ausführen)")
+        if self.status()["state"] == "working" and time.time() - self.requested < self.WAIT_SECONDS:
+            return                                            # läuft schon
+        self.requested = time.time()
+        if self.demo:
+            self.fake = ("IRL4YOU BOX Protokolle (Vorschau)\n\n===== Journal pipbox-dji =====\n"
+                         "2026-10-04T17:21:22+0000 INFO pipbox-dji: <MAC-1 AC:DE:48>: Statusnachricht\n")
+            return
+        fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("collect\n")
+
+    def content(self):
+        """Inhalt der fertigen Datei oder None."""
+        if self.demo:
+            return self.fake.encode() if self.fake else None
+        if self.status()["state"] != "done":
+            return None
+        try:
+            with open(self.FILE, "rb") as f:
+                return f.read(self.MAX_BYTES)
+        except OSError:
+            return None
+
+
 class SwUpdate:
     """Software-Update von IRL4YOU BOX aus dem eigenen GitHub-Repository.
 
@@ -2907,9 +2983,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("ungültige Länge")
         return json.loads(self.rfile.read(min(n, 4096)) or b"{}")
 
-    def send_bytes(self, code, body, ctype, cookie=None):
+    def send_bytes(self, code, body, ctype, cookie=None, headers=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -2962,6 +3040,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, m)
         if path == "/api/logmode":
             return self.reply(200, self.logmode.status())
+        if path == "/api/logs":
+            return self.reply(200, self.logbundle.status())
+        if path == "/api/logs/file":
+            body = self.logbundle.content()
+            if body is None:
+                return self.reply(404, {"error": "Es liegt noch keine fertige Protokolldatei vor"})
+            return self.send_bytes(200, body, "text/plain; charset=utf-8",
+                                   headers={"Content-Disposition": 'attachment; filename="irl4you-protokolle.txt"'})
         if path == "/api/power":
             return self.reply(200, self.power.status())
         if path == "/api/wifi":
@@ -3028,6 +3114,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logmode":
                 self.logmode.request(d.get("mode"))
                 return self.reply(200, {"ok": True})
+            if path == "/api/logs":
+                if d.get("action") != "collect":
+                    raise ValueError("Unbekannte Aktion")
+                self.logbundle.request()
+                return self.reply(200, self.logbundle.status())
             if path == "/api/wifi":
                 self.wifi.request(d)
                 return self.reply(200, {"ok": True})
@@ -3156,6 +3247,7 @@ def main():
     Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
+    Handler.logbundle = LogBundle(args.state, args.demo)
     Handler.autostart = AutoStart(args.state, Handler.send, args.demo)
     if not args.demo:
         threading.Thread(target=Handler.autostart.run, daemon=True).start()
