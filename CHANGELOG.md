@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.43 (Beta)
+- Neu: **Die Oberfläche zeigt, welcher Bluetooth-Adapter für die DJI-Kameras läuft, und erkennt Sticks, aus denen der Kernel keinen Adapter macht.** Unter der Kartenüberschrift "DJI-Kameras (Bluetooth)" steht jetzt der laufende Adapter (USB-Kennung); steckt ein Stick, der keinen
+  Adapter ergibt, steht dort der Grund, und die Suche meldet statt "Kein Bluetooth-Adapter gefunden" den Hinweis. Erkannt wird über `/sys` (Schnittstellenklasse Bluetooth oder Hersteller Barrot), nur lesend.
+- Bluetooth-Sticks (Ergebnis einer Recherche, noch nicht mit den Sticks selbst geprüft): Der TP-Link UB500 hat denselben Chip wie der getestete ASUS USB-BT500 (Realtek RTL8761B/BUV) und sollte wie dieser über die allgemeine Bluetooth-Klasse laufen. Die UGREEN-Sticks "Bluetooth 5.4" und "6.0" (Modell CM748)
+  enthalten einen **BARROT**-Chip (`33fa:0010`/`33fa:0012`), den der Kernel 5.10 der BELABOX nicht unterstützt: Der Chip bleibt bei der Einrichtung hängen, es entsteht kein Adapter. Laut Berichten ist das erst in Linux 6.18 (und den Langzeitzweigen 6.12.58, 6.6.117) behoben. Ein eigener Kernel-Treiber wird bewusst nicht
+  mitgeliefert: Ein Fehler darin könnte die ganze Box abstürzen lassen, und der nötige Teil des Kernels (`hci_core`) lässt sich ohne Neubau des Kernels nicht ändern. Die README nennt die geprüften und die ungeeigneten Sticks.
+- Tests: Erkennung aus einem nachgestellten `/sys`-Baum, Zuordnung Adapter und Stick, Hinweise.
+
 ## 0.9.42 (Beta)
 - Behoben: **System-Updates scheiterten nach einem unterbrochenen Paketlauf** mit "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem" (Meldung eines Nutzers; typisch nach Stromausfall, Neustart oder abgebrochenem Update mitten im Paketlauf).
   Der Update-Helfer erkennt jetzt die Reste eines unterbrochenen Laufs (Dateien in `/var/lib/dpkg/updates` oder halb eingerichtete Pakete laut `dpkg --audit`), schließt ihn vor dem Update mit `dpkg --configure -a` und `apt-get -f install` ab und macht dann mit dem Update weiter.

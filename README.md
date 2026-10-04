@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.42 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.43 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -117,6 +117,18 @@ DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. 
   laufen nur durch, ohne dass etwas neu startet.
 - **Ampeln:** In der Karte "Status" zeigt die Ampel der Kameras, ob eine Kamera im Bild ist (grün), gerade wieder aufgenommen wird (gelb) oder fehlt (rot). Die Ampel der Sendewege zeigt, welcher Weg trägt (grün),
   in Reserve steht (gelb) oder fehlt (rot).
+
+## Bluetooth-Stick für die DJI-Kameras
+
+Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB-Stick besser. Die Karte "DJI-Kameras (Bluetooth)" zeigt, welcher Adapter läuft, und meldet einen Stick, aus dem der Kernel keinen Adapter macht.
+
+| Stick | Chip | Stand |
+|---|---|---|
+| ASUS USB-BT500 (`0b05:190e`) | Realtek RTL8761B | **getestet**, läuft auf der Orange Pi 5 Plus |
+| TP-Link UB500 (`2357:0604`) | Realtek RTL8761BUV | gleicher Chip, sollte wie der ASUS laufen; die Firmware `rtl8761bu_fw.bin` liegt im System bereit. **Noch nicht an der Box geprüft** |
+| UGREEN Bluetooth 5.4 und 6.0 (CM748, `33fa:0010`/`33fa:0012`) | BARROT BR8654/BR8554 | **geht auf dem Kernel 5.10 der BELABOX nicht**: der Chip bleibt bei der Einrichtung hängen, es entsteht kein Adapter. Laut Berichten ist das erst ab Linux 6.18 (und den Langzeitzweigen ab 6.12.58 und 6.6.117) behoben. Die Oberfläche erkennt diesen Stick und sagt es |
+
+Ein eigener Kernel-Treiber wird nicht mitgeliefert: Der nötige Teil sitzt im Kernel selbst, und ein Fehler in einem nachgeladenen Treiber kann die ganze Box zum Absturz bringen. Wer einen anderen Stick prüfen möchte: Stick einstecken und in der Karte nachsehen, ob ein Adapter erscheint.
 
 ## Was noch fehlt oder ungetestet ist
 

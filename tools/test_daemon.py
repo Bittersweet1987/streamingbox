@@ -123,5 +123,77 @@ class ConnectionLock(unittest.TestCase):
             d._acquire_conn("B", stop)
 
 
+class BluetoothSticks(unittest.TestCase):
+    """Erkennung von Bluetooth-Sticks über /sys und verständliche Hinweise (ohne Bluetooth, ohne Hardware)."""
+
+    def usb(self, devs):
+        """Baut einen nachgestellten /sys/bus/usb/devices-Baum: devs = [(Ordner, vid, pid, Name, (Klasse, Unterklasse, Protokoll) oder None, Treiber)]."""
+        root = tempfile.mkdtemp()
+        for name, vid, pid, product, cls, drv in devs:
+            d = os.path.join(root, name)
+            os.makedirs(d)
+            for fn, val in (("idVendor", vid), ("idProduct", pid), ("product", product)):
+                with open(os.path.join(d, fn), "w") as f:
+                    f.write(val + "\n")
+            if cls:
+                i = os.path.join(d, name + ":1.0")
+                os.makedirs(i)
+                for fn, val in zip(("bInterfaceClass", "bInterfaceSubClass", "bInterfaceProtocol"), cls):
+                    with open(os.path.join(i, fn), "w") as f:
+                        f.write(val + "\n")
+                if drv:
+                    target = os.path.join(root, "drivers", drv)
+                    os.makedirs(target, exist_ok=True)
+                    os.symlink(target, os.path.join(i, "driver"))
+        return root
+
+    def test_finds_bluetooth_class_devices_and_barrot(self):
+        root = self.usb([("5-1.4", "0b05", "190E", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
+                         ("2-1", "0bda", "c811", "802.11ac NIC", ("ff", "ff", "ff"), "rtl8821cu"),
+                         ("5-1.2", "33FA", "0010", "BARROT Bluetooth 5.4 Adapter", ("e0", "01", "01"), None),
+                         ("5-1.3", "33fa", "0001", "BRTLink", ("08", "06", "50"), None)])
+        found = {d["id"]: d for d in dji.usb_bluetooth_devices(root)}
+        self.assertEqual(sorted(found), ["0b05:190e", "33fa:0001", "33fa:0010"])      # das WLAN-Gerät fehlt
+        self.assertEqual(found["0b05:190e"]["driver"], "btusb")
+        self.assertEqual(found["33fa:0010"]["driver"], "")
+        self.assertEqual(found["0b05:190e"]["name"], "ASUS USB-BT500")
+
+    def test_missing_sysfs_is_harmless(self):
+        self.assertEqual(dji.usb_bluetooth_devices("/nonexistent/usb"), [])
+
+    def test_modalias_to_usb_id(self):
+        self.assertEqual(dji.usb_id_from_modalias("usb:v0B05p190Ed0200"), "0b05:190e")
+        self.assertEqual(dji.usb_id_from_modalias("pci:xyz"), "")
+        self.assertEqual(dji.usb_id_from_modalias(None), "")
+
+    def test_working_stick_is_no_problem_and_barrot_gets_the_explanation(self):
+        devs = [{"id": "0b05:190e", "name": "ASUS USB-BT500", "driver": "btusb"},
+                {"id": "33fa:0010", "name": "BARROT Bluetooth 5.4 Adapter", "driver": ""}]
+        prob = dji.adapter_problems(["0b05:190e"], devs)
+        self.assertEqual([p["id"] for p in prob], ["33fa:0010"])
+        self.assertIn("BARROT", prob[0]["hint"])
+        self.assertIn("TP-Link UB500", prob[0]["hint"])
+        self.assertEqual(dji.adapter_problems(["0b05:190e", "33fa:0010"], devs), [])
+
+    def test_unknown_stick_without_adapter_gets_a_generic_hint(self):
+        prob = dji.adapter_problems([], [{"id": "1234:abcd", "name": "Mein Stick", "driver": "btusb"}])
+        self.assertIn("Mein Stick", prob[0]["hint"])
+        self.assertIn("1234:abcd", prob[0]["hint"])
+        self.assertNotIn("BARROT", prob[0]["hint"])
+
+    def test_status_carries_adapters_and_problems(self):
+        d = dji.Dji.__new__(dji.Dji)
+        d.lock = threading.Lock()
+        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
+        d.adapter_paths = lambda: ["/org/bluez/hci0"]
+        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v0B05p190Ed0200", "Address": "AA:BB", "Powered": True}}}
+        root = self.usb([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
+                         ("5-1.2", "33fa", "0010", "BARROT Bluetooth 5.4 Adapter", ("e0", "01", "01"), None)])
+        with mock.patch.object(dji, "SYSFS_USB", root):
+            st = d.status()
+        self.assertEqual(st["adapters"][0]["usb_id"], "0b05:190e")
+        self.assertEqual([p["id"] for p in st["adapter_problems"]], ["33fa:0010"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
