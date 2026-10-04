@@ -107,6 +107,9 @@ PY
     install -m 755 "$HERE/install/pipbox-logs.py" /opt/pipbox/pipbox-logs.py
     install -m 644 "$HERE/install/pipbox-logs.service" /etc/systemd/system/pipbox-logs.service
     install -m 644 "$HERE/install/pipbox-logs.path" /etc/systemd/system/pipbox-logs.path
+    install -m 755 "$HERE/install/pipbox-ssh.py" /opt/pipbox/pipbox-ssh.py
+    install -m 644 "$HERE/install/pipbox-ssh.service" /etc/systemd/system/pipbox-ssh.service
+    install -m 644 "$HERE/install/pipbox-ssh.path" /etc/systemd/system/pipbox-ssh.path
     # Protokoll-Modus: Boxen mit dem früheren dauerhaften Journal bleiben "ausfuehrlich", neue Installationen starten "sparsam"
     # (Journal und Zustandsprotokoll nur im Arbeitsspeicher, schont die Speicherkarte). Umschalten in der Oberfläche.
     install -d /etc/pipbox
@@ -185,15 +188,15 @@ PY
     # ließe die Kamera etwa eine Minute lang keine Verbindung annehmen.
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-btdriver.timer
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer
     systemctl restart pipbox.service
     systemctl start --no-block pipbox-btdriver.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
   uninstall)
     [ -x /opt/pipbox/pipbox-btdriver.py ] && python3 /opt/pipbox/pipbox-btdriver.py uninstall || true     # eingespieltes Bluetooth-Modul entfernen (Standardmodul gilt nach dem nächsten Neustart)
-    systemctl disable --now pipbox-btdriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-health.service pipbox.service pipbox-dji.service || true
-    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/udev/rules.d/80-pipbox-btdriver.rules
+    systemctl disable --now pipbox-btdriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service || true
+    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/udev/rules.d/80-pipbox-btdriver.rules
     rm -f /etc/apt/apt.conf.d/99pipbox-nginx
     NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
     if [ -f "$NGX.vor-pipbox" ]; then

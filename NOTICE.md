@@ -101,3 +101,10 @@ Das Passwort wird nur an `nmcli` übergeben und von diesem Projekt nicht gespeic
 Bedienkonzept und Wertebereiche für Beschnitt in Pixeln, Rahmen (Dicke, Farbe, Deckkraft, Eckenrundung), Deckkraft je kleinem Bild und das
 Ein-/Ausblenden folgen der Anregung von Bittersweet1987 (Issue und Erweiterung in seinem Projekt, MIT-Lizenz). Die Umsetzung ist eigen: Der
 Zeichenkern in `gst/gstpbpip.c` und die Oberfläche wurden für den Baustein dieser Software neu geschrieben, Programmcode wurde nicht übernommen.
+
+## Original-Oberfläche der BELABOX (AGPL-3.0)
+
+IRL4YOU BOX läuft neben der Original-Oberfläche der BELABOX (belaUI) und verändert sie nicht. Aus ihr wird **kein Quelltext** verwendet. Die Karte
+"Entwickler" liest nur zwei Einstellungsdateien dieser Oberfläche (`setup.json`: Name des SSH-Benutzers, `config.json`: ob ein SSH-Passwort erzeugt
+wurde und welches) und schaltet den SSH-Dienst des Systems (`systemctl start/stop ssh`) mit eigenem Code; das Passwort erzeugt weiterhin die
+Original-Oberfläche. Auch das BELABOX-Passwort wird nur zum Anmelden mitbenutzt.

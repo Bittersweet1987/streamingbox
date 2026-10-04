@@ -251,6 +251,10 @@ def ttl_cached(key, ttl, fn):
     return val
 
 
+def ttl_cached_drop(key):
+    _TTL.pop(key, None)
+
+
 def iface_ips():
     """IPv4-Adressen der Netzwerkschnittstellen, 3 s zwischengespeichert (jede Abfrage startete sonst `ip`)."""
     return [dict(x) for x in ttl_cached("iface_ips", 3.0, _iface_ips_raw)]
@@ -2403,6 +2407,113 @@ class LogBundle:
             return None
 
 
+class Developer:
+    """Entwickler: den SSH-Dienst der Box ein- und ausschalten (wie die Original-Oberfläche der BELABOX). Dieser Dienst hat keine Root-Rechte: er
+    legt nur ein Stichwort aus fester Liste in eine Auslösedatei, der Root-Helfer pipbox-ssh.py schaltet den Dienst. Passwörter, Schlüssel und die
+    Einstellungen von SSH fasst weder dieser Dienst noch der Helfer an; ein Passwort erzeugt die Original-Oberfläche. Von deren Dateien wird nur
+    gelesen, wie der SSH-Benutzer heißt und ob dort ein Passwort erzeugt wurde (das Passwort selbst wird nie gelesen oder ausgegeben)."""
+    ACTIONS = ("start", "stop", "check")
+    STATUS = "/run/pipbox-ssh/status.json"
+    HELPER = "/etc/systemd/system/pipbox-ssh.path"
+    USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+
+    def __init__(self, state_dir, demo, bela_config=None):
+        self.req = os.path.join(state_dir, "ssh-request")
+        self.demo = demo
+        self.bela_dir = os.path.dirname(os.path.abspath(bela_config)) if bela_config else None
+        self.fake_active = False
+        self.fake_pass = "Demo-Passwort-1234"
+        self.fake_time = 0
+
+    def _json(self, name):
+        if not self.bela_dir:
+            return None
+        try:
+            with open(os.path.join(self.bela_dir, name)) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
+
+    def ssh_user(self):
+        u = (self._json("setup.json") or {}).get("ssh_user")
+        return u if isinstance(u, str) and self.USER_RE.fullmatch(u) else ""
+
+    def password_created(self):
+        """Hat die Original-Oberfläche ein SSH-Passwort erzeugt? None, wenn es sie auf dieser Box nicht gibt. Nur das Vorhandensein wird geprüft."""
+        c = self._json("config.json")
+        return None if c is None else bool(c.get("ssh_pass"))
+
+    @staticmethod
+    def _has_unit():
+        try:
+            return subprocess.run(["systemctl", "cat", "ssh.service"], capture_output=True, timeout=4).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    @staticmethod
+    def _systemctl(*args):
+        try:
+            r = subprocess.run(["systemctl", *args, "ssh"], capture_output=True, text=True, timeout=4)
+            return r.returncode, r.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, ""
+
+    def status(self):
+        if self.demo:
+            return {"helper_installed": True, "available": True, "user": "user", "active": self.fake_active, "enabled": True,
+                    "password_created": bool(self.fake_pass), "password_state": "generated" if self.fake_pass else "unknown",
+                    "state": "idle", "message": "", "time": self.fake_time}
+        try:
+            with open(self.STATUS) as f:
+                h = json.load(f)
+        except (OSError, ValueError):
+            h = {}
+        has_unit = ttl_cached("ssh_unit", 30.0, self._has_unit)
+        active = ttl_cached("ssh_active", 2.0, lambda: self._systemctl("is-active")[1] == "active")
+        enabled = ttl_cached("ssh_enabled", 30.0, lambda: self._systemctl("is-enabled")[1] == "enabled")
+        return {"helper_installed": os.path.exists(self.HELPER), "available": bool(has_unit), "user": self.ssh_user(), "active": active, "enabled": enabled,
+                "password_created": self.password_created(),
+                "password_state": h.get("password_state") if h.get("password_state") in ("generated", "own", "unknown") else None,
+                "state": h.get("state", "idle"), "message": str(h.get("message", ""))[:200], "time": h.get("time", 0)}
+
+    def request(self, action, confirm):
+        if action not in self.ACTIONS:
+            raise ValueError("Unbekannte Aktion")
+        st = self.status()
+        if not st["helper_installed"]:
+            raise ValueError("Der Helfer ist nicht installiert (Software-Update einspielen oder install.sh erneut ausführen)")
+        if not st["available"]:
+            raise ValueError("Auf dieser Box gibt es keinen SSH-Dienst")
+        if st["state"] == "working" and time.time() - st.get("time", 0) < 60:
+            raise ValueError("Es läuft schon eine Aktion")
+        if action == "start" and st["password_created"] is not True and confirm is not True:
+            raise ValueError("Bestätigung fehlt: Für SSH wurde noch kein neues Passwort erzeugt")
+        if self.demo:
+            self.fake_time += 1
+            if action != "check":
+                self.fake_active = action == "start"
+            return
+        ttl_cached_drop("ssh_active")
+        fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(action + "\n")
+
+    def password(self):
+        """Das SSH-Passwort, das die Original-Oberfläche erzeugt hat (nur für die angemeldete Oberfläche, auf Knopfdruck). Es wird hier nie erzeugt
+        oder geändert."""
+        if self.demo:
+            if not self.fake_pass:
+                raise ValueError("Für SSH wurde noch kein Passwort erzeugt")
+            return {"user": "user", "password": self.fake_pass, "state": "generated"}
+        c = self._json("config.json")
+        pw = c.get("ssh_pass") if c else None
+        if not isinstance(pw, str) or not pw:
+            raise ValueError("Für SSH wurde noch kein Passwort erzeugt. Das geht in der Original-Oberfläche der BELABOX (Bereich Advanced / developer, "
+                             "Knopf Reset).")
+        return {"user": self.ssh_user(), "password": pw, "state": self.status().get("password_state")}
+
+
 class SwUpdate:
     """Software-Update von IRL4YOU BOX aus dem eigenen GitHub-Repository.
 
@@ -3163,6 +3274,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.logmode.status())
         if path == "/api/logs":
             return self.reply(200, self.logbundle.status())
+        if path == "/api/developer":
+            return self.reply(200, self.developer.status())
+        if path == "/api/developer/password":
+            try:
+                return self.reply(200, self.developer.password())
+            except ValueError as e:
+                return self.reply(404, {"error": str(e)})
         if path == "/api/logs/file":
             body = self.logbundle.content()
             if body is None:
@@ -3241,6 +3359,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logmode":
                 self.logmode.request(d.get("mode"))
                 return self.reply(200, {"ok": True})
+            if path == "/api/developer":
+                self.developer.request(d.get("action"), d.get("confirm") is True)
+                return self.reply(200, self.developer.status())
             if path == "/api/logs":
                 if d.get("action") != "collect":
                     raise ValueError("Unbekannte Aktion")
@@ -3375,6 +3496,7 @@ def main():
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
     Handler.logbundle = LogBundle(args.state, args.demo)
+    Handler.developer = Developer(args.state, args.demo, args.bela_config or None)
     Handler.autostart = AutoStart(args.state, Handler.send, args.demo)
     if not args.demo:
         threading.Thread(target=Handler.autostart.run, daemon=True).start()
