@@ -388,6 +388,13 @@ function setHtml(el,html){ if(el.dataset.h===html) return; el.dataset.h=html; el
 let camsByKey={};
 const camDotCls=c=>"dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
 const camDotTitle=c=>c.state!=="live"?(c.state==="unknown"?"Status unbekannt":"Kein Signal"):(c.pic==="an"?"Sendet und ist im Bild":(c.pic==="wartet"?`Sendet, kommt in ${c.pic_wait} s ins Bild`:(c.pic==="aus"?"Sendet, ist noch nicht im Bild":"Sendet")));
+function upDot(u){
+  if(!u) return '<span class="dot unk" title="Nicht in Betrieb (keine Sendung)"></span>';
+  const rtt=u.srtt==null?"":`, Laufzeit ${u.srtt} ms`;
+  if(u.state==="an") return `<span class="dot" title="Wird genutzt${rtt}"></span>`;
+  if(u.state==="reserve") return `<span class="dot wait" title="In Reserve${rtt} (Laufzeit zu hoch oder unruhig, es werden kaum Pakete gesendet)"></span>`;
+  return '<span class="dot off" title="Nicht verbunden oder kein Netz"></span>';
+}
 function renderCamLights(list){
   setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
@@ -1063,7 +1070,7 @@ async function tick(){
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
     }
     let netHtml=nets.map(([n,r])=>
-      `<div class="row"><span>${esc(n)}</span><span><b>${fmt(r.tx_mbit)}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(r.rx_mbit)} ↓</span></div>`).join("");
+      `<div class="row"><span>${upDot(m.uplinks&&m.uplinks[n])}${esc(n)}</span><span><b>${fmt(r.tx_mbit)}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(r.rx_mbit)} ↓</span></div>`).join("");
     if(nets.length>1){   // Summe über alle verbundenen Netzwerkkarten (Ethernet, WLAN, USB/Mobilfunk)
       const sum=k=>nets.reduce((a,[n,r])=>a+(+r[k]||0),0);
       netHtml+=`<div class="row" style="border-top:1px solid var(--line);margin-top:4px;padding-top:6px"><span><b>Summe</b> <span class="unit">(${nets.length} ${nets.length===1?"Netz":"Netze"})</span></span><span><b>${fmt(sum("tx_mbit"))}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(sum("rx_mbit"))} ↓</span></div>`;

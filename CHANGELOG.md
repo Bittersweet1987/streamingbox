@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.30 (Beta)
+- Neu: **Ampel für die Sendewege** im Kasten "Upload" der Karte "Status". Der Punkt vor jedem Netz zeigt: **grün** = der Weg trägt Pakete, **gelb** = verbunden, aber in Reserve (Laufzeit zu hoch oder zu unruhig, der Sender nutzt ihn kaum),
+  **rot** = nicht verbunden oder kein Netz (zum Beispiel ein ausgefallenes WLAN), **grau** = keine Sendung. Beim Darüberfahren steht die Laufzeit. Die Daten stammen aus der Datei, die der Sender ohnehin alle paar Sekunden schreibt;
+  der Server liest sie nur, das kostet praktisch keine Rechenleistung.
+- Tests: Zuordnung "genutzt/Reserve/aus", veraltete und fehlende Datei.
+
 ## 0.9.29 (Beta)
 - Geändert: Im Kasten "System" der Karte "Status" ist der Abstand zwischen der Beschriftung und der großen Zahl (CPU und Arbeitsspeicher) kleiner. Auch die Zahlen sind etwas kleiner (24 statt 26 Pixel) und die Zeilen enger. Der Kasten ist dadurch rund 13 Prozent niedriger und passt besser zu den Kästen "Kameras" und "Upload". Die Zeilen der Kameras haben jetzt dieselben Abstände und dieselbe Schrift wie die Zeilen unter "Upload".
 

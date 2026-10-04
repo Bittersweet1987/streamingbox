@@ -548,5 +548,36 @@ class PendingSettings(unittest.TestCase):
             self.assertIsNone(sc.picture())              # keine Automatik: keine Aussage
 
 
+class UplinkLights(unittest.TestCase):
+    LINES = ("10:00:01 links: 10.0.0.2 srtt=45ms var=3 peak=60 guete=70 genutzt in_flight=4 pkts_5s=800\n"
+             "10:00:01 links: 10.0.1.2 srtt=250ms var=200 peak=800 guete=1000 reserve in_flight=0 pkts_5s=0\n"
+             "10:00:06 links: 10.0.0.2 srtt=40ms var=3 peak=60 guete=70 genutzt in_flight=4 pkts_5s=900\n"
+             "10:00:06 links: 10.0.1.2 srtt=-1ms var=200 peak=800 guete=-1 reserve in_flight=0 pkts_5s=0\n")
+
+    def run_states(self, selected, age=0, lines=None):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "srtla-links.txt")
+        with open(path, "w") as f:
+            f.write(self.LINES if lines is None else lines)
+        t = time.time() - age
+        os.utime(path, (t, t))
+        ifs = [{"iface": "eth2", "ip": "10.0.0.2"}, {"iface": "wlan0", "ip": "10.0.1.2"}]
+        with mock.patch.object(server, "LINKS_FILE", path), mock.patch.object(server, "iface_ips", lambda: ifs):
+            return server.uplink_states(selected)
+
+    def test_used_reserve_and_missing(self):
+        r = self.run_states(["eth2", "wlan0", "eth0"])
+        self.assertEqual(r["eth2"], {"state": "an", "srtt": 40})
+        self.assertEqual(r["wlan0"], {"state": "reserve", "srtt": None})      # -1 ms = keine frische Messung
+        self.assertEqual(r["eth0"], {"state": "aus", "srtt": None})          # ausgewählt, aber nicht verbunden
+
+    def test_stale_file_means_no_lights(self):
+        self.assertEqual(self.run_states(["eth2"], age=60), {})
+
+    def test_missing_file_means_no_lights(self):
+        with mock.patch.object(server, "LINKS_FILE", "/nonexistent/links.txt"):
+            self.assertEqual(server.uplink_states(["eth2"]), {})
+
+
 if __name__ == "__main__":
     unittest.main()

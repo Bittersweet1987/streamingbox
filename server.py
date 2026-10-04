@@ -275,6 +275,37 @@ def _iface_ips_raw():
     return out
 
 
+LINKS_FILE = "/run/pipbox-send/srtla-links.txt"
+
+
+def uplink_states(selected):
+    """Ampel je Sendeweg aus der Datei des Senders (alle paar Sekunden eine Zeile je Weg): {Schnittstelle: {"state", "srtt"}}.
+    "an" = der Weg trägt Pakete, "reserve" = verbunden, wird aber nicht genutzt (Laufzeit zu hoch oder zu unruhig), "aus" = nicht
+    verbunden oder ohne Netz. Leeres Ergebnis, wenn keine frischen Daten da sind (Sendung aus)."""
+    try:
+        if time.time() - os.stat(LINKS_FILE).st_mtime > 20:
+            return {}
+        with open(LINKS_FILE) as f:
+            lines = f.readlines()[-60:]
+    except OSError:
+        return {}
+    last = {}
+    for ln in lines:
+        m = re.match(r"\S+ links: (\S+) srtt=(-?\d+)ms .*? (genutzt|reserve) ", ln)
+        if m:
+            last[m.group(1)] = (int(m.group(2)), m.group(3))
+    by_ip = {o["ip"]: o["iface"] for o in iface_ips()}
+    seen = {by_ip[ip]: v for ip, v in last.items() if ip in by_ip}
+    out = {}
+    for n in selected:
+        v = seen.get(n)
+        if v is None:
+            out[n] = {"state": "aus", "srtt": None}
+        else:
+            out[n] = {"state": "an" if v[1] == "genutzt" else "reserve", "srtt": v[0] if v[0] >= 0 else None}
+    return out
+
+
 class NetChoice:
     """Welches Netzwerk die Kameras zur Box nutzen (bestimmt die RTMP-Adresse)."""
 
@@ -2149,6 +2180,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metrics":
             m = self.sampler.sample()
             m["cameras"] = self.cams.listing(self.host())
+            m["uplinks"] = uplink_states(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
             pic = self.send.picture()
             for c in m["cameras"]:
                 p = pic.get(c["key"]) if pic else None
