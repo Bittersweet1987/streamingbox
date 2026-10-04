@@ -1073,9 +1073,14 @@ class HeaderControls(unittest.TestCase):
         self.assertNotIn("updlink", self.html)
 
     def test_status_cameras_show_the_battery_in_its_own_centered_column_with_a_heading(self):
-        self.assertIn('<div class="hrow"><span></span><span>Akku</span><span></span></div>', self.html)
-        self.assertIn("grid-template-columns:minmax(0,1fr) auto auto", self.html)          # Breiten nach dem Inhalt, der Name bekommt den Rest
+        # "Akku" steht in derselben Zeile und Schrift wie "Kameras" (beides class="sech"), mittig über seiner Spalte
+        self.assertIn("""'<div class="hrow"><div class="sech">Kameras</div>'+(any&&list.length?'<div class="sech mid">Akku</div><div class="sech">&nbsp;</div>':"")""", self.html)
+        self.assertIn('<div id="camlights"><div class="sech">Kameras</div></div>', self.html)    # die Überschrift steht im Raster, nicht davor
+        self.assertIn("#camlights .hrow .mid{text-align:center", self.html)
         self.assertIn("#camlights .battcell{text-align:center", self.html)
+        # feste Breiten der beiden rechten Spalten: Akku und Zahlen rutschen nicht hin und her, wenn sich Werte ändern
+        self.assertIn("grid-template-columns:minmax(0,1fr) 4.3em 5.4em", self.html)
+        self.assertIn("font-variant-numeric:tabular-nums", self.html[self.html.index("#camlights.hasbatt .row>span:last-child"):][:200])
         self.assertIn("text-overflow:ellipsis", self.html[self.html.index("#camlights .row .nm"):][:200])    # langer Name wird gekürzt
         self.assertIn("const any=list.some(c=>c.battery!=null)", self.html)               # ohne Akkustand keine Spalte
 

@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.56 (Beta)
+- Geändert: **Akku-Spalte in "Status, Kameras" wackelt nicht mehr und kollidiert nicht mehr mit den Zahlen.** Akku und Datenrate haben jetzt feste Spaltenbreiten (Ziffern gleich breit), sodass sich nichts verschiebt, wenn das Ladesymbol erscheint, der Akkustand von 99 auf 100 % springt oder sich die Datenrate ändert. Der Akku sitzt damit ein Stück weiter links, mit Abstand zur Datenrate.
+- Geändert: **Die Überschrift "Akku" steht in derselben Zeile wie "Kameras"**, in derselben blauen Schrift. Ohne Akkustand (zum Beispiel nur Handys) gibt es weiter nur "Kameras" und keine Akku-Spalte.
+- Tests angepasst (feste Spaltenbreiten, gemeinsame Überschriftzeile).
+
 ## 0.9.55 (Beta)
 - **Korrektur zu 0.9.54: Das Ladesymbol der Action 4 beruhte auf einer falschen Deutung.** In 0.9.54 galt Byte 2 der Statusnachricht als "Kabel steckt". Das war falsch: Die Bytes 1 bis 2 sind die **Akkuspannung** in mV (4400 am Kabel bei vollem Akku, etwa 4250 bis 4300 im Batteriebetrieb); Byte 2 wechselte nur, weil die Spannung die Stufengrenze 4352 mV überquerte. Bei niedrigerem Akku (unter 4096 mV) hätte 0.9.54 fälschlich ein Ladesymbol gezeigt.
   **Jetzt gilt der Strom aus dem Akku (Bytes 5 bis 8, vorzeichenbehaftet, in mA):** Aus dem Akku läuft die streamende Action 4 mit etwa -650 bis -1100 mA; steckt das Kabel, ist der Strom 0 bis -5 mA (die Kamera wird vom Kabel versorgt, der Akku wird nicht entladen), geladen würde positiv. Das Symbol 🔌 erscheint, wenn der Strom über -100 mA liegt. Das passt zu allen Wechseln am 4. Oktober (Kabel abgezogen und wieder angesteckt, mehrfach, mit Spannung und Strom gegen die Uhrzeit geprüft).

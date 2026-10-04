@@ -91,13 +91,15 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .batt{font-size:13px;white-space:nowrap}
 .batt.stale{opacity:.6}
 #camlights .row .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Mit Akkustand: ein gemeinsames Raster (Name | Akku | Datenrate). Die Breite der beiden rechten Spalten richtet sich nach dem längsten Inhalt, der Name bekommt den Rest und wird bei Bedarf gekürzt; Überschrift und Werte teilen sich dieselbe Spalte und stehen mittig übereinander. */
-#camlights.hasbatt{display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:14px;align-items:baseline}
+/* Mit Akkustand: ein gemeinsames Raster (Name | Akku | Datenrate). Die beiden rechten Spalten haben feste Breiten, damit weder Akku noch Zahlen hin und her rutschen,
+   wenn sich Werte ändern (Ladesymbol, 99 -> 100 %, Datenrate); der Name bekommt den Rest und wird bei Bedarf gekürzt. Die Überschrift "Kameras" steht im selben
+   Raster in einer Zeile mit "Akku" (gleiche Schrift), beide mittig über ihrer Spalte bzw. links über den Namen. */
+#camlights.hasbatt{display:grid;grid-template-columns:minmax(0,1fr) 4.3em 5.4em;column-gap:14px;align-items:baseline}
 #camlights.hasbatt .row,#camlights.hasbatt .hrow{display:contents}
 #camlights.hasbatt .row>span{padding:4px 0}
-#camlights.hasbatt .row>span:last-child{text-align:right;white-space:nowrap}
-#camlights .battcell{text-align:center;white-space:nowrap}
-#camlights .hrow span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:2px;text-align:center}
+#camlights.hasbatt .row>span:last-child{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+#camlights .battcell{text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+#camlights .hrow .mid{text-align:center}
 .cam .camnet{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px}
 .cam .camnet select{padding:2px 6px;font-size:12px;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
@@ -212,7 +214,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="row" style="padding-top:0"><span class="big"><span id="mem">–</span><span class="unit"> % belegt</span></span></div>
     <div class="bar"><i id="membar" style="width:0"></i></div>
   </div>
-      <div class="statbox"><div class="sech">Kameras</div><div id="camlights"></div></div>
+      <div class="statbox"><div id="camlights"><div class="sech">Kameras</div></div></div>
       <div class="statbox"><div class="sech">Upload (Netze zum Senden)</div><div id="net"></div></div>
     </div>
   </details>
@@ -457,7 +459,7 @@ function renderCamLights(list){
   // (Auslassungspunkte), statt die Spalten zu verschieben. Ohne Akkustand bleibt es bei Name und Datenrate.
   const any=list.some(c=>c.battery!=null), box=$("camlights");
   box.classList.toggle("hasbatt",any);
-  const head=any&&list.length?'<div class="hrow"><span></span><span>Akku</span><span></span></div>':"";
+  const head='<div class="hrow"><div class="sech">Kameras</div>'+(any&&list.length?'<div class="sech mid">Akku</div><div class="sech">&nbsp;</div>':"")+'</div>';
   setHtml(box,list.length?head+list.map(c=>`<div class="row"><span class="nm"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span>${any?`<span class="battcell">${battHtml(c)}</span>`:""}<span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
