@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.83 (Beta)
+- Neu (Issue #24, erster Teil): **Hell und dunkel**. Knopf mit Sonne/Mond im Kopf, die Wahl bleibt im Browser gespeichert, Standard bleibt dunkel. Gilt auch für die Anmeldeseite.
+- Geändert (Issue #23):
+  - "Beim Start der Box automatisch live gehen" steht jetzt in der Karte "SRTLA: Server, Bitrate und Latenz" ganz oben.
+  - Am Handy entfällt der Block "Nicht live". Hinweise, Fehler und "Noch nicht übernommen" bleiben sichtbar, wenn es welche gibt.
+  - Am Rechner fehlen im Block "Live gehen", "Live beenden" und "Streammodus", sie stehen im Kopf. Der Live-Knopf im Kopf hat die Farbe des früheren Knopfs.
+  - Am Handy öffnen Kopf und Fußleiste keine Meldungsfenster mehr (die Rückfragen der Fußleiste entfallen, Fehler erscheinen in der Fußleiste).
+- Tests in `tools/test_mobile.py` (41).
+
 ## 0.9.82 (Beta)
 - Geändert (Issue #21): Das "i" steht nicht mehr im zugeklappten Kartenkopf, sondern **erst in der aufgeklappten Karte** (eigene Zeile oben). Das Menü bleibt aufgeräumt.
 

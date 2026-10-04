@@ -37,7 +37,7 @@ class MobileFooter(unittest.TestCase):
         self.assertIn('$("mf_live").addEventListener("click",liveToggle)', PAGE)
 
     def test_no_question_when_going_live_or_when_stopping(self):
-        start = PAGE[PAGE.index("async function doLiveStart(){"):PAGE.index('$("live_go").addEventListener')]
+        start = PAGE[PAGE.index("async function doLiveStart(){"):PAGE.index("function seamlessTo(main,key){")]
         self.assertNotIn("confirm(", start)
         self.assertNotIn("Jetzt LIVE senden?", PAGE)
         toggle = PAGE[PAGE.index("async function liveToggle(){"):PAGE.index('$("hdr_live").addEventListener')]
@@ -136,7 +136,7 @@ class FooterScripts(unittest.TestCase):
         mine = re.search(r'<button type="button" class="([^"]*)" data-kind="cam" data-key="c".*?data-inactive="(\d)"', r)
         self.assertIn("off", mine.group(1).split())
         self.assertEqual(mine.group(2), "1")
-        self.assertIn(".mf-cam.off.live{color:#e2e8f0}", PAGE)                                    # auch wenn sie sendet: nicht grün
+        self.assertIn(".mf-cam.off.live{color:var(--text)}", PAGE)                                    # auch wenn sie sendet: nicht grün
         self.assertIn(".mf-cam.off{opacity:.55;border-style:dashed}", PAGE)
         others = re.findall(r'class="([^"]*)" data-kind="cam" data-key="(a|b)".*?data-inactive="(\d)"', r)
         self.assertTrue(all("off" not in c.split() and i == "0" for c, k, i in others))
@@ -198,13 +198,17 @@ class FooterBehaviour(unittest.TestCase):
         self.assertIn("Das Hauptbild lässt sich nicht deaktivieren.", body)
         self.assertIn("on=b.dataset.inactive===\"1\"", body)
 
-    def test_question_only_when_a_change_would_interrupt_the_picture(self):
+    def test_footer_and_header_never_open_a_popup_on_the_phone(self):                        # Issue #23
         i = PAGE.index("async function footAct(b,long,dbl){")
         body = PAGE[i:PAGE.index("(function(){", i)]
-        self.assertIn("d.active&&!seamlessTo(mainKey,b.dataset.key)&&!confirm(", body)             # Tausch ohne Unterbrechung geht ohne Frage
-        self.assertIn("d.active&&!d.view_live&&!confirm(", body)                                    # ausblenden live: ohne Frage
-        self.assertIn("d.active&&!(d.view_live&&d.audio_live)&&!confirm(", body)                    # Ton live: ohne Frage
-        self.assertEqual(body.count("confirm("), 3)                                                 # sonst nie
+        self.assertNotIn("confirm(", body)
+        self.assertNotIn("alert(", body)
+        start = PAGE[PAGE.index("async function doLiveStart(){"):PAGE.index("function seamlessTo(main,key){")]
+        self.assertIn("if(isPhone()) footMsg(x.message); else alert(x.message);", start)       # Fehler beim Start: am Handy in der Fußleiste, nicht im Fenster
+        self.assertIn('window.matchMedia("(max-width:620px)")', PAGE)
+        hdr = PAGE[PAGE.index("function updHdrLive(d){"):PAGE.index("\n}\n", PAGE.index("function updHdrLive(d){"))]
+        self.assertNotIn("confirm(", hdr)
+        self.assertNotIn("alert(", hdr)
 
     def test_footer_follows_the_poll_and_does_not_replace_buttons_while_pressed(self):
         self.assertIn("updHdrLive(d); renderFoot(d);", PAGE)
@@ -222,6 +226,107 @@ class FooterBehaviour(unittest.TestCase):
         i = PAGE.index("#mfoot{display:flex;position:fixed")
         self.assertNotIn("flex-direction:column", PAGE[i:PAGE.index("}", i)])                         # eine Reihe wie in der BELABOX-Oberfläche: "Live" links, Knöpfe rechts
         self.assertLess(PAGE.index('id="mf_live"'), PAGE.index('id="mf_tools"'))
+
+
+class MovedFunctions(unittest.TestCase):
+    """Issue #23: Automatischer Start in die SRTLA-Karte, der Block "Nicht live" entfällt am Handy, Knöpfe im Kopf statt im Block."""
+    def test_autostart_sits_first_in_the_srtla_card(self):
+        i = PAGE.index('id="srtlacard"')
+        card = PAGE[i:PAGE.index("</details>", i)]
+        for needle in ('id="auto_on"', 'id="auto_help_btn"', 'id="auto_help"', 'id="autostatus"'):
+            self.assertIn(needle, card)
+            self.assertEqual(PAGE.count(needle), 1, needle)
+        self.assertLess(card.index('id="auto_on"'), card.index(">SRTLA-Server</div>"))
+        live = PAGE[PAGE.index('id="livecard"'):PAGE.index("</section>", PAGE.index('id="livecard"'))]
+        self.assertNotIn("auto_on", live)
+
+    def test_live_and_streaming_mode_buttons_are_gone_from_the_live_block(self):
+        live = PAGE[PAGE.index('id="livecard"'):PAGE.index("</section>", PAGE.index('id="livecard"'))]
+        for gone in ("live_go", "live_stop", "sm_btn2", "Live gehen", "Streammodus"):
+            self.assertNotIn(gone, live)
+            self.assertNotIn(gone if gone.startswith(("live_", "sm_")) else "xx-nie-da", PAGE)
+        self.assertIn('id="hdr_live"', PAGE)
+        self.assertIn('id="sm_btn"', PAGE)
+
+    def test_header_button_has_the_colour_of_the_former_live_button(self):
+        self.assertIn(".livebtn:not(.on):not(.busy){background:var(--warn);border-color:var(--warn);color:#0f172a}", PAGE)
+        self.assertIn("button.warnbtn{background:var(--warn)}", PAGE)                         # dieselbe Farbe wie "Live gehen" in der Karte
+
+    def test_the_live_block_disappears_on_the_phone_but_notes_stay(self):
+        phone = re.search(r"@media\(max-width:620px\)\{\s*header\{flex-wrap:nowrap.*?\n\}", PAGE, re.S).group(0)
+        self.assertIn("#livecard{padding:0;border:0;background:transparent;box-shadow:none;margin:0}", phone)
+        self.assertIn("#livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}", phone)
+        self.assertIn("#livecard :is(.ph,.err,.pending):empty{display:none}", phone)           # Hinweise, Fehler und "Noch nicht übernommen" bleiben, wenn es welche gibt
+        for kept in ('id="livewhy"', 'id="livepending"', 'id="liveerr"'):
+            self.assertIn(kept, PAGE)
+
+    def test_scripts_do_not_touch_removed_elements(self):
+        for gone in ('$("live_go")', '$("live_stop")', '$("sm_btn2")'):
+            self.assertNotIn(gone, PAGE)
+
+
+LOGIN = open(os.path.join(ROOT, "web", "login.html"), encoding="utf-8").read()
+
+
+class Theme(unittest.TestCase):
+    """Hell und dunkel (Issue #24)."""
+    def test_both_pages_know_the_light_colours_and_the_stored_choice(self):
+        for page in (PAGE, LOGIN):
+            self.assertIn('<meta name="color-scheme" content="dark light">', page)
+            self.assertIn(':root[data-theme="light"]{color-scheme:light;--bg:#f1f5f9;', page)
+            self.assertIn(":root{color-scheme:dark}", page)
+            self.assertLess(page.index('localStorage.getItem("pb_theme")'), page.index("<style>"))   # vor dem Aufbau der Seite, sonst blitzt es kurz dunkel
+
+    def test_dark_stays_the_default_and_every_variable_has_a_light_value(self):
+        import re as _re
+        dark = dict(_re.findall(r"--([a-z]+):(#[0-9a-f]{6})", PAGE[PAGE.index(":root{--bg:"):PAGE.index("\n", PAGE.index(":root{--bg:"))]))
+        light = dict(_re.findall(r"--([a-z]+):(#[0-9a-f]{6})", PAGE[PAGE.index(':root[data-theme="light"]'):PAGE.index("\n", PAGE.index(':root[data-theme="light"]'))]))
+        self.assertEqual(set(dark), set(light))
+        self.assertEqual(dark["bg"], "#0f172a")                                                 # der bisherige Look ist unverändert der Standard
+        self.assertNotEqual(dark["bg"], light["bg"])
+
+    def test_no_dark_only_colours_for_text_are_left_in_the_footer(self):
+        self.assertNotIn("#e2e8f0", PAGE)
+        self.assertNotIn("#f8fafc", PAGE[PAGE.index("</style>") - 0:])
+
+    def test_button_in_the_header(self):
+        self.assertRegex(PAGE, r'<button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel"')
+        self.assertLess(PAGE.index('id="theme_btn"'), PAGE.index('id="hdr_live"'))
+
+
+@unittest.skipUnless(JSC, "keine JavaScript-Maschine (jsc) auf diesem Rechner")
+class ThemeScripts(unittest.TestCase):
+    def run_early(self, stored):
+        script = re.search(r"<script>(try\{var t=localStorage.*?)</script>", PAGE, re.S).group(1)
+        code = ("var attrs = {}; var document = {documentElement: {setAttribute: function (k, v) { attrs[k] = v; }}};\n"
+                "var localStorage = {getItem: function () { %s }};\n%s\nprint(JSON.stringify(attrs));") % (stored, script)
+        return json.loads(run_js(code))
+
+    def test_stored_choice_is_applied_and_junk_is_ignored(self):
+        self.assertEqual(self.run_early("return 'light';"), {"data-theme": "light"})
+        self.assertEqual(self.run_early("return 'dark';"), {"data-theme": "dark"})
+        for junk in ("return null;", "return 'blau';", "return '';", "return 5;"):
+            self.assertEqual(self.run_early(junk), {}, junk)
+        self.assertEqual(self.run_early("throw new Error('gesperrt');"), {})                 # Speicher gesperrt (privates Fenster): kein Fehler
+
+    def test_set_theme_switches_the_icon_saves_only_on_request_and_survives_blocked_storage(self):
+        src = PAGE[PAGE.index("const THEME_ICONS="):PAGE.index("$(\"theme_btn\").addEventListener")]
+        code = """
+var els = {}; function $(id) { return els[id] || (els[id] = {id: id, innerHTML: "", title: "", attrs: {}, setAttribute: function (k, v) { this.attrs[k] = v; }}); }
+var root = {attrs: {"data-theme": "dark"}, getAttribute: function (k) { return this.attrs[k]; }, setAttribute: function (k, v) { this.attrs[k] = v; }};
+var document = {documentElement: root, querySelector: function () { return null; }};
+var saved = []; var blocked = false;
+var localStorage = {setItem: function (k, v) { if (blocked) throw new Error("gesperrt"); saved.push([k, v]); }};
+function getComputedStyle() { return {getPropertyValue: function () { return "#fff"; }}; }
+""" + src + """
+setTheme("light", false); var a = [curTheme(), $("theme_btn").title, $("theme_btn").innerHTML.indexOf("<circle") >= 0, saved.length];
+setTheme("dark", true);  var b = [curTheme(), $("theme_btn").title, $("theme_btn").innerHTML.indexOf("<circle") >= 0, saved.slice()];
+blocked = true; setTheme("light", true); var c = curTheme();
+print(JSON.stringify({a: a, b: b, c: c}));"""
+        o = json.loads(run_js(code))
+        self.assertEqual(o["a"], ["light", "Auf dunkel wechseln", False, 0])                  # hell: Mond, nichts gespeichert
+        self.assertEqual(o["b"], ["dark", "Auf hell wechseln", True, [["pb_theme", "dark"]]])  # dunkel: Sonne, gespeichert
+        self.assertEqual(o["c"], "light")                                                      # gesperrter Speicher darf nicht stören
 
 
 class StatusOrder(unittest.TestCase):

@@ -3,9 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<script>try{var t=localStorage.getItem("pb_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>IRL4YOU BOX</title>
 <style>
 :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4;--blue:#3b82f6}
+:root{color-scheme:dark}
+:root[data-theme="light"]{color-scheme:light;--bg:#f1f5f9;--card:#ffffff;--text:#0f172a;--muted:#475569;--line:#cbd5e1;--accent:#0e7490;--ok:#16a34a;--warn:#d97706;--crit:#dc2626;--bar:#0891b2;--blue:#2563eb}
 *{box-sizing:border-box}
 [hidden]{display:none!important}   /* Klassen mit display (z. B. .row, .updbtn) dürfen das Attribut hidden nicht überstimmen */
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,system-ui,sans-serif}
@@ -15,6 +19,7 @@ h1{font-size:17px;margin:0;color:var(--accent)}
 .badge{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--line);color:var(--muted)}
 .badge.demo{background:var(--warn);color:#0f172a}
 .livebtn{font-size:12px;font-weight:700;padding:3px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer;letter-spacing:.02em}
+.livebtn:not(.on):not(.busy){background:var(--warn);border-color:var(--warn);color:#0f172a}      /* Farbe wie der frühere Knopf Live gehen in der Karte (Issue #23) */
 .livebtn.on{background:var(--crit);border-color:var(--crit);color:#fff}
 .livebtn.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
 .livebtn:disabled{opacity:.55;cursor:not-allowed}
@@ -70,6 +75,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .wform{display:grid;grid-template-columns:minmax(130px,.7fr) 1.4fr 1.4fr;gap:10px;align-items:end;margin-top:10px}
 .wform label{display:flex;flex-direction:column;gap:4px;min-width:0}
 .wform select,.wform input{width:100%;height:38px;box-sizing:border-box}
+#srtlacard .autolbl{margin-bottom:12px}
 .bkform{grid-template-columns:1fr 1fr}
 .bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
 .ibtn,.ibrow{display:none}
@@ -171,6 +177,7 @@ details.card[open]>summary{margin-bottom:10px}
 .foldd{display:inline-flex;gap:6px}
 .foldm{display:none}.smic{display:none;font-size:16px;line-height:1}
 button.small{padding:4px 10px;font-size:13px}
+#theme_btn{padding:4px 8px;line-height:0}#theme_btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 @media(max-width:620px){.smtx{display:none}.smic{display:inline}#sm_btn{padding:3px 10px}.foldd{display:none}.foldm{display:inline-block}header{gap:8px}}
 /* Handy: Kopfleiste in einer Zeile, "Live"/"Stop" steht in der festen Fußleiste (Issue #19) */
@@ -181,7 +188,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-live:disabled{opacity:.55;cursor:not-allowed}
 /* Kamera- und Ton-Knöpfe in der Fußleiste (Issue #19): kurz = kleines Bild aus-/einblenden bzw. nächste Tonspur, lang = Hauptbild tauschen bzw. stumm */
 #mf_tools{display:flex;gap:6px;min-width:0;flex:0 1 auto}      /* neben "Live"/"Stop" in einer Reihe (wie in der BELABOX-Oberfläche von Bittersweet); die Knöpfe werden bei vielen Kameras schmaler */
-.mf-t{flex:0 1 60px;min-width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:54px;padding:2px;border-radius:14px;border:2px solid var(--line);background:var(--bg);color:#e2e8f0;font-family:inherit;font-size:10px;font-weight:700;line-height:1.1;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+.mf-t{flex:0 1 60px;min-width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:54px;padding:2px;border-radius:14px;border:2px solid var(--line);background:var(--bg);color:var(--text);font-family:inherit;font-size:10px;font-weight:700;line-height:1.1;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .mf-t svg{width:22px;height:22px;flex:none}
 .mf-t span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mf-aud span{white-space:normal;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}     /* "Ton: Osmo" darf in zwei Zeilen stehen */
@@ -189,7 +196,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-cam.live{color:var(--ok)}
 .mf-cam.hid{color:var(--blue)}
 .mf-cam.ismain{border-color:var(--blue)}
-.mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:#e2e8f0}      /* deaktiviert: blass, gestrichelt, nie grün */
+.mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:var(--text)}      /* deaktiviert: blass, gestrichelt, nie grün */
 .mf-aud{color:var(--text)}
 .mf-aud.muted{color:var(--crit);border-color:var(--crit)}
 .mf-msg{position:absolute;left:12px;right:12px;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
@@ -200,6 +207,10 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
   header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
   header .hdr .updbtn{font-size:0;padding:3px 9px}header .hdr .updbtn .dot{margin:0;font-size:13px}    /* nur der gelbe Punkt, Text steht im Tooltip */
   #hdr_live{display:none!important}
+  /* der Block "Nicht live" entfällt: alles steht in Kopf und Fußleiste; nur Hinweise, Fehler und "Noch nicht übernommen" bleiben, wenn es welche gibt */
+  #livecard{padding:0;border:0;background:transparent;box-shadow:none;margin:0}
+  #livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}
+  #livecard :is(.ph,.err,.pending):empty{display:none}
   #mfoot{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(2,6,23,.5)}
   body{padding-bottom:var(--mfh,calc(76px + env(safe-area-inset-bottom)))}    /* --mfh: Höhe der Fußleiste, setzt die Seite (mit Knopfreihe höher) */
   .toast{bottom:calc(var(--mfh,76px) + 16px)}
@@ -264,17 +275,13 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 <body>
 <header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button> <span id="mode" class="badge" title="Verbindung der Seite zur Box">verbinde…</span></span></header>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button> <span id="mode" class="badge" title="Verbindung der Seite zur Box">verbinde…</span></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
       <div class="row" style="justify-content:flex-start"><span class="big" id="livestate">–</span><span id="liveup" class="liveup" hidden title="Gesamter Upload über die gewählten Netze"></span></div>
       <div id="swapbar" hidden><div class="sech" style="margin:12px 0 6px">Hauptbild</div><div class="seg" id="swapbtns" role="group" aria-label="Hauptbild wählen"></div></div>
-      <div class="actions"><button id="live_go" type="button" class="warnbtn">Live gehen</button><button id="live_stop" type="button" class="sec" hidden>Live beenden</button> <button type="button" class="sec" id="sm_btn2" title="Blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird">Streammodus: aus</button></div>
       <div id="livewhy" class="ph"></div>
-      <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
-      <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
-      <div id="autostatus" class="ph" hidden></div>
       <div id="livepending" class="pending" hidden><span id="livepending_t"></span> <button type="button" id="live_restart" class="warnbtn">Stream neu starten</button><button type="button" id="live_ignore" class="sec">Später</button></div>
       <div id="liveerr" class="err"></div>
       <div id="livehealth" class="livehealth"></div>
@@ -381,6 +388,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   </details>
 
   <details class="card wide" id="srtlacard" open><summary><span class="sumh">SRTLA: Server, Bitrate und Latenz</span><span class="lockhint" id="srtlalock" hidden> · Streammodus ist an</span></summary>
+    <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
+    <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
+    <div id="autostatus" class="ph" hidden></div>
         <div class="sech" style="margin-top:0">SRTLA-Server</div>
     <div class="ph" style="margin-top:0">SRTLA-Server speichern und per Auswahl umschalten. Die Stream-ID ist ein Zugangsschlüssel: sie wird auf der Box gespeichert und hier nie wieder angezeigt.</div>
     <div class="srvrow"><select id="srv_sel"></select><button id="srv_edit" type="button" class="sec">Bearbeiten</button><button id="srv_del" type="button" class="sec">Löschen</button></div>
@@ -1376,7 +1386,7 @@ let sendData=null, pendIgnored="";
 const SM_LOCKED=["srtlacard","rcard"];
 function setSM(on){
   document.body.classList.toggle("sm",on);
-  document.querySelector("#sm_btn .smtx").textContent="Streammodus: "+(on?"an":"aus"); $("sm_btn").title="Streammodus ist "+(on?"an":"aus"); $("sm_btn2").textContent="Streammodus: "+(on?"an":"aus"); $("sm_btn2").classList.toggle("smon",on); $("sm_btn").classList.toggle("smon",on);
+  document.querySelector("#sm_btn .smtx").textContent="Streammodus: "+(on?"an":"aus"); $("sm_btn").title="Streammodus ist "+(on?"an":"aus"); $("sm_btn").classList.toggle("smon",on);
   SM_LOCKED.forEach(id=>{ const c=$(id); c.classList.toggle("locked",on); if(on) c.open=false; });
   $("srtlalock").hidden=!on; $("rlock").hidden=!on;
   try{ localStorage.setItem("pb_sendemodus",on?"1":"0"); }catch(e){}
@@ -1385,7 +1395,7 @@ SM_LOCKED.forEach(id=>{
   $(id).addEventListener("toggle",()=>{ if($(id).classList.contains("locked")&&$(id).open) $(id).open=false; });
   $(id).querySelector("summary").addEventListener("click",e=>{ if($(id).classList.contains("locked")) e.preventDefault(); });
 });
-["sm_btn","sm_btn2"].forEach(i=>$(i).addEventListener("click",()=>setSM(!document.body.classList.contains("sm"))));
+$("sm_btn").addEventListener("click",()=>setSM(!document.body.classList.contains("sm")));
 let smStart=false; try{ smStart=localStorage.getItem("pb_sendemodus")==="1"; }catch(e){}
 async function sendLoad(){
   let d; try{ d=await srtlaCall("GET","/api/send"); }catch(e){ return; }
@@ -1405,8 +1415,6 @@ async function sendLoad(){
     else if(a.phase==="aufgegeben"||a.phase==="abgebrochen"){ st.hidden=false; st.textContent=a.message||"Automatischer Start beendet"; }
     else st.hidden=true;
   }
-  $("live_go").hidden=d.active; $("live_stop").hidden=!d.active;
-  $("live_go").disabled=!d.can_start;
   const why=[]; if(d.state==="refused"&&d.message) why.push(d.message);
   if(!d.active) why.push(...d.reasons);
   if(d.active&&d.failover&&d.failover.waiting) why.push((d.failover.inactive||[]).length?"Keine aktive Kamera sendet, warte auf ein Signal":"Keine Kamera sendet, warte auf ein Signal");
@@ -1439,18 +1447,18 @@ $("live_restart").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/send",{action:"restart",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
   sendLoad();
 });
+const isPhone=()=>window.matchMedia("(max-width:620px)").matches;
 async function doLiveStart(){
   const s=sendData&&sendData.server; if(!s) return;                      // keine Rückfrage beim Start (Issue #19); beim Beenden bleibt sie
-  try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; alert(x.message); }
+  try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; if(isPhone()) footMsg(x.message); else alert(x.message); }     // am Handy keine Meldung im Fenster (Issue #23)
   setTimeout(sendLoad,800);
 }
-$("live_go").addEventListener("click",doLiveStart);
 function seamlessTo(main,key){      // läuft die Sendekette im Tausch-Betrieb und gehören beide Kameras zur Tauschgruppe?
   const g=(sendData&&sendData.swap_group)||[]; return !!(sendData&&sendData.active&&g.includes(main)&&g.includes(key));
 }
 $("swapbtns").addEventListener("click",async e=>{
   const b=e.target.closest(".swapto"); if(!b) return;
-  const live=!$("live_stop").hidden;
+  const live=!!(sendData&&sendData.active);
   if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm("Hauptbild: "+b.textContent.trim()+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
   try{ const r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
@@ -1458,7 +1466,6 @@ async function doLiveStop(){
   try{ await srtlaCall("POST","/api/send",{action:"stop"}); }catch(x){ $("liveerr").textContent=x.message; }
   setTimeout(sendLoad,800);
 }
-$("live_stop").addEventListener("click",doLiveStop);
 // Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (ohne Rückfrage)
 function updHdrLive(d){
   const b=$("hdr_live"), live=!!d.active, busy=d.state==="restarting"||d.state==="starting"||d.state==="stopping";
@@ -1520,18 +1527,15 @@ async function footAct(b,long,dbl){
       }
       if(long){
         if(b.dataset.main==="1") return footMsg("Das ist schon das Hauptbild.");
-        if(d.active&&!seamlessTo(mainKey,b.dataset.key)&&!confirm("Hauptbild: "+b.dataset.label+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
         r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key});
       }else{
         if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht ausblenden. Zum Tauschen lange auf eine andere Kamera drücken.");
-        if(d.active&&!d.view_live&&!confirm("Das kleine Bild lässt sich nur mit einem kurzen Neustart der Sendung aus- oder einblenden (etwa 5 Sekunden ohne Bild). Jetzt?")) return;
         r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}});
       }
     }else if(long){
       if(!d.active) return footMsg("Stumm schalten geht nur während der Sendung.");
       r=await srtlaCall("POST","/api/pipeline/view",{mute:b.dataset.mute!=="1"});
     }else{
-      if(d.active&&!(d.view_live&&d.audio_live)&&!confirm("Die Tonspur lässt sich nur mit einem kurzen Neustart der Sendung wechseln (etwa 5 Sekunden ohne Bild).\n\nTipp: Mit „Tausch ohne Unterbrechung“ im Bildaufbau geht es ohne Neustart. Jetzt wechseln?")) return;
       r=await srtlaCall("POST","/api/pipeline/view",{audio:b.dataset.next});
     }
     footMsg((r&&r.note)||"");
@@ -1845,6 +1849,19 @@ document.querySelectorAll('input[name="logmode"]').forEach(r=>r.addEventListener
 }));
 $("c_logs").addEventListener("toggle",()=>{ if($("c_logs").open) logLoad(); });
 logLoad();
+
+// ---- Hell und dunkel (Issue #24): Knopf im Kopf, die Wahl bleibt im Browser gespeichert (Standard: dunkel)
+const THEME_ICONS={dark:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+                   light:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>'};   // dunkel: Sonne (zu hell wechseln), hell: Mond
+function curTheme(){ return document.documentElement.getAttribute("data-theme")==="light"?"light":"dark"; }
+function setTheme(t,save){
+  document.documentElement.setAttribute("data-theme",t);
+  if(save){ try{ localStorage.setItem("pb_theme",t); }catch(e){} }
+  const b=$("theme_btn"); b.innerHTML=THEME_ICONS[t]; b.title=t==="dark"?"Auf hell wechseln":"Auf dunkel wechseln"; b.setAttribute("aria-label",b.title);
+  const m=document.querySelector('meta[name="theme-color"]'); if(m) m.content=getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+}
+$("theme_btn").addEventListener("click",()=>setTheme(curTheme()==="dark"?"light":"dark",true));
+setTheme(curTheme(),false);
 
 // Hilfstexte: auf dem Handy hinter einem "i" (Issue #21). Gemeint sind die festen Beschreibungen direkt unter einer Überschrift oder unter dem Kartenkopf.
 const HLP_SEL=".card .ph:not([id]):not([role])";
