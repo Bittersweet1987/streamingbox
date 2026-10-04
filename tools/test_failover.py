@@ -223,6 +223,32 @@ class SenderSwitch(unittest.TestCase):
             st = json.load(open(os.path.join(d, "status.json")))
             self.assertTrue(st["failover"]["waiting"] and st["failover"]["degraded"])
 
+class SenderNote(unittest.TestCase):
+    def test_stall_messages(self):
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"])
+        s.note("Pipeline stall detected (output). Will exit now\n")
+        self.assertIn("Ausgang", s.last)
+        s.note("Pipeline stall detected (pipeline). Will exit now\n")
+        self.assertIn("Eingangsbild", s.last)
+        s.note("Pipeline stall detected. Will exit now\n")      # Original aus dem BELABOX-Paket, ohne Zusatz
+        self.assertIn("Eingangsbild", s.last)
+
+    def test_reason_goes_to_journal_once_per_burst(self):
+        import contextlib
+        import io
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            for _ in range(5):
+                s.note("Failed to establish an SRT connection: x. Retrying...\n")     # kommt alle 0,5 s
+            s.note("Pipeline stall detected (output). Will exit now\n")
+            s.note("irgendeine andere Zeile mit Adresse 10.0.0.9\n")
+        lines = buf.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[1].startswith("send: Der Ausgang stockte"))
+        self.assertNotIn("10.0.0.9", buf.getvalue())
+
+
 class SenderEncoderDied(unittest.TestCase):
     def make(self):
         s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"],

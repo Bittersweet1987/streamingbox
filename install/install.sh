@@ -100,14 +100,19 @@ case "${1:-install}" in
       fi
     fi
     # belacoder mit tolerantem Bitraten-Regler (verhindert, dass die Bitrate nach einer kurzen Überlast auf dem Minimum hängen
-    # bleibt). Wird nur gebaut, wenn der Patch neuer ist; schlägt das fehl, bleibt das Original aus dem BELABOX-Paket aktiv.
+    # bleibt) und Stall-Wächter, der nur den Ausgang prüft (ein Aussetzer einer kleinen Kamera beendet die Sendung nicht mehr).
+    # Wird nur gebaut, wenn ein Patch neuer ist; schlägt das fehl, bleibt die bisherige Fassung (oder das BELABOX-Original) aktiv.
     install -d /opt/pipbox/belacoder
     bc_changed=0
-    cmp -s "$HERE/belacoder/belacoder-jitter-tolerant.patch" /opt/pipbox/belacoder/belacoder-jitter-tolerant.patch || bc_changed=1
+    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch; do
+      cmp -s "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp" || bc_changed=1
+    done
     [ -x /opt/pipbox/bin/belacoder ] || bc_changed=1
     if [ "$bc_changed" = 1 ]; then
       if sh "$HERE/belacoder/build.sh"; then
-        install -m 644 "$HERE/belacoder/belacoder-jitter-tolerant.patch" /opt/pipbox/belacoder/belacoder-jitter-tolerant.patch
+        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch; do
+          install -m 644 "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp"
+        done
       else
         echo "WARNUNG: belacoder mit dem toleranten Regler konnte nicht gebaut werden (braucht git, gcc, patch, Internet). Es bleibt das Original."
       fi

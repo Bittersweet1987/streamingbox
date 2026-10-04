@@ -41,15 +41,15 @@ und liest das BELABOX-Passwort nur zur Anmeldeprüfung.
 ### SRTLA-Sender (AGPL-3.0)
 
 Der Ordner `srtla/` enthält einen Patch für `srtla_send.c` aus [BELABOX/srtla](https://github.com/BELABOX/srtla)
-(Commit 37862da, GNU Affero General Public License v3). Der Patch und das damit gebaute Programm stehen ebenfalls unter
+(Commit 37862da, GNU Affero General Public License v3). Die Patches und das damit gebaute Programm stehen ebenfalls unter
 AGPL-3.0; der Quelltext ist der Upstream-Commit plus dieser Patch (siehe `srtla/README.md`). Das Original-Programm des
 BELABOX-Pakets bleibt unverändert unter `/usr/bin` liegen; der gepatchte Sender wird nach `/usr/local/bin` installiert.
 
-### belacoder-Encoder mit tolerantem Regler (GPL-3.0)
+### belacoder-Encoder mit tolerantem Regler und Stall-Wächter (GPL-3.0)
 
-Der Ordner `belacoder/` enthält einen Patch für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
-(Commit ccce9ca, GNU General Public License v3). Der Patch und das damit gebaute Programm stehen ebenfalls unter GPL-3.0; der
-Quelltext ist der Upstream-Commit plus dieser Patch (siehe `belacoder/README.md`). Das Original-Programm des BELABOX-Pakets bleibt
+Der Ordner `belacoder/` enthält zwei Patches für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
+(Commit ccce9ca, GNU General Public License v3). Die Patches und das damit gebaute Programm stehen ebenfalls unter GPL-3.0; der
+Quelltext ist der Upstream-Commit plus diese Patches (siehe `belacoder/README.md`). Das Original-Programm des BELABOX-Pakets bleibt
 unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` installiert und nur von der Sendekette dieses Pakets benutzt.
 
 ### WLAN

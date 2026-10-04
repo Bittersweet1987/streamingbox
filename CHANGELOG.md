@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.9.19 (Beta)
+- Behoben: **Ein Aussetzer einer kleinen Kamera beendete die ganze Sendung.** Der Stall-Wächter von belacoder las die Position der gesamten Pipeline
+  (das Maximum aller Senken, auch der kleinen Kameras mit den rohen Zeitstempeln ihrer Kamera-Sitzung) und beendete den Encoder, wenn die älteste kleine
+  Kamera 2 bis 4 s nichts lieferte, obwohl Hauptbild und Ausgang liefen (Meldung "Das Eingangsbild stockte"). Neu: `belacoder/belacoder-stall-output.patch`
+  (GPL-3.0, wie der Regler-Patch). Es zählt nur noch der Ausgang des Encoders, und der Wächter schlägt erst nach rund 6 bis 8 s ohne Fortschritt an.
+  Die kleine Kamera verschwindet bei einem Aussetzer nur kurz aus dem Bild. `install.sh` baut belacoder neu (nur wenn ein Patch neuer ist; schlägt der Bau fehl,
+  bleibt die bisherige Fassung) und legt einmal eine Sicherung `belacoder.vor-stallpatch` an. Die Live-Karte meldet jetzt "Der Ausgang stockte", wenn der Ausgang
+  selbst stand.
+- Neu: Das Journal (`journalctl -u pipbox-send`) nennt jetzt den Grund, den belacoder vor einem Ende meldet (zum Beispiel "Der Ausgang stockte"), einmal je
+  Ereignis und nur als fester Text (nie Adressen oder Stream-ID). Bisher stand dort nur "belacoder beendet (Code 0)".
+- Tests: Meldungstexte des Stall-Wächters und Journal-Eintrag je Ereignis.
+
 ## 0.9.18 (Beta)
 - Behoben: **Kurze Aussetzer einer Kamera warfen sie aus dem Bild und der Encoder startete mehrfach neu.** Der RTMP-Server der BELABOX entfernt eine
   Kamera, die 4 s lang nichts schickt (`drop_idle_publisher 4s`); DJI-Kameras setzen im WLAN gelegentlich 4 bis 10 s aus (gemessen: 15 Rauswürfe in

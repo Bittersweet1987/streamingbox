@@ -41,6 +41,7 @@ UP_FIRST_S = 5    # lief gar keine Kamera, genügt für die erste schon diese Ze
 NOTABLE = (
     (re.compile(r"Failed to establish an SRT connection"), "Verbindung zum SRT-Server fehlgeschlagen, neuer Versuch"),
     (re.compile(r"The SRT connection.*exiting"), "Verbindung zum Server kurz unterbrochen, wird automatisch neu aufgebaut"),
+    (re.compile(r"Pipeline stall detected \(output\)"), "Der Ausgang stockte (der Encoder lieferte nichts mehr), er wird neu gestartet"),
     (re.compile(r"Pipeline stall detected"), "Das Eingangsbild stockte, der Encoder wird neu gestartet"),
     (re.compile(r"Failed to establish any initial connections"), "Keine Verbindung zum SRTLA-Server, neuer Versuch"),
     (re.compile(r"no available connections"), "Alle Sendewege waren ausgefallen, Verbindung wird neu aufgebaut"),
@@ -299,8 +300,11 @@ class Sender:
         for rx, msg in NOTABLE:
             if rx.search(line):
                 with self.lock:
+                    fresh = msg != self.last or time.time() - self.last_at > 10     # nicht jede Wiederholung ins Journal
                     self.last = msg
                     self.last_at = time.time()
+                if fresh:
+                    print(f"send: {msg}", flush=True)      # Grund des Encoder-Endes im Journal (nur dieser feste Text)
                 return
 
     def spawn(self, name, args, env=None):
