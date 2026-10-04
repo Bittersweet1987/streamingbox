@@ -1067,7 +1067,7 @@ async function tick(){
     if(due("dji","c_cams",20000)){ try{ const dr=await fetch("/api/dji"); if(dr.ok) djiRender(await dr.json()); }catch(e){} }
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
     $("livehealth").innerHTML=m.alerts.length?m.alerts.map(a=>`<span class="${a.level}">${a.text}</span>`).join(" · "):'<span class="ok">● Alles im grünen Bereich</span>';
-    $("alerts").innerHTML=m.alerts.length?m.alerts.map(a=>`<div class="alert ${a.level}">${a.text}</div>`).join(""):'<div class="alert ok">Alles im grünen Bereich</div>';
+    $("alerts").innerHTML=m.alerts.length?m.alerts.map(a=>`<div class="alert ${a.level}">${a.text}</div>`).join(""):"";
   }catch(e){ $("mode").textContent="keine Verbindung"; }
 }
 // ---- Karten zuklappen: Zustand wird im Browser gemerkt ----

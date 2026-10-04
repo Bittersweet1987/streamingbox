@@ -123,20 +123,13 @@ case "${1:-install}" in
     fi
     # RTMP-Server der BELABOX: Eine Kamera, die kurz nichts schickt (WLAN-Hänger, 4 bis 10 s), wirft er nach 4 s raus; sie muss
     # sich neu verbinden und der Encoder startet jedes Mal neu. Die Grenze wird auf 15 s gesetzt. Das ist die einzige Änderung an
-    # einer BELABOX-Datei: Sicherung als .vor-pipbox, "install.sh uninstall" stellt sie wieder her. Das Neuladen von nginx trennt
-    # die Kameras kurz; sie verbinden sich selbst wieder (passiert nur, wenn der Wert geändert wird, also einmal).
-    NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
-    if [ -f "$NGX" ] && grep -Eq '^[[:space:]]*drop_idle_publisher[[:space:]]+4s;' "$NGX"; then
-      [ -f "$NGX.vor-pipbox" ] || cp "$NGX" "$NGX.vor-pipbox"
-      sed -i '/drop_idle_publisher/s/4s;/15s;/' "$NGX"
-      if nginx -t >/dev/null 2>&1; then
-        nginx -s reload 2>/dev/null || true
-        echo "RTMP-Leerlaufgrenze der Kameras auf 15 s gesetzt (Sicherung: $NGX.vor-pipbox)."
-      else
-        cp "$NGX.vor-pipbox" "$NGX"
-        echo "WARNUNG: nginx lehnt die geänderte RTMP-Einstellung ab, sie wurde zurückgesetzt."
-      fi
-    fi
+    # einer BELABOX-Datei: Sicherung als .vor-pipbox, "install.sh uninstall" stellt sie wieder her. Die Datei gehört dem Paket
+    # belabox-rtmp-server (keine dpkg-Konfigurationsdatei): ein Update überschreibt sie wieder mit 4 s. Darum übernimmt ein kleines
+    # Skript die Änderung und ein apt-Haken ruft es nach jedem Paketlauf erneut auf. Nginx wird nur neu geladen, wenn gerade nicht
+    # gesendet wird (das Neuladen trennt die Kameras kurz; sie verbinden sich selbst wieder).
+    install -m 755 "$HERE/install/pipbox-nginx-guard.sh" /opt/pipbox/pipbox-nginx-guard.sh
+    install -m 644 "$HERE/install/99pipbox-nginx" /etc/apt/apt.conf.d/99pipbox-nginx
+    /opt/pipbox/pipbox-nginx-guard.sh
     systemctl daemon-reload
     systemctl enable pipbox.service pipbox-dji.service
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
@@ -148,6 +141,7 @@ case "${1:-install}" in
   uninstall)
     systemctl disable --now pipbox-send.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-health.service pipbox.service pipbox-dji.service || true
     rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path
+    rm -f /etc/apt/apt.conf.d/99pipbox-nginx
     NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
     if [ -f "$NGX.vor-pipbox" ]; then
       cp "$NGX.vor-pipbox" "$NGX" && rm -f "$NGX.vor-pipbox"

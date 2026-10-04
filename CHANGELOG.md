@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.9.26 (Beta)
+- Behoben: **Der Encoder starb beim Rauswurf einer Kamera durch das Signal SIGPIPE (Code -13) statt sich geordnet zu beenden.** Der Sendedienst ignoriert SIGPIPE, Python setzt es aber beim Start eines
+  Kindprozesses auf "tödlich" zurück. Jedes beobachtete Code -13 folgte 1 s auf den Rauswurf einer Kamera durch den RTMP-Server (vermutlich schreibt librtmp beim Schließen noch einmal in den toten Socket); der Encoder
+  meldete sich dabei nicht geordnet vom SRT-Server ab, und der Wiederanlauf verzögerte sich um rund 4 s. Jetzt bleibt SIGPIPE für belacoder ignoriert; er endet über den normalen Fehlerweg (Code 0).
+- Behoben: **Die RTMP-Leerlaufgrenze von 15 s (0.9.18) ging bei einem Update des BELABOX-Pakets `belabox-rtmp-server` stillschweigend verloren.** Die Datei gehört dem Paket und ist keine dpkg-Konfigurationsdatei;
+  ein Update setzt sie wieder auf 4 s. Neu: `install/pipbox-nginx-guard.sh` übernimmt die Änderung (aus `install.sh` herausgelöst), und ein apt-Haken (`/etc/apt/apt.conf.d/99pipbox-nginx`) ruft es nach jedem
+  Paketlauf auf, auch nach Updates über die BELABOX-Oberfläche. nginx wird nur neu geladen, wenn gerade nicht gesendet wird (das Neuladen trennt alle Kameras); sonst gilt der Wert ab dem nächsten Start von nginx.
+  `install.sh uninstall` entfernt den Haken und stellt die Datei wieder her.
+- Neu im Protokoll: beim Ende des Encoders steht jetzt das Signal (`Code -13, Signal SIGPIPE`), die letzte erkannte Meldung mit dem Elementnamen (`... (rtmpsrc1)`; nie Adressen oder Schlüssel).
+- Geändert: In der Karte "Status" steht die Meldung "Alles im grünen Bereich" nicht mehr, denn die Live-Karte zeigt sie schon. Gibt es Warnungen, erscheinen sie weiter in beiden Karten.
+- Tests: `tools/test_send_hardening.py` (SIGPIPE-Verhalten mit echten Kindprozessen, Protokollzeilen, Schutzskript mit Attrappen für nginx, Einbindung in `install.sh`).
+
 ## 0.9.25 (Beta)
 - Geändert: Die Karte "Status" zeigt CPU und Arbeitsspeicher jetzt in einem gemeinsamen Kasten "System". Die Liste der einzelnen CPU-Kerne mit ihren Taktfrequenzen entfällt; geblieben sind der Gesamtwert, der
   Hinweis "höchster Kern", die Temperatur und (falls vorhanden) die Lüfter-Ansteuerung. Das spart Platz. Die Messwerte je Kern liefert der Server weiterhin (`/api/metrics`).

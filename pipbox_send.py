@@ -53,6 +53,17 @@ class Refuse(Exception):
     pass
 
 
+def exit_text(rc):
+    """Rückgabewert eines beendeten Programms für das Protokoll: 'Code 0' oder, wenn ein Signal es beendet hat (negativer
+    Wert), 'Code -13, Signal SIGPIPE'. So ist im Journal sichtbar, ob der Encoder sich selbst beendet hat oder abgeschossen wurde."""
+    if rc is not None and rc < 0:
+        try:
+            return f"Code {rc}, Signal {signal.Signals(-rc).name}"
+        except ValueError:
+            pass
+    return f"Code {rc}"
+
+
 def belacoder_running():
     for d in os.listdir("/proc"):
         if d.isdigit():
@@ -297,24 +308,31 @@ class Sender:
         self.lock = threading.Lock()
         self.restarts = {"srtla_send": 0, "belacoder": 0}
         self.last = ""
+        self.last_src = ""
         self.last_at = 0
         self.since = int(time.time())
         self.state = "starting"
 
     def note(self, line):
         for rx, msg in NOTABLE:
-            if rx.search(line):
+            m = rx.search(line)
+            if m:
                 with self.lock:
                     fresh = msg != self.last or time.time() - self.last_at > 10     # nicht jede Wiederholung ins Journal
                     self.last = msg
                     self.last_at = time.time()
+                    self.last_src = m.group(1) if m.groups() else ""     # nur der Elementname (rtmpsrc1), nie die Zeile selbst
                 if fresh:
                     print(f"send: {msg}", flush=True)      # Grund des Encoder-Endes im Journal (nur dieser feste Text)
                 return
 
     def spawn(self, name, args, env=None):
+        # Python ignoriert SIGPIPE und setzt es im Kindprozess standardmäßig zurück (restore_signals=True). Gemessen: Jedes Code -13
+        # des Encoders folgte 1 s auf einen Kamera-Rauswurf durch nginx, danach lehnte der Empfänger den schnellen Wiederanlauf ab
+        # (ca. 4 s länger Ausfall); nach einem Code 0 nie. Vermutlich schreibt librtmp beim Schließen noch einmal in den toten Socket.
+        # Bleibt SIGPIPE ignoriert (wie in diesem Dienst), endet belacoder über den normalen Fehlerweg (Code 0, SRT-Abmeldung).
         p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                             errors="replace", env=env)
+                             errors="replace", env=env, restore_signals=(name != "belacoder"))
         with self.lock:
             self.procs[name] = p
         threading.Thread(target=self.pump, args=(name, p), daemon=True).start()
@@ -416,7 +434,10 @@ class Sender:
         if self.fo is None:
             return False
         try:
-            new = self.fo.step(time.time(), live_keys(), gone=True)
+            live = live_keys()
+            if live is not None:
+                print(f"send: Kameras laut RTMP-Server: {len(live & set(self.fo.keys))} von {len(self.fo.keys)} senden", flush=True)
+            new = self.fo.step(time.time(), live, gone=True)
             if new is None:
                 return False
             self.switch(new, env)
@@ -462,7 +483,11 @@ class Sender:
                         self.restarts[name] += 1
                         n = self.restarts[name]
                         self.state = "restarting"
-                    print(f"send: {name} beendet (Code {p.returncode}), Neustart {n}", flush=True)
+                    why = ""
+                    with self.lock:
+                        if name == "belacoder" and self.last_at and time.time() - self.last_at < 15:
+                            why = f", zuletzt: {self.last}" + (f" ({self.last_src})" if self.last_src else "")
+                    print(f"send: {name} beendet ({exit_text(p.returncode)}), Neustart {n}{why}", flush=True)
                     if name == "belacoder" and self.encoder_died(env):
                         continue
                     if self.stop_ev.wait(2):
