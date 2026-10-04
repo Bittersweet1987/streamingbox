@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.22 (Beta)
+- Geändert: Der Punkt vor jeder Kamera zeigt jetzt den Zustand auf einen Blick: **grün** = sendet und ist im Bild, **gelb** = sendet, ist aber noch nicht (oder nicht mehr) im Bild,
+  **rot** = kein Signal, **grau** = Status unbekannt. Der Text dahinter ("im Bild", "wartet noch 40 s, dann im Bild") bleibt als Erklärung.
+
 ## 0.9.21 (Beta)
 - Neu: **Die Kameraliste zeigt, ob eine Kamera im Bild ist.** Bisher hieß grün nur "sendet an den RTMP-Server". Fällt eine Kamera aus und kehrt zurück, nimmt
   die Box sie erst nach 60 s stabilem Signal wieder ins Bild auf (damit eine wackelige Kamera nicht dauernd den Encoder neu startet). Jetzt steht hinter jeder

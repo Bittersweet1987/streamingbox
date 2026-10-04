@@ -25,6 +25,7 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .core{font-size:12px;color:var(--muted)}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
+.dot.wait{background:var(--warn)}
 #alerts{display:grid;gap:8px}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
 .alert.crit{border-color:var(--crit)}
@@ -404,7 +405,7 @@ function renderCams(list){
   }
   for(const c of list){
     const row=box.querySelector(`.cam[data-cid="${c.id}"]`); if(!row) continue;
-    row.querySelector(".dot").className="dot"+(c.state==="live"?"":(c.state==="unknown"?" unk":" off"));
+    row.querySelector(".dot").className="dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
     const picTx=c.pic==="an"?" · im Bild":(c.pic==="wartet"?` · wartet noch ${c.pic_wait} s, dann im Bild`:(c.pic==="aus"?(c.state==="live"?" · nicht im Bild":""):""));
     const dyn=row.querySelector(".dyn");
     dyn.textContent=(c.state==="live"?`${c.fps?fmt(c.fps,0)+" fps"+" · ":""}${fmt(c.mbit)} Mbit/s`:(c.state==="unknown"?"Status unbekannt":"wartet auf Signal"))+picTx;
