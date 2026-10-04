@@ -458,9 +458,9 @@ class FakeChar:
 class CameraSim:
     """Verhält sich wie eine DJI-Kamera: antwortet auf jede Nachricht des Dienstes."""
 
-    def __init__(self, wifi_ok=True, battery=77, connect_delay=0.0, byte2=0x10):
+    def __init__(self, wifi_ok=True, battery=77, connect_delay=0.0, mv=4250, ma=-900):
         self.wifi_ok, self.battery, self.connect_delay = wifi_ok, battery, connect_delay
-        self.byte2 = byte2
+        self.mv, self.ma = mv, ma           # Akkuspannung (mV) und Strom aus dem Akku (mA): Werte wie an einer echten Action 4
         self.sent = []
         self.connecting = 0
         self.max_connecting = 0
@@ -469,9 +469,11 @@ class CameraSim:
         self.scan_on_during_connect = None
         self.found = True
 
-    def status_message(self, byte2=None, battery=None, extra=None):
+    def status_message(self, mv=None, ma=None, battery=None, extra=None):
+        import struct
         pl = bytearray(34)
-        pl[2] = self.byte2 if byte2 is None else byte2
+        struct.pack_into("<H", pl, 1, self.mv if mv is None else mv)
+        struct.pack_into("<i", pl, 5, self.ma if ma is None else ma)
         pl[20] = self.battery if battery is None else battery
         for i, v in (extra or {}).items():
             pl[i] = v
@@ -639,30 +641,50 @@ class Session(unittest.TestCase):
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
-    def test_charging_is_read_from_byte_2_of_the_status_message_on_an_action_4(self):
-        """Beobachtet an einer Osmo Action 4: Byte 2 = 0x11 mit Kabel, 0x10 ohne. Andere Modelle: unbekannt, nie geraten."""
+    def test_cable_is_read_from_the_battery_current_on_an_action_4(self):
+        """Echte Werte einer Osmo Action 4: aus dem Akku etwa -650 bis -1100 mA, am Kabel 0 bis -5 mA (Spannung 4400 mV bei vollem Akku)."""
         async def go():
-            sim = CameraSim(battery=100, byte2=0x11)
+            sim = CameraSim(battery=100, mv=4400, ma=0)                           # Kabel steckt, Akku voll
             self.install({ADDR: sim})
             dm = dd.Daemon(tempfile.mkdtemp())
             await self.setup_cam(dm, kind="action4", model="Osmo Action 4")
             await dm.handle({"cmd": "connect", "addr": ADDR})
             cam = dm.cameras[ADDR]
             self.assertTrue(await self.wait_state(cam, ("streaming",)))
-            self.assertIs(cam.public()["charging"], True)                         # Kabel steckt
-            sim.client.cb(None, sim.status_message(byte2=0x10, battery=99))       # Kabel abgezogen
+            self.assertIs(cam.public()["charging"], True)
+            sim.client.cb(None, sim.status_message(mv=4344, ma=-818, battery=99))  # Kabel abgezogen: die Kamera läuft aus dem Akku
             await asyncio.sleep(0.1)
             self.assertIs(cam.public()["charging"], False)
-            self.assertEqual(cam.public()["battery"], 99)
-            sim.client.cb(None, sim.status_message(byte2=0x11, battery=99))       # und wieder angesteckt
+            sim.client.cb(None, sim.status_message(mv=4310, ma=-1, battery=94))    # wieder angesteckt, Akku nicht voll: Strom 0
+            await asyncio.sleep(0.1)
+            self.assertIs(cam.public()["charging"], True)
+            sim.client.cb(None, sim.status_message(mv=4390, ma=350, battery=60))   # echtes Laden wäre positiv
             await asyncio.sleep(0.1)
             self.assertIs(cam.public()["charging"], True)
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
+    def test_low_battery_voltage_is_no_cable(self):
+        """Fehler von 0.9.54: Byte 2 war die Spannung, nicht "lädt". Unter 4096 mV (0x0FFF) hätte Bit 0 fälschlich "lädt" ergeben."""
+        async def go():
+            sim = CameraSim(battery=45, mv=3900, ma=-950)                         # niedriger Akku, Batteriebetrieb
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, kind="action4", model="Osmo Action 4")
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            self.assertIs(cam.public()["charging"], False)
+            for mv in (3900, 4000, 4095, 4096, 4300, 4351, 4352, 4400):           # keine Spannung allein ergibt "am Kabel"
+                sim.client.cb(None, sim.status_message(mv=mv, ma=-900))
+                await asyncio.sleep(0.03)
+                self.assertIs(cam.public()["charging"], False, mv)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
     def test_charging_stays_unknown_for_models_where_it_was_not_observed(self):
         async def go():
-            sim = CameraSim(battery=80, byte2=0x11)
+            sim = CameraSim(battery=80, mv=4400, ma=0)
             self.install({ADDR: sim})
             dm = dd.Daemon(tempfile.mkdtemp())
             await self.setup_cam(dm)                                              # Osmo Action 5 Pro
@@ -687,11 +709,11 @@ class Session(unittest.TestCase):
                 for i in range(12):                                               # Byte 1 schwankt ständig (Temperatur o. ä.)
                     sim.client.cb(None, sim.status_message(extra={1: 47 + i % 2}))
                     await asyncio.sleep(0.01)
-                sim.client.cb(None, sim.status_message(byte2=0x11, extra={1: 47}))   # ein Byte, das selten wechselt
+                sim.client.cb(None, sim.status_message(extra={26: 0x21}))            # ein Byte, das selten wechselt
                 await asyncio.sleep(0.05)
             lines = [l for l in cm.output if "Statusnachricht" in l]
             self.assertLessEqual(len(lines), 6)                                   # nicht jede Schwankung
-            self.assertIn("11", lines[-1])
+            self.assertIn("21", lines[-1])
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 

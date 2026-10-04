@@ -450,7 +450,7 @@ function battHtml(c){
   if(c.battery==null) return "";
   const col=c.battery>75?"var(--ok)":(c.battery<25?"var(--crit)":""), age=c.battery_age, stale=age!=null&&age>600;
   const when=stale?` (Stand vor ${age>=3600?Math.round(age/3600)+" Std.":Math.round(age/60)+" Min."})`:"";
-  return `<span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", lädt":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
+  return `<span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", am Ladekabel (lädt oder wird versorgt)":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
 }
 function renderCamLights(list){
   // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt

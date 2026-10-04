@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import secrets
+import struct
 import subprocess
 import time
 import urllib.request
@@ -173,10 +174,13 @@ MODELS = {
 NEW_PROTOCOL = ("action5", "action6", "pocket4")  # brauchen nach dem Start die Bestätigungsnachricht
 CONFIGURE_KINDS = {"action4": 0x08, "action6": 0x08, "action5": 0x1A}
 ACTION2_NAME = "Osmo Action 2"                     # Fernsteuerung klappt laut Moblin nicht
-# Wo steht "lädt" in der Statusnachricht (Typ 0x020D00)? Beobachtet an einer Osmo Action 4 (4. Okt 2026): Byte 2 ist 0x11, solange das
-# Ladekabel steckt, und 0x10, sobald es abgezogen ist (beim Wackeln am Kabel wechselte es mit); der Akkustand fiel danach von 100 auf 99 %.
+# Wo steht "am Ladekabel" in der Statusnachricht (Typ 0x020D00, 34 Byte)? Beobachtet an einer Osmo Action 4 (4. Okt 2026, Kabel mehrfach
+# an- und abgesteckt): Byte 20 = Akku in Prozent; Bytes 1 bis 2 = Akkuspannung in mV (Little Endian; 4400 am Kabel bei vollem Akku, etwa
+# 4250 bis 4300 im Batteriebetrieb); Bytes 5 bis 8 = Strom aus dem Akku in mA (vorzeichenbehaftet, Little Endian): etwa -650 bis -1100,
+# solange die streamende Kamera aus dem Akku läuft, 0 bis -5, sobald das Kabel steckt (positiv wäre Laden). Maßgeblich ist der Strom, nicht
+# ein einzelnes Byte (Byte 2 allein wechselt nur, wenn die Spannung eine Stufengrenze überquert).
 # Für andere Modelle ist es nicht bekannt: dort bleibt "lädt" unbekannt (None), nie geraten.
-CHARGING_BYTE = {"action4": (2, 0x01)}
+POWER_FROM_CURRENT = {"action4": (5, -100)}      # (Byte der Stromangabe, Schwelle in mA): darüber hängt die Kamera am Strom (lädt oder wird versorgt)
 
 RESOLUTIONS = {"480p": 0x47, "720p": 0x04, "1080p": 0x0A}
 FPS = {25: 2, 30: 3}
@@ -360,7 +364,7 @@ class Camera:
         self.detail = ""
         self.battery = None          # zuletzt gemeldeter Akkustand in Prozent; bleibt nach dem Verlust von Bluetooth stehen (mit Alter)
         self.battery_at = 0.0        # wann er gemeldet wurde
-        self.charging = None         # lädt die Kamera? None = unbekannt (nur für Modelle in CHARGING_BYTE bekannt)
+        self.charging = None         # am Ladekabel (lädt oder wird versorgt)? None = unbekannt (nur für Modelle in POWER_FROM_CURRENT bekannt)
         self._status_prev = None      # letzte Statusnachricht (zum Erkennen geänderter Bytes)
         self._status_flips = {}       # Byte -> wie oft es sich geändert hat
         self.task = None
@@ -514,9 +518,9 @@ class Camera:
             if msg.type == TY_STATUS and len(msg.payload) >= 21:
                 self.battery = msg.payload[20]
                 self.battery_at = time.time()
-                spec = CHARGING_BYTE.get(cfg_kind(self.cfg))
-                if spec and len(msg.payload) > spec[0]:
-                    self.charging = bool(msg.payload[spec[0]] & spec[1])
+                spec = POWER_FROM_CURRENT.get(cfg_kind(self.cfg))
+                if spec and len(msg.payload) >= spec[0] + 4:
+                    self.charging = struct.unpack_from("<i", bytes(msg.payload), spec[0])[0] > spec[1]
                 # Zur Klärung bei anderen Modellen: Ändert sich ein Byte der Statusnachricht (außer dem Akkustand), das nicht ständig schwankt,
                 # steht die Nachricht im Journal. Bytes, die schon oft gewechselt haben, gelten als schwankend (Temperatur o. ä.) und zählen nicht.
                 cur = bytes(msg.payload)
