@@ -181,18 +181,64 @@ class BluetoothSticks(unittest.TestCase):
         self.assertIn("1234:abcd", prob[0]["hint"])
         self.assertNotIn("BARROT", prob[0]["hint"])
 
+    def bt_tree(self, usb_root, adapters):
+        """Baut /sys/class/bluetooth nach: adapters = [(hciN, USB-Ordner unter usb_root oder None für einen eingebauten)].
+        Wie auf der echten Box: der Adapter liegt unter <USB-Gerät>/<Ordner>:1.0/bluetooth/hciN, der eingebaute unter einem Plattformgerät."""
+        cls = tempfile.mkdtemp()
+        for hci, usb_dir in adapters:
+            if usb_dir:
+                real = os.path.join(usb_root, usb_dir, usb_dir + ":1.0", "bluetooth", hci)
+            else:
+                real = os.path.join(tempfile.mkdtemp(), "platform", "serial0", "bluetooth", hci)
+            os.makedirs(real)
+            os.symlink(real, os.path.join(cls, hci))
+        return cls
+
+    def test_usb_id_comes_from_sysfs_not_from_bluez(self):
+        usb = self.usb([("5-1.4", "0b05", "190E", "ASUS USB-BT500", ("e0", "01", "01"), "btusb")])
+        bt = self.bt_tree(usb, [("hci0", "5-1.4"), ("hci1", None)])
+        self.assertEqual(dji.usb_id_for_hci("hci0", bt), "0b05:190e")
+        self.assertEqual(dji.usb_id_for_hci("hci1", bt), "")                    # eingebaut: kein USB-Gerät darüber
+        self.assertEqual(dji.usb_id_for_hci("hci9", bt), "")                    # gibt es nicht
+
     def test_status_carries_adapters_and_problems(self):
         d = dji.Dji.__new__(dji.Dji)
         d.lock = threading.Lock()
         d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
         d.adapter_paths = lambda: ["/org/bluez/hci0"]
-        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v0B05p190Ed0200", "Address": "AA:BB", "Powered": True}}}
+        # Wie auf der echten Box: BlueZ nennt die Standardkennung (Linux Foundation), nicht den Stick
+        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
         root = self.usb([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
                          ("5-1.2", "33fa", "0010", "BARROT Bluetooth 5.4 Adapter", ("e0", "01", "01"), None)])
-        with mock.patch.object(dji, "SYSFS_USB", root):
+        bt = self.bt_tree(root, [("hci0", "5-1.4")])
+        with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
             st = d.status()
         self.assertEqual(st["adapters"][0]["usb_id"], "0b05:190e")
-        self.assertEqual([p["id"] for p in st["adapter_problems"]], ["33fa:0010"])
+        self.assertEqual([p["id"] for p in st["adapter_problems"]], ["33fa:0010"])      # der laufende ASUS ist KEIN Problem
+
+    def test_working_stick_gives_no_warning_even_with_the_bluez_default_id(self):
+        d = dji.Dji.__new__(dji.Dji)
+        d.lock = threading.Lock()
+        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
+        d.adapter_paths = lambda: ["/org/bluez/hci0"]
+        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
+        root = self.usb([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb")])
+        bt = self.bt_tree(root, [("hci0", "5-1.4")])
+        with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
+            st = d.status()
+        self.assertEqual(st["adapter_problems"], [])
+
+    def test_modalias_default_id_is_never_taken_for_the_stick(self):
+        d = dji.Dji.__new__(dji.Dji)
+        d.lock = threading.Lock()
+        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
+        d.adapter_paths = lambda: ["/org/bluez/hci0"]
+        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
+        root = self.usb([])
+        bt = self.bt_tree(root, [("hci0", None)])
+        with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
+            st = d.status()
+        self.assertEqual(st["adapters"][0]["usb_id"], "")                         # eingebaut
 
 
 if __name__ == "__main__":

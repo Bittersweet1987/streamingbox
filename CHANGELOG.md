@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.49 (Beta)
+- Behoben: **Fehlmeldung "Der Stick … wurde erkannt, aber der Kernel hat keinen Bluetooth-Adapter daraus gemacht" bei einem Stick, der einwandfrei läuft** (zum Beispiel ASUS USB-BT500 mit laufendem Adapter). Ursache: Die Zuordnung zwischen Stick und Adapter ging über die Kennung, die BlueZ für den Adapter meldet. Das ist aber in der Regel nur die BlueZ-Standardkennung (`usb:v1D6Bp0246`, Linux Foundation), nie die des Sticks; so galt jeder Stick als "nicht erkannt".
+  Jetzt wird die USB-Kennung des Sticks aus `/sys/class/bluetooth` gelesen (vom Adapter aufwärts bis zum USB-Gerät); ein eingebauter Adapter hat keins und gilt weiter als "eingebaut". Die Standardkennung wird nie mehr für den Stick gehalten. Die Warnung für einen Stick ohne Adapter (zum Beispiel UGREEN mit BARROT-Chip) bleibt.
+  Der Fehler war seit 0.9.43 drin: Die Tests hatten die Kennung des Sticks in der BlueZ-Meldung angenommen. Sie bilden jetzt die echten Werte nach (BlueZ-Standardkennung, Adapter unter dem USB-Gerät). Gegen die echte Box geprüft (nur gelesen): ASUS-Stick ergibt keine Warnung.
+- Tests: Kennung aus /sys, eingebauter Adapter, nicht vorhandener Adapter, Stick mit BlueZ-Standardkennung ohne Warnung, Stick ohne Adapter weiter mit Hinweis.
+
 ## 0.9.48 (Beta)
 - Behoben: **Die gelben Punkte in der Kopfleiste ("Oberfläche" und "System") blieben dauerhaft sichtbar**, auch wenn es keine Updates gab. Ursache: Die Darstellung der Punkte (`display`) überstimmte das Attribut `hidden`, mit dem sie ausgeblendet werden. Jetzt gilt für die ganze Seite eine feste Regel `[hidden]{display:none}`.
   Dadurch verschwindet auch die Zeile "Adresse im privaten Netz" mit dem leeren Link in der Karte Fernzugriff, solange Tailscale keine Adresse bereitstellt (sie wurde bisher ebenfalls immer gezeigt).

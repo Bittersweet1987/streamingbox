@@ -17,6 +17,7 @@ import time
 # ---------------------------------------------------------------- Bluetooth-Sticks
 
 SYSFS_USB = "/sys/bus/usb/devices"
+SYSFS_BT = "/sys/class/bluetooth"
 BTDRIVER_STATUS = "/run/pipbox-btdriver/status.json"     # schreibt der Root-Helfer pipbox-btdriver.py (Treiber für Realtek-Sticks)
 BARROT_VENDOR = "33fa"      # Barrot Technology (z. B. UGREEN Bluetooth 5.4 und 6.0, Modell CM748)
 BARROT_HINT = ("Dieser Stick hat einen BARROT-Chip (zum Beispiel UGREEN Bluetooth 5.4 oder 6.0). Der Kernel dieser BELABOX (5.10) "
@@ -63,6 +64,22 @@ def usb_bluetooth_devices(root=None):
         if bt or vid == BARROT_VENDOR:
             out.append({"id": f"{vid}:{pid}", "name": _read1(f"{base}/product") or "Bluetooth-Stick", "driver": driver})
     return out
+
+
+def usb_id_for_hci(name, root=None):
+    """USB-Kennung "vvvv:pppp" des Sticks hinter einem Bluetooth-Adapter (z. B. "hci0"), gelesen aus /sys: vom Adapter aufwärts bis zum
+    USB-Gerät. Leer bei einem eingebauten Adapter (kein USB-Gerät darüber). BlueZ selbst liefert dafür nichts Brauchbares: Seine
+    Modalias ist meist die Standardkennung "usb:v1D6Bp0246" (Linux Foundation) und nennt nie den Stick."""
+    p = os.path.realpath(os.path.join(root or SYSFS_BT, name))
+    for _ in range(12):
+        vid, pid = _read1(f"{p}/idVendor").lower(), _read1(f"{p}/idProduct").lower()
+        if vid and pid:
+            return f"{vid}:{pid}"
+        up = os.path.dirname(p)
+        if up == p:
+            break
+        p = up
+    return ""
 
 
 def usb_id_from_modalias(modalias):
@@ -280,7 +297,8 @@ class Dji:
         try:
             for path in self.adapter_paths():
                 a = self.objects().get(path, {}).get("org.bluez.Adapter1", {})
-                uid = usb_id_from_modalias(a.get("Modalias"))
+                mid = usb_id_from_modalias(a.get("Modalias"))
+                uid = usb_id_for_hci(os.path.basename(path)) or ("" if mid.startswith("1d6b:") else mid)   # 1d6b = BlueZ-Standardkennung, nicht der Stick
                 adapters.append({"usb_id": uid, "address": str(a.get("Address", "")), "powered": bool(a.get("Powered", False))})
                 if uid:
                     ids.append(uid)
