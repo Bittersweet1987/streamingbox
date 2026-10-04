@@ -1188,15 +1188,21 @@ typedef struct {
   gchar *cam[4];                  /* Tausch ohne Unterbrechung: je Kamera eine Liste "queue:art,..." (v = Bild groß, s = Bild klein, a = Ton) */
   gchar *selector, *audio_selector, *select_file, *state_file;
   gint audio_pos;                 /* -1: Ton der Hauptkamera, 0 bis 2: Ton der Kamera an dieser Stelle */
+  gchar *view_file, *view_state_file, *mixer_name, *volume_name;   /* Ansicht im Betrieb: Sichtbarkeit, Tonquelle, Stumm (siehe pb_ctl_poll_view) */
+  gchar *style_base[3];           /* Stil der Stellen 1 bis 3, wie die Pipeline ihn gebaut hat (beim ersten Durchlauf gemerkt) */
+  gboolean view_inited;
+  gint view_hide;                 /* zuletzt gestellt: Bit 0 bis 2 = kleines Bild an Stelle 1 bis 3 ausgeblendet */
+  gint last_v[4];                 /* zuletzt gestellter Zustand des Umschalters (für den Ton), gültig wenn have_v */
+  gboolean have_v;
   GThread *thread;
   volatile gint run;
-  gint64 last_mtime, sel_mtime;
+  gint64 last_mtime, sel_mtime, view_mtime;
 } PbCtl;
 typedef struct { GstElementClass parent_class; } PbCtlClass;
 G_DEFINE_TYPE(PbCtl, pb_ctl, GST_TYPE_ELEMENT)
 
 enum { CTL_0, CTL_FILE, CTL_VQ, CTL_AQ, CTL_PQ, CTL_P2Q, CTL_P3Q, CTL_CAM0, CTL_CAM1, CTL_CAM2, CTL_CAM3,
-       CTL_SEL, CTL_ASEL, CTL_SELFILE, CTL_STATEFILE, CTL_APOS };
+       CTL_SEL, CTL_ASEL, CTL_SELFILE, CTL_STATEFILE, CTL_VIEWFILE, CTL_VIEWSTATE, CTL_MIXER, CTL_VOLUME, CTL_APOS };
 
 /* Wartezeit einer benannten queue setzen. Hauptbild/Ton: Zeitlimit großzügig. Kleine Bilder: die queue hat
  * leaky=downstream und ein Zeitlimit; bei Verzögerung wird das Limit entsprechend angehoben. */
@@ -1267,6 +1273,9 @@ static void pb_ctl_apply_select(PbCtl *self, const int v[4]) {
   if (!par)
     return;
   const guint st = (guint) ((v[0] & 0xF) | ((v[1] & 0xF) << 4) | ((v[2] & 0xF) << 8) | ((v[3] & 0xF) << 12));
+  for (guint i = 0; i < 4; i++)
+    self->last_v[i] = v[i];
+  self->have_v = TRUE;
   GstElement *sel = self->selector ? gst_bin_get_by_name(GST_BIN(par), self->selector) : NULL;
   if (sel) {
     g_object_set(sel, "state", st, NULL);
@@ -1316,11 +1325,166 @@ static void pb_ctl_poll_select(PbCtl *self, gboolean first) {
       guint s = 0;
       g_object_get(sel, "state", &s, NULL);
       int v[4] = { (int) (s & 0xF), (int) ((s >> 4) & 0xF), (int) ((s >> 8) & 0xF), (int) ((s >> 12) & 0xF) };
+      for (guint i = 0; i < 4; i++)
+        self->last_v[i] = v[i];
+      self->have_v = TRUE;
       pb_ctl_publish(self, v);
       gst_object_unref(sel);
     }
     if (par)
       gst_object_unref(par);
+  }
+}
+
+/* ---- Ansicht im Betrieb: kleine Bilder ein-/ausblenden, Tonquelle, Stumm -------------------------------------------------
+ * Steuerdatei view-file mit drei Zahlen "ausgeblendet Tonquelle stumm":
+ *   ausgeblendet: Bit 0 bis 2 = kleines Bild an Stelle 1 bis 3 nicht zeichnen (0 = alle sichtbar)
+ *   Tonquelle:    -1 Ton der Hauptkamera, 0 bis 2 Ton der Kamera an Stelle 1 bis 3 (nur mit Ton-Umschalter; sonst bleibt es wie gebaut)
+ *   stumm:        0 oder 1 (Element "volume" mit dem Namen aus der Eigenschaft volume)
+ * Nach dem Übernehmen schreibt pbctl denselben Zustand, wie er jetzt WIRKLICH gilt, in view-state-file. Was sich nicht stellen lässt
+ * (kein Mischer, kein Ton-Umschalter, kein volume), bleibt dort wie es ist: die Oberfläche merkt es und startet dann neu. */
+
+/* Text ohne "op=..."-Teile (Schlüssel wird ohne Leerzeichen verglichen) */
+static gchar *pb_style_strip_op(const gchar *text) {
+  GString *out = g_string_new(NULL);
+  gchar **parts = g_strsplit(text ? text : "", ",", 0);
+  for (gchar **p = parts; *p; p++) {
+    gchar *eq = strchr(*p, '=');
+    if (eq) {
+      gchar *key = g_strndup(*p, (gsize) (eq - *p));
+      g_strstrip(key);
+      const gboolean is_op = g_strcmp0(key, "op") == 0;
+      g_free(key);
+      if (is_op)
+        continue;
+    }
+    gchar *t = g_strstrip(*p);
+    if (!*t)
+      continue;
+    if (out->len)
+      g_string_append_c(out, ',');
+    g_string_append(out, t);
+  }
+  g_strfreev(parts);
+  return g_string_free(out, FALSE);
+}
+
+/* Gilt im Text am Ende Deckkraft 0 (Bild nicht zeichnen)? Bei doppeltem Schlüssel gilt der letzte (wie im Stil-Parser). */
+static gboolean pb_style_is_hidden(const gchar *text) {
+  PbStyle st;
+  pb_style_parse(text, &st);
+  return st.op == 0;
+}
+
+static void pb_ctl_publish_view(PbCtl *self, gint hide, gint audio, gint mute) {
+  if (!self->view_state_file || !*self->view_state_file)
+    return;
+  gchar *txt = g_strdup_printf("%d %d %d\n", hide, audio, mute);
+  if (g_file_set_contents(self->view_state_file, txt, -1, NULL))
+    g_chmod(self->view_state_file, 0644);
+  g_free(txt);
+}
+
+/* Stil der Stellen 1 bis 3 beim ersten Durchlauf merken (so, wie die Pipeline ihn gebaut hat) */
+static void pb_ctl_remember_styles(PbCtl *self, GstElement *mix) {
+  if (self->view_inited)
+    return;
+  self->view_inited = TRUE;
+  static const gchar *names[3] = { "style1", "style2", "style3" };
+  for (guint i = 0; i < 3; i++) {
+    gchar *txt = NULL;
+    if (mix && g_object_class_find_property(G_OBJECT_GET_CLASS(mix), names[i]))
+      g_object_get(mix, names[i], &txt, NULL);
+    self->style_base[i] = txt ? txt : g_strdup("");
+    if (txt && pb_style_is_hidden(txt))
+      self->view_hide |= 1 << i;                                    /* schon ausgeblendet gebaut */
+  }
+}
+
+static gint pb_ctl_current_mute(GstElement *vol) {
+  gboolean m = FALSE;
+  if (vol && g_object_class_find_property(G_OBJECT_GET_CLASS(vol), "mute"))
+    g_object_get(vol, "mute", &m, NULL);
+  return m ? 1 : 0;
+}
+
+static void pb_ctl_apply_view(PbCtl *self, gint hide, gint audio, gint mute) {
+  GstObject *par = gst_object_get_parent(GST_OBJECT(self));
+  if (!par)
+    return;
+  GstElement *mix = self->mixer_name && *self->mixer_name ? gst_bin_get_by_name(GST_BIN(par), self->mixer_name) : NULL;
+  GstElement *vol = self->volume_name && *self->volume_name ? gst_bin_get_by_name(GST_BIN(par), self->volume_name) : NULL;
+  pb_ctl_remember_styles(self, mix);
+  static const gchar *names[3] = { "style1", "style2", "style3" };
+  if (mix) {
+    for (guint i = 0; i < 3; i++) {
+      if (!g_object_class_find_property(G_OBJECT_GET_CLASS(mix), names[i]))
+        continue;
+      const gint want = (hide >> i) & 1, have = (self->view_hide >> i) & 1;
+      if (want == have)
+        continue;
+      gchar *clean = pb_style_strip_op(self->style_base[i]);
+      gchar *txt = want ? (*clean ? g_strdup_printf("%s,op=0", clean) : g_strdup("op=0")) : g_strdup(clean);
+      g_object_set(mix, names[i], txt, NULL);
+      g_free(txt);
+      g_free(clean);
+      self->view_hide = (self->view_hide & ~(1 << i)) | (want << i);
+    }
+  }
+  GstElement *asel = self->audio_selector && *self->audio_selector ? gst_bin_get_by_name(GST_BIN(par), self->audio_selector) : NULL;
+  if (asel && audio >= -1 && audio <= 2 && self->have_v) {
+    g_atomic_int_set(&self->audio_pos, audio);
+    const gint cam = audio < 0 ? self->last_v[0] : self->last_v[1 + MIN(audio, 2)];
+    if (cam >= 0 && cam <= 3)
+      g_object_set(asel, "state", (guint) cam, NULL);
+  }
+  if (asel)
+    gst_object_unref(asel);
+  if (vol && g_object_class_find_property(G_OBJECT_GET_CLASS(vol), "mute"))
+    g_object_set(vol, "mute", mute ? TRUE : FALSE, NULL);
+  pb_ctl_publish_view(self, self->view_hide, g_atomic_int_get(&self->audio_pos), pb_ctl_current_mute(vol));
+  GST_INFO_OBJECT(self, "Ansicht: ausgeblendet %d, Ton %d, stumm %d", self->view_hide, g_atomic_int_get(&self->audio_pos), mute);
+  if (mix)
+    gst_object_unref(mix);
+  if (vol)
+    gst_object_unref(vol);
+  gst_object_unref(par);
+}
+
+static void pb_ctl_poll_view(PbCtl *self, gboolean first) {
+  if (!self->view_file || !*self->view_file)
+    return;
+  struct stat st;
+  if (stat(self->view_file, &st) == 0) {
+    gint64 mt = (gint64) st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+    if (mt != self->view_mtime) {
+      self->view_mtime = mt;
+      int v[3] = { -1, -2, 0 };
+      FILE *f = fopen(self->view_file, "r");
+      if (f) {
+        if (fscanf(f, "%d %d %d", &v[0], &v[1], &v[2]) < 3)
+          v[0] = -1;
+        fclose(f);
+      }
+      if (v[0] >= 0 && v[0] <= 7 && v[1] >= -1 && v[1] <= 2 && v[2] >= 0 && v[2] <= 1) {
+        pb_ctl_apply_view(self, v[0], v[1], v[2]);
+        return;
+      }
+    }
+  }
+  if (first) {                                                       /* keine (brauchbare) Datei: Zustand melden, nichts ändern */
+    GstObject *par = gst_object_get_parent(GST_OBJECT(self));
+    if (par) {
+      GstElement *mix = self->mixer_name && *self->mixer_name ? gst_bin_get_by_name(GST_BIN(par), self->mixer_name) : NULL;
+      GstElement *vol = self->volume_name && *self->volume_name ? gst_bin_get_by_name(GST_BIN(par), self->volume_name) : NULL;
+      pb_ctl_remember_styles(self, mix);
+      pb_ctl_publish_view(self, self->view_hide, g_atomic_int_get(&self->audio_pos), pb_ctl_current_mute(vol));
+      if (mix)
+        gst_object_unref(mix);
+      if (vol)
+        gst_object_unref(vol);
+      gst_object_unref(par);
+    }
   }
 }
 
@@ -1350,6 +1514,7 @@ static gpointer pb_ctl_thread(gpointer data) {
     if (tick % 3 == 0)                                             /* Verzögerung: alle 0,3 s */
       pb_ctl_poll_delay(self);
     pb_ctl_poll_select(self, tick == 0);                           /* Umschalten: alle 0,1 s */
+    pb_ctl_poll_view(self, tick == 0);                             /* Ansicht (ein-/ausblenden, Ton, stumm): alle 0,1 s, nach dem Umschalten */
     tick++;
     g_usleep(100000);
   }
@@ -1361,6 +1526,7 @@ static GstStateChangeReturn pb_ctl_change_state(GstElement *el, GstStateChange t
   if (t == GST_STATE_CHANGE_PAUSED_TO_PLAYING && !self->thread) {
     self->last_mtime = 0;
     self->sel_mtime = 0;
+    self->view_mtime = 0;
     g_atomic_int_set(&self->run, 1);
     self->thread = g_thread_new("pbctl", pb_ctl_thread, self);
   }
@@ -1389,6 +1555,10 @@ static gchar **pb_ctl_str_slot(PbCtl *self, guint id) {
     case CTL_ASEL: return &self->audio_selector;
     case CTL_SELFILE: return &self->select_file;
     case CTL_STATEFILE: return &self->state_file;
+    case CTL_VIEWFILE: return &self->view_file;
+    case CTL_VIEWSTATE: return &self->view_state_file;
+    case CTL_MIXER: return &self->mixer_name;
+    case CTL_VOLUME: return &self->volume_name;
     default: return NULL;
   }
 }
@@ -1424,11 +1594,13 @@ static void pb_ctl_get_property(GObject *o, guint id, GValue *v, GParamSpec *ps)
 
 static void pb_ctl_finalize(GObject *o) {
   PbCtl *self = (PbCtl *) o;
-  for (guint id = CTL_FILE; id <= CTL_STATEFILE; id++) {
+  for (guint id = CTL_FILE; id <= CTL_VOLUME; id++) {
     gchar **p = pb_ctl_str_slot(self, id);
     if (p)
       g_free(*p);
   }
+  for (guint i = 0; i < 3; i++)
+    g_free(self->style_base[i]);
   G_OBJECT_CLASS(pb_ctl_parent_class)->finalize(o);
 }
 
@@ -1473,6 +1645,18 @@ static void pb_ctl_class_init(PbCtlClass *klass) {
   g_object_class_install_property(oc, CTL_STATEFILE,
       g_param_spec_string("state-file", "Zustandsdatei", "Hier meldet pbctl den tatsächlich eingestellten Zustand zurück", "/run/pipbox-send/swap-state",
                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
+  g_object_class_install_property(oc, CTL_VIEWFILE,
+      g_param_spec_string("view-file", "Ansicht-Datei", "Datei mit drei Zahlen: ausgeblendet (Bit 0 bis 2 = kleines Bild 1 bis 3), Tonquelle (-1 Hauptbild, 0 bis 2), stumm (0/1)",
+                          "/var/lib/pipbox/main-view", G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
+  g_object_class_install_property(oc, CTL_VIEWSTATE,
+      g_param_spec_string("view-state-file", "Ansicht-Zustandsdatei", "Hier meldet pbctl die tatsächlich gestellte Ansicht zurück", "/run/pipbox-send/view-state",
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
+  g_object_class_install_property(oc, CTL_MIXER,
+      g_param_spec_string("mixer", "Mischer", "Name des pbpipmix, dessen Stile style1 bis style3 zum Ein-/Ausblenden gestellt werden", "pipmix",
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
+  g_object_class_install_property(oc, CTL_VOLUME,
+      g_param_spec_string("volume", "Lautstärke-Element", "Name des volume-Elements, das stumm geschaltet wird", "avol",
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
   g_object_class_install_property(oc, CTL_APOS,
       g_param_spec_int("audio-pos", "Ton von Stelle", "-1 Ton der Hauptkamera, 0 bis 2 Ton der Kamera an dieser Stelle", -1, 2, -1,
                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
@@ -1486,7 +1670,11 @@ static void pb_ctl_init(PbCtl *self) {
   self->run = 0;
   self->last_mtime = 0;
   self->sel_mtime = 0;
+  self->view_mtime = 0;
   self->audio_pos = -1;
+  self->view_inited = FALSE;
+  self->view_hide = 0;
+  self->have_v = FALSE;
 }
 
 /* ------------------------------------------------------------------ Plugin */

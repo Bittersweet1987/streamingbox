@@ -483,6 +483,8 @@ PIP_CORNERS = ("oben links", "oben rechts", "unten links", "unten rechts", "unte
 FREE = 5                      # Nummer von "frei": Position aus x/y (Promille)
 PLUGIN_SO = "/opt/pipbox/gst/libgstpbpip.so"
 SEND_STATUS = "/run/pipbox-send/status.json"
+VIEW_FILE = "main-view"                 # Datei im Zustandsordner: "ausgeblendet Tonquelle stumm" (liest der Baustein pbctl, siehe gst/gstpbpip.c)
+VIEW_STATE = "/run/pipbox-send/view-state"   # hier meldet pbctl zurück, was wirklich gilt
 SWAP_SELECT = "main-select"            # Datei im Zustandsordner: welche Kamera ist Hauptbild (liest der Baustein pbctl)
 SWAP_STATE = "/run/pipbox-send/swap-state"   # hier meldet pbctl zurück, was er eingestellt hat
 _CENTER = {"mtime": None, "ok": True, "free": True}
@@ -533,6 +535,26 @@ def plugin_swap():
     except OSError:
         return True
     return _SWAP["ok"]
+
+
+_VIEW = {"mtime": None, "ok": True}
+VIEW_ENABLED = False         # Ansicht im Betrieb (Issue #19): der Baustein kann sie schon, die Sendekette nutzt sie erst, wenn die Fußleiste sie braucht und sie mit echten Kameras geprüft ist
+
+
+def plugin_view():
+    """Kennt der installierte Baustein die Ansicht im Betrieb (Eigenschaften "view-file" und "view-state-file" von pbctl: kleine Bilder
+    ein-/ausblenden, Tonquelle, stumm ohne Neustart), und ist sie eingeschaltet (VIEW_ENABLED)? Ohne Baustein (Entwicklungsrechner) ja."""
+    if not VIEW_ENABLED:
+        return False
+    try:
+        mt = os.stat(PLUGIN_SO).st_mtime
+        if _VIEW["mtime"] != mt:
+            with open(PLUGIN_SO, "rb") as f:
+                data = f.read()
+            _VIEW.update(mtime=mt, ok=b"view-file" in data and b"view-state-file" in data)
+    except OSError:
+        return True
+    return _VIEW["ok"]
 
 
 _STYLE = {"mtime": None, "ok": True}
@@ -941,6 +963,53 @@ class PipelineStore:
         return {"cams": cams, "group": group, "audio_pos": pos, "asel": pos < 0 or pos + 1 < group,
                 "state": nums[0] | nums[1] << 4 | nums[2] << 8 | nums[3] << 12, "line": " ".join(map(str, nums))}
 
+    AUDIO_POS = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}
+
+    @classmethod
+    def view_values(cls, cfg):
+        """Ansicht im Betrieb aus der Einstellung: (ausgeblendet, Tonquelle). ausgeblendet: Bit 0 bis 2 = kleines Bild an Stelle 1 bis 3 ist
+        ausgeblendet; Tonquelle: -1 Hauptbild, 0 bis 2 das kleine Bild an dieser Stelle (so, wie der Baustein es versteht)."""
+        c = cls._safe_cfg(cfg)
+        hide = 0
+        for i, k in enumerate(STYLE_SLOTS):
+            if not c["styles"][k]["visible"]:
+                hide |= 1 << i
+        plan = cls.swap_plan(c)
+        audio = plan["audio_pos"] if plan else cls.AUDIO_POS.get(c.get("audio", "main"), -1)
+        return hide, audio
+
+    @classmethod
+    def view_line(cls, cfg, mute=0):
+        hide, audio = cls.view_values(cfg)
+        return f"{hide} {audio} {1 if mute else 0}"
+
+    def set_view(self, visible=None, audio=None):
+        """Sichtbarkeit der kleinen Bilder (visible: {"1": bool, ...}) und Tonquelle (audio: main, pip, pip2, pip3) ändern und speichern.
+        Gibt (ausgeblendet, Tonquelle) der neuen Einstellung zurück. Nur bei Bild-in-Bild."""
+        with self.lock:
+            c = self.cfg
+            if c.get("type") != "pip":
+                raise ValueError("Das gibt es nur bei der Art Bild-in-Bild")
+            if visible is not None:
+                if not isinstance(visible, dict) or any(k not in STYLE_SLOTS or not isinstance(v, bool) for k, v in visible.items()):
+                    raise ValueError("Bild einblenden: Stelle 1 bis 3, ja oder nein")
+                for k, v in visible.items():
+                    if k == "2" and not c.get("pip2") or k == "3" and not c.get("pip3") or k == "1" and not c.get("pip"):
+                        raise ValueError("Dieses kleine Bild gibt es nicht")
+            if audio is not None:
+                if not isinstance(audio, str) or audio not in self.AUDIO_POS:
+                    raise ValueError("Ton: Hauptbild oder eines der kleinen Bilder")
+                if audio == "pip" and not c.get("pip") or audio == "pip2" and not c.get("pip2") or audio == "pip3" and not c.get("pip3"):
+                    raise ValueError("Ton: dieses kleine Bild gibt es nicht")
+            styles = clean_styles(c.get("styles"))
+            for k, v in (visible or {}).items():
+                styles[k]["visible"] = v
+            c["styles"] = styles
+            if audio is not None:
+                c["audio"] = audio
+            self.save()
+            return self.view_values(c)
+
     @staticmethod
     def swap_line(slots, cams, group):
         """Umschaltzeile für die laufende Sendekette aus der Belegung (Hauptbild, kleine Bilder 1 bis 3; "" = leer) und den Kameras
@@ -1029,7 +1098,8 @@ class PipelineStore:
         v += ("mpph265enc zero-copy-pkt=0 qp-max=51 gop=60 name=venc_bps !\n"
               f"h265parse config-interval=-1 ! {q} ! mux.\n")
         out.append(v)
-        opus = ("audioconvert ! audioresample quality=10 sinc-filter-mode=1 ! opusenc bitrate=128000 ! opusparse")
+        vol = "volume name=avol ! " if pip and plugin_view() else ""             # Stummschalten im Betrieb (pbctl, siehe gst/gstpbpip.c)
+        opus = f"audioconvert ! audioresample quality=10 sinc-filter-mode=1 ! {vol}opusenc bitrate=128000 ! opusparse"
         audio_sel = c.get("audio", "main") if pip else "main"
         if audio_sel == "pip2" and not pip2 or audio_sel == "pip3" and not pip3 or audio_sel not in ("main", "pip", "pip2", "pip3"):
             audio_sel = "main"
@@ -1102,7 +1172,8 @@ class PipelineStore:
                    "queue max-size-time=500000000 max-size-buffers=4 leaky=downstream !\n"
                    "mpph265enc zero-copy-pkt=0 qp-max=51 gop=60 name=venc_bps !\n"
                    f"h265parse config-interval=-1 ! {q} ! mux.\n")
-        opus = "audioconvert ! audioresample quality=10 sinc-filter-mode=1 ! opusenc bitrate=128000 ! opusparse"
+        vol = "volume name=avol ! " if plugin_view() else ""                      # Stummschalten im Betrieb (pbctl, siehe gst/gstpbpip.c)
+        opus = f"audioconvert ! audioresample quality=10 sinc-filter-mode=1 ! {vol}opusenc bitrate=128000 ! opusparse"
         mute = "queue max-size-buffers=4 leaky=downstream ! fakesink sync=false async=false\n"
         queues = []
         for i, key in enumerate(cams):
@@ -1133,7 +1204,7 @@ class PipelineStore:
             queues.append(f" cam{i}={','.join(items)}")
         if plan["asel"]:
             out.append(f"pbpipsel name=asel state={0 if ap < 0 else ap + 1} !\nidentity name=a_delay signal-handoffs=TRUE !\n"
-                       f"opusenc bitrate=128000 ! opusparse ! {q} ! mux.\n")
+                       f"{vol}opusenc bitrate=128000 ! opusparse ! {q} ! mux.\n")
         out.append("pbctl name=pbctl selector=vsel" + (" audio-selector=asel" if plan["asel"] else "") + f" audio-pos={ap}" + "".join(queues) + "\n")
         out.append("mpegtsmux name=mux !\nappsink name=appsink\n")
         return "\n".join(out)
@@ -1143,6 +1214,19 @@ class PipelineStore:
         return {"config": dict(self.cfg, styles=clean_styles(self.cfg.get("styles"))), "plugin_style": plugin_style(), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown")} for c in cams],
                 "corners": list(pip_corners()), "preview": self.build() if self.cfg.get("main") in keys else "",
                 "needs_plugin": self.cfg.get("type") == "pip", "plugin_present": os.path.exists("/opt/pipbox/gst/libgstpbpip.so")}
+
+
+def view_only_change(a, b):
+    """Unterscheiden sich zwei Bildaufbau-Einstellungen nur in "Bild einblenden" (je Stelle) und der Tonquelle? Nur das lässt sich in der laufenden
+    Sendekette ohne Neustart umschalten."""
+    def norm(c):
+        c = dict(c)
+        c["audio"] = "main"
+        c["styles"] = clean_styles(c.get("styles"))
+        for k in STYLE_SLOTS:
+            c["styles"][k] = dict(c["styles"][k], visible=True)
+        return c
+    return a.get("type") == "pip" and norm(a) == norm(b)
 
 
 class SendControl:
@@ -1229,6 +1313,7 @@ class SendControl:
                "since": d.get("since"), "restarts": d.get("restarts"), "delay_live": bool(d.get("delay_live")), "delay_live_pips": bool(d.get("delay_live_pips")),
                "server": sel and {"name": sel["name"], "host": sel["host"], "port": sel["port"]}}
         out["failover"] = d.get("failover") if active else None
+        out["view_live"], out["audio_live"], out["view"] = self.view_live(), self.audio_live(), self.view_state()
         sw = d.get("swap") if active else None
         out["swap_group"] = [k for k in sw["cams"][:int(sw.get("group", 0))] if isinstance(k, str)] if isinstance(sw, dict) and isinstance(sw.get("cams"), list) else []
         applied = d.get("applied") if active else None
@@ -1255,6 +1340,8 @@ class SendControl:
                 raise ValueError("Neustart nicht möglich: " + "; ".join(why))
         elif action != "stop":
             raise ValueError("Unbekannte Aktion")
+        if action == "start" and not self.demo:
+            self.reset_mute()                      # eine neue Sendung beginnt nie stumm
         self._act = None
         if self.demo:
             return
@@ -1315,6 +1402,100 @@ class SendControl:
                 pass
             time.sleep(0.1)
         return False
+
+    def reset_mute(self):
+        """Stumm gilt nur für die laufende Sendung: vor dem Start die Ansicht-Datei ohne Stumm neu schreiben (der Sender liest sie beim Aufbau)."""
+        folder = os.path.dirname(self.req)
+        try:
+            tmp = os.path.join(folder, VIEW_FILE + ".tmp")
+            with open(tmp, "w") as f:
+                f.write(PipelineStore.view_line(self.pipeline.cfg, 0) + "\n")
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(folder, VIEW_FILE))
+        except OSError:
+            pass
+
+    def view_live(self):
+        """Läuft die Sendekette mit der Ansicht im Betrieb (kleine Bilder ein-/ausblenden und stumm ohne Neustart)? Im Notbetrieb (Anordnung weicht
+        von der Einstellung ab) passen die Stellen nicht zu den Kameras: dann nicht."""
+        if self.demo:
+            return True
+        d = self._detail()
+        return bool(self._active() and d.get("view_live") and not (d.get("failover") or {}).get("degraded"))
+
+    def audio_live(self):
+        """Dasselbe für die Tonquelle (braucht den Ton-Umschalter der laufenden Sendekette)."""
+        return True if self.demo else bool(self.view_live() and self._detail().get("audio_live"))
+
+    def view_state(self):
+        """Was der Baustein gerade eingestellt hat: {"hide": Bits, "audio": -1..2, "mute": bool} oder None."""
+        if self.demo:
+            return getattr(self, "_fake_view", None)
+        if not self._active():
+            return None
+        try:
+            hide, audio, mute = (int(x) for x in open(VIEW_STATE).read().split()[:3])
+        except (OSError, ValueError):
+            return None
+        return {"hide": hide, "audio": audio, "mute": bool(mute)}
+
+    def apply_view(self, hide, audio, mute):
+        """Ansicht in die laufende Sendekette übernehmen, ohne Neustart. Wahr, wenn der Baustein den neuen Zustand zurückgemeldet hat (so, wie er
+        wirklich gilt); sonst bleibt der Neustart. Die Zeile schreibt dieser Dienst, den Zustand meldet pbctl zurück."""
+        line = f"{int(hide)} {int(audio)} {1 if mute else 0}"
+        if self.demo:
+            self._fake_view = {"hide": int(hide), "audio": int(audio), "mute": bool(mute)}
+            return True
+        if not self._active():
+            return False
+        folder = os.path.dirname(self.req)
+        tmp = os.path.join(folder, VIEW_FILE + ".tmp")
+        t0 = time.time()
+        try:
+            with open(tmp, "w") as f:
+                f.write(line + "\n")
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(folder, VIEW_FILE))
+        except OSError:
+            return False
+        end = time.monotonic() + self.SWAP_WAIT
+        while time.monotonic() < end:                       # der Baustein liest alle 0,1 s und meldet den Zustand zurück
+            try:
+                if os.stat(VIEW_STATE).st_mtime >= t0 - 0.2:
+                    with open(VIEW_STATE) as f:
+                        if f.read().split() == line.split():
+                            return True
+            except OSError:
+                pass
+            time.sleep(0.1)
+        return False
+
+    def change_view(self, visible=None, audio=None, mute=None):
+        """Sichtbarkeit, Tonquelle und Stumm ändern. Speichert Sichtbarkeit und Tonquelle in der Einstellung, schaltet in der laufenden Sendung ohne
+        Neustart um und startet nur dann neu, wenn der Baustein das nicht kann. Stumm gilt nur für die laufende Sendung (ohne Sendung nichts zu tun).
+        Gibt {"live": ob ohne Neustart, "restarted": ob neu gestartet, "note": Text, "view": Zustand} zurück."""
+        if mute is not None and not isinstance(mute, bool):
+            raise ValueError("Stumm: ja oder nein")
+        if visible is None and audio is None and mute is None:
+            raise ValueError("Nichts zu ändern")
+        active = self._active() if not self.demo else True
+        if mute is not None and not active:
+            raise ValueError("Stumm schalten geht nur während der Sendung")
+        before = self.view_state()
+        old_hide, old_audio = PipelineStore.view_values(self.pipeline.cfg)
+        hide, aud = self.pipeline.set_view(visible, audio) if (visible is not None or audio is not None) else (old_hide, old_audio)
+        cur_mute = bool(before["mute"]) if before else False
+        new_mute = cur_mute if mute is None else mute
+        if not active:
+            return {"live": False, "restarted": False, "note": "Gespeichert. Gilt ab dem nächsten Start der Sendung.", "view": None}
+        needs_audio = audio is not None and aud != (before["audio"] if before else old_audio)
+        if self.view_live() and (not needs_audio or self.audio_live() or self.demo):
+            if self.apply_view(hide, aud, new_mute):
+                return {"live": True, "restarted": False, "note": "", "view": self.view_state()}
+        if mute is not None and visible is None and audio is None:
+            raise ValueError("Stumm schalten ging gerade nicht (die Sendekette kennt das noch nicht). Bitte die Sendung einmal neu starten.")
+        restarted, note = self.restart_if_live()
+        return {"live": False, "restarted": restarted, "note": note, "view": None}
 
     def restart_if_live(self):
         """Nach geänderter Pipeline: läuft die Sendekette, wird sie kurz neu gestartet.
@@ -2408,17 +2589,19 @@ class LogBundle:
 
 
 class Developer:
-    """Entwickler: den SSH-Dienst der Box ein- und ausschalten (wie die Original-Oberfläche der BELABOX). Dieser Dienst hat keine Root-Rechte: er
-    legt nur ein Stichwort aus fester Liste in eine Auslösedatei, der Root-Helfer pipbox-ssh.py schaltet den Dienst. Passwörter, Schlüssel und die
-    Einstellungen von SSH fasst weder dieser Dienst noch der Helfer an; ein Passwort erzeugt die Original-Oberfläche. Von deren Dateien wird nur
-    gelesen, wie der SSH-Benutzer heißt und ob dort ein Passwort erzeugt wurde (das Passwort selbst wird nie gelesen oder ausgegeben)."""
-    ACTIONS = ("start", "stop", "check")
+    """Entwickler: den SSH-Dienst der Box ein- und ausschalten und das SSH-Passwort erzeugen (wie die Original-Oberfläche der BELABOX). Dieser
+    Dienst hat keine Root-Rechte: er legt nur ein Stichwort aus fester Liste (start, stop, check, reset) in eine Auslösedatei, der Root-Helfer
+    pipbox-ssh.py führt es aus. Schlüssel und die Einstellungen von SSH fasst nichts davon an. Das erzeugte Passwort liegt in ssh-pass.json
+    (Benutzer pipbox, 0600) und wird nur auf Knopfdruck angezeigt, nie in der Statusabfrage. Von den Dateien der Original-Oberfläche wird nur
+    gelesen, wie der SSH-Benutzer heißt und welches Passwort sie erzeugt hat."""
+    ACTIONS = ("start", "stop", "check", "reset")
     STATUS = "/run/pipbox-ssh/status.json"
     HELPER = "/etc/systemd/system/pipbox-ssh.path"
     USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 
     def __init__(self, state_dir, demo, bela_config=None):
         self.req = os.path.join(state_dir, "ssh-request")
+        self.pass_file = os.path.join(state_dir, "ssh-pass.json")
         self.demo = demo
         self.bela_dir = os.path.dirname(os.path.abspath(bela_config)) if bela_config else None
         self.fake_active = False
@@ -2439,8 +2622,23 @@ class Developer:
         u = (self._json("setup.json") or {}).get("ssh_user")
         return u if isinstance(u, str) and self.USER_RE.fullmatch(u) else ""
 
+    def _ours(self):
+        """Das von IRL4YOU BOX erzeugte Passwort (ssh-pass.json) für den SSH-Benutzer oder None."""
+        try:
+            with open(self.pass_file) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return None
+        user = self.ssh_user()
+        if isinstance(d, dict) and isinstance(d.get("password"), str) and d["password"] and isinstance(d.get("user"), str) and (not user or d["user"] == user):
+            return d
+        return None
+
     def password_created(self):
-        """Hat die Original-Oberfläche ein SSH-Passwort erzeugt? None, wenn es sie auf dieser Box nicht gibt. Nur das Vorhandensein wird geprüft."""
+        """Gibt es ein erzeugtes SSH-Passwort (von IRL4YOU BOX oder von der Original-Oberfläche)? None, wenn weder das eine noch die Original-Oberfläche
+        da ist. Nur das Vorhandensein wird geprüft."""
+        if self._ours():
+            return True
         c = self._json("config.json")
         return None if c is None else bool(c.get("ssh_pass"))
 
@@ -2461,7 +2659,7 @@ class Developer:
 
     def status(self):
         if self.demo:
-            return {"helper_installed": True, "available": True, "user": "user", "active": self.fake_active, "enabled": True,
+            return {"helper_installed": True, "available": True, "user": "user", "can_reset": True, "active": self.fake_active, "enabled": True,
                     "password_created": bool(self.fake_pass), "password_state": "generated" if self.fake_pass else "unknown",
                     "state": "idle", "message": "", "time": self.fake_time}
         try:
@@ -2472,8 +2670,9 @@ class Developer:
         has_unit = ttl_cached("ssh_unit", 30.0, self._has_unit)
         active = ttl_cached("ssh_active", 2.0, lambda: self._systemctl("is-active")[1] == "active")
         enabled = ttl_cached("ssh_enabled", 30.0, lambda: self._systemctl("is-enabled")[1] == "enabled")
-        return {"helper_installed": os.path.exists(self.HELPER), "available": bool(has_unit), "user": self.ssh_user(), "active": active, "enabled": enabled,
-                "password_created": self.password_created(),
+        user = self.ssh_user()
+        return {"helper_installed": os.path.exists(self.HELPER), "available": bool(has_unit), "user": user, "can_reset": bool(user),
+                "active": active, "enabled": enabled, "password_created": self.password_created(),
                 "password_state": h.get("password_state") if h.get("password_state") in ("generated", "own", "unknown") else None,
                 "state": h.get("state", "idle"), "message": str(h.get("message", ""))[:200], "time": h.get("time", 0)}
 
@@ -2483,16 +2682,21 @@ class Developer:
         st = self.status()
         if not st["helper_installed"]:
             raise ValueError("Der Helfer ist nicht installiert (Software-Update einspielen oder install.sh erneut ausführen)")
-        if not st["available"]:
+        if action != "reset" and action != "check" and not st["available"]:
             raise ValueError("Auf dieser Box gibt es keinen SSH-Dienst")
         if st["state"] == "working" and time.time() - st.get("time", 0) < 60:
             raise ValueError("Es läuft schon eine Aktion")
-        if action == "start" and st["password_created"] is not True and confirm is not True:
-            raise ValueError("Bestätigung fehlt: Für SSH wurde noch kein neues Passwort erzeugt")
+        if action == "reset":
+            if not st["can_reset"]:
+                raise ValueError("Für diese Box ist kein SSH-Benutzer eingerichtet")
+            if confirm is not True:
+                raise ValueError("Bestätigung fehlt: Das alte Passwort gilt danach nicht mehr")
         if self.demo:
             self.fake_time += 1
-            if action != "check":
+            if action in ("start", "stop"):
                 self.fake_active = action == "start"
+            elif action == "reset":
+                self.fake_pass = "Neu-" + str(self.fake_time) + "-Demo-Passwort"
             return
         ttl_cached_drop("ssh_active")
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -2500,17 +2704,19 @@ class Developer:
             f.write(action + "\n")
 
     def password(self):
-        """Das SSH-Passwort, das die Original-Oberfläche erzeugt hat (nur für die angemeldete Oberfläche, auf Knopfdruck). Es wird hier nie erzeugt
-        oder geändert."""
+        """Das erzeugte SSH-Passwort (nur für die angemeldete Oberfläche, auf Knopfdruck): das von IRL4YOU BOX erzeugte, sonst das der Original-Oberfläche.
+        Hier wird nichts erzeugt oder geändert."""
         if self.demo:
             if not self.fake_pass:
                 raise ValueError("Für SSH wurde noch kein Passwort erzeugt")
             return {"user": "user", "password": self.fake_pass, "state": "generated"}
+        ours = self._ours()
+        if ours:
+            return {"user": self.ssh_user() or ours["user"], "password": ours["password"], "state": self.status().get("password_state")}
         c = self._json("config.json")
         pw = c.get("ssh_pass") if c else None
         if not isinstance(pw, str) or not pw:
-            raise ValueError("Für SSH wurde noch kein Passwort erzeugt. Das geht in der Original-Oberfläche der BELABOX (Bereich Advanced / developer, "
-                             "Knopf Reset).")
+            raise ValueError("Für SSH wurde noch kein Passwort erzeugt. Es entsteht beim ersten Einschalten oder mit „Passwort zurücksetzen“.")
         return {"user": self.ssh_user(), "password": pw, "state": self.status().get("password_state")}
 
 
@@ -3381,6 +3587,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/swupdate":
                 self.swupdate.request(d.get("action"), d.get("confirm") is True, d.get("version"), d.get("older") is True)
                 return self.reply(200, {"ok": True})
+            if path == "/api/pipeline/view":
+                if "visible" not in d and "audio" not in d and "mute" not in d:
+                    raise ValueError("Nichts zu ändern")
+                return self.reply(200, dict(self.send.change_view(d.get("visible"), d.get("audio"), d.get("mute")), ok=True))
             if path == "/api/pipeline/swap":
                 with_key = d.get("with")
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
@@ -3395,6 +3605,14 @@ class Handler(BaseHTTPRequestHandler):
                 before["styles"] = clean_styles(before.get("styles"))        # eine unveränderte Einstellung ohne Stile gilt nicht als Änderung
                 self.pipeline.set(d, [c["key"] for c in self.cams.cams])
                 restarted, note = (False, "")
+                if self.pipeline.cfg != before and view_only_change(before, self.pipeline.cfg):
+                    # nur "Bild einblenden" und/oder die Tonquelle geändert: im Betrieb ohne Neustart übernehmen, wenn die Sendekette das kann
+                    hide, aud = PipelineStore.view_values(self.pipeline.cfg)
+                    audio_changed = before.get("audio") != self.pipeline.cfg.get("audio")
+                    cur = self.send.view_state()
+                    if self.send.view_live() and (not audio_changed or self.send.audio_live()) and \
+                            self.send.apply_view(hide, aud, bool(cur and cur["mute"])):
+                        return self.reply(200, {"ok": True, "restarted": False, "note": "Gespeichert. Die Änderung wird live übernommen, ohne Neustart."})
                 if self.pipeline.cfg != before:
                     only_delay = {k: v for k, v in before.items() if k not in DELAY_KEYS} == \
                                  {k: v for k, v in self.pipeline.cfg.items() if k not in DELAY_KEYS}

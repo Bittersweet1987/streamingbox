@@ -105,6 +105,7 @@ Zeichenkern in `gst/gstpbpip.c` und die Oberfläche wurden für den Baustein die
 ## Original-Oberfläche der BELABOX (AGPL-3.0)
 
 IRL4YOU BOX läuft neben der Original-Oberfläche der BELABOX (belaUI) und verändert sie nicht. Aus ihr wird **kein Quelltext** verwendet. Die Karte
-"Entwickler" liest nur zwei Einstellungsdateien dieser Oberfläche (`setup.json`: Name des SSH-Benutzers, `config.json`: ob ein SSH-Passwort erzeugt
-wurde und welches) und schaltet den SSH-Dienst des Systems (`systemctl start/stop ssh`) mit eigenem Code; das Passwort erzeugt weiterhin die
-Original-Oberfläche. Auch das BELABOX-Passwort wird nur zum Anmelden mitbenutzt.
+"Entwickler" liest nur zwei Einstellungsdateien dieser Oberfläche (`setup.json`: Name des SSH-Benutzers, `config.json`: ob sie ein SSH-Passwort erzeugt hat
+und welches) und schaltet den SSH-Dienst des Systems (`systemctl start/stop ssh`) sowie das Passwort des SSH-Benutzers (`chpasswd`) mit eigenem Code; ein
+von IRL4YOU BOX erzeugtes Passwort liegt in einer eigenen Datei (`ssh-pass.json`), die Dateien der Original-Oberfläche werden nicht beschrieben. Auch das
+BELABOX-Passwort wird nur zum Anmelden mitbenutzt.

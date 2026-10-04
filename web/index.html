@@ -491,10 +491,8 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="logmsg" class="ph"></div>
   </details>
   <details class="card wide" id="c_dev"><summary><span class="sumh">Entwickler</span><span id="dev_badge" class="badge">…</span></summary>
-    <div class="sech" style="margin-top:0">SSH-Zugang</div>
-    <div class="ph" style="margin-top:0">SSH ist die Anmeldung an der Box über das Netzwerk (Port 22), für Fortgeschrittene und die Fehlersuche. Hier wird nur der Dienst <b>ein- und ausgeschaltet</b>, wie in der Original-Oberfläche der BELABOX. Das Passwort für SSH erzeugt die Original-Oberfläche (Bereich „Advanced / developer“, Knopf „Reset“); hier wird es auf Knopfdruck angezeigt. Passwörter, Schlüssel und die Einstellungen von SSH ändert IRL4YOU BOX nicht. Nach einem Neustart der Box gilt wieder die Einstellung des Systems.</div>
     <div id="dev_state" class="wstat"><span class="wdot"></span><span class="wgrow" id="dev_text">Wird geladen …</span></div>
-    <div class="actions"><button id="dev_on" type="button" class="warnbtn">SSH einschalten</button> <button id="dev_off" type="button" class="sec">SSH ausschalten</button> <button id="dev_pw" type="button" class="sec" title="Zeigt das SSH-Passwort, das die Original-Oberfläche der BELABOX erzeugt hat">Passwort anzeigen</button> <button id="dev_open" type="button" class="sec" title="Öffnet die Original-Oberfläche der BELABOX auf derselben Box (Port 80)">Original-Oberfläche öffnen</button></div>
+    <div class="actions"><button id="dev_toggle" type="button" class="warnbtn" disabled>SSH einschalten</button> <button id="dev_pw" type="button" class="sec">Passwort anzeigen</button> <button id="dev_reset" type="button" class="sec">Passwort zurücksetzen</button></div>
     <div id="dev_msg" class="ph" role="status"></div>
     <div id="dev_pw_out" class="ph sens" role="status"></div>
   </details>
@@ -1699,51 +1697,60 @@ document.querySelectorAll('input[name="logmode"]').forEach(r=>r.addEventListener
 $("c_logs").addEventListener("toggle",()=>{ if($("c_logs").open) logLoad(); });
 logLoad();
 
-// ---- Entwickler: SSH-Zugang ein- und ausschalten (nur den Dienst; Passwort und Einstellungen gehören der Original-Oberfläche der BELABOX) ----
-let devData=null, devTimer=null;
+// ---- Entwickler: SSH-Zugang ein- und ausschalten und Passwort (Karte "Entwickler") ----
+let devData=null, devTimer=null, devPwShown=false;
+function devPwButton(){ $("dev_pw").textContent=devPwShown?"Passwort ausblenden":"Passwort anzeigen"; }
 async function devLoad(){
   let d; try{ d=await srtlaCall("GET","/api/developer"); }catch(e){ return; }
   devData=d;
-  const busy=d.state==="working";
+  const busy=d.state==="working", usable=d.helper_installed&&!busy;
   $("dev_badge").textContent=!d.available?"–":(d.active?"SSH an":"SSH aus"); $("dev_badge").className="badge "+(d.active?"attn":"");
   $("dev_state").className="wstat"+(d.active?" ok":"");
-  $("dev_text").innerHTML=!d.available?"Auf dieser Box gibt es keinen SSH-Dienst.":
-    "SSH ist <b>"+(d.active?"eingeschaltet":"ausgeschaltet")+"</b>"+(d.user?" · Benutzer <b>"+esc(d.user)+"</b>":"")+" · beim Hochfahren: "+(d.enabled?"an":"aus")+
-    (d.password_created===false?" · <span class=\"muted\">für SSH wurde in der Original-Oberfläche noch kein neues Passwort erzeugt</span>":"");
-  $("dev_on").disabled=busy||!d.available||!d.helper_installed||d.active; $("dev_off").disabled=busy||!d.available||!d.helper_installed||!d.active;
-  const url="http://"+location.hostname+"/", local=location.protocol==="http:";
-  $("dev_open").disabled=d.password_created===null||!local;
-  $("dev_open").title=local?"Öffnet "+url+" (Original-Oberfläche der BELABOX, dieselbe Box) in einem neuen Tab":"Die Original-Oberfläche ist nur im lokalen Netz erreichbar, nicht über diese gesicherte Adresse";
+  $("dev_text").textContent=!d.available?"Auf dieser Box gibt es keinen SSH-Dienst.":
+    "SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"");
+  const t=$("dev_toggle"); t.textContent=d.active?"SSH ausschalten":"SSH einschalten"; t.className=d.active?"sec":"warnbtn";       // ein Knopf an derselben Stelle
+  t.disabled=!usable||!d.available; $("dev_reset").disabled=!usable||!d.can_reset; $("dev_reset").hidden=!d.can_reset;
+  $("dev_pw").disabled=!d.helper_installed; devPwButton();
   if(!d.helper_installed) $("dev_msg").textContent="Der Helfer ist noch nicht installiert. Er kommt mit dem nächsten Software-Update (oder install.sh erneut ausführen).";
   else if(busy){ $("dev_msg").textContent="Läuft …"; clearTimeout(devTimer); devTimer=setTimeout(devLoad,1500); }
   else $("dev_msg").textContent=d.state==="error"?(d.message||"Fehler"):"";
 }
-async function devDo(action){
-  const body={action};
-  if(action==="start"&&devData&&devData.password_created!==true){
-    if(!confirm("Für SSH wurde in der Original-Oberfläche noch kein neues Passwort erzeugt.\n\nSolange das Passwort der Benutzer der Auslieferungswert ist, kann sich jeder im Netz anmelden, der ihn kennt. Besser zuerst in der Original-Oberfläche (Advanced / developer) ein Passwort erzeugen.\n\nSSH trotzdem einschalten?")) return;
-    body.confirm=true;
-  }
-  $("dev_msg").textContent=action==="start"?"Schalte SSH ein …":"Schalte SSH aus …";
-  try{ await srtlaCall("POST","/api/developer",body); }catch(x){ $("dev_msg").textContent=x.message; return; }
+async function devPost(body,wait){
+  $("dev_msg").textContent=wait;
+  try{ await srtlaCall("POST","/api/developer",body); }catch(x){ $("dev_msg").textContent=x.message; return false; }
   clearTimeout(devTimer); devTimer=setTimeout(devLoad,1200); [3000,8000].forEach(ms=>setTimeout(devLoad,ms));
+  return true;
 }
-async function devPassword(){
-  const prev=devData?devData.time:0, out=$("dev_pw_out"); out.textContent=""; $("dev_msg").textContent="Prüfe das Passwort …";
+async function devPwShow(){                                         // Passwort anzeigen: erst prüfen lassen, ob es noch das erzeugte ist
+  const prev=devData?devData.time:0, out=$("dev_pw_out"); out.textContent="";
+  $("dev_msg").textContent="Prüfe das Passwort …";
   try{ await srtlaCall("POST","/api/developer",{action:"check"}); }catch(x){ $("dev_msg").textContent=x.message; return; }
   for(let i=0;i<8;i++){ await new Promise(r=>setTimeout(r,800)); await devLoad(); if(devData&&devData.state!=="working"&&devData.time!==prev) break; }
   $("dev_msg").textContent="";
   try{
     const r=await srtlaCall("GET","/api/developer/password");
-    out.innerHTML='<div class="muted">SSH-Passwort'+(r.user?' für Benutzer „'+esc(r.user)+'“':'')+' (ein Klick kopiert es)</div><div class="pwshow">'+esc(r.password)+'</div>'+
-      (r.state==="own"?'<div class="muted">Achtung: Das Passwort wurde danach von Hand geändert, dieses gilt vermutlich nicht mehr.</div>':(r.state==="generated"?'':'<div class="muted">(nicht geprüft, ob es noch gilt)</div>'));
-  }catch(x){ $("dev_msg").textContent=x.message; }
+    out.innerHTML='<div class="pwshow" title="Klicken kopiert das Passwort">'+esc(r.password)+'</div>'+
+      (r.state==="own"?'<div class="muted">Achtung: Das Passwort wurde danach von Hand geändert, dieses gilt vermutlich nicht mehr.</div>':'');
+    devPwShown=true;
+  }catch(x){ $("dev_msg").textContent=x.message; devPwShown=false; }
+  devPwButton();
 }
-$("dev_pw").addEventListener("click",devPassword);
-$("dev_on").addEventListener("click",()=>devDo("start"));
-$("dev_off").addEventListener("click",()=>devDo("stop"));
-$("dev_open").addEventListener("click",()=>{ window.open("http://"+location.hostname+"/","_blank","noopener"); });
-$("c_dev").addEventListener("toggle",()=>{ if($("c_dev").open) devLoad(); });
+function devPwHide(){ $("dev_pw_out").textContent=""; devPwShown=false; devPwButton(); }
+$("dev_toggle").addEventListener("click",async()=>{
+  const start=!(devData&&devData.active);                            // keine Rückfrage: beim ersten Einschalten wird bei Bedarf ein Passwort erzeugt
+  if(await devPost({action:start?"start":"stop"},start?"Schalte SSH ein …":"Schalte SSH aus …")&&start&&devPwShown) devPwHide();
+});
+$("dev_pw").addEventListener("click",()=>{ if(devPwShown) devPwHide(); else devPwShow(); });
+$("dev_reset").addEventListener("click",async()=>{
+  if(!confirm("SSH-Passwort zurücksetzen?\n\nDas alte Passwort gilt danach nicht mehr.")) return;
+  devPwHide();
+  const prev=devData?devData.time:0;
+  if(await devPost({action:"reset",confirm:true},"Erzeuge ein neues Passwort …")){            // das neue Passwort gleich anzeigen, sobald der Helfer fertig ist
+    for(let i=0;i<15;i++){ await new Promise(r=>setTimeout(r,800)); await devLoad(); if(devData&&devData.state!=="working"&&devData.time!==prev) break; }
+    if(devData&&devData.state!=="error") devPwShow();
+  }
+});
+$("c_dev").addEventListener("toggle",()=>{ if($("c_dev").open) devLoad(); else devPwHide(); });
 devLoad();
 
 // ---- Box herunterfahren / neu starten ----

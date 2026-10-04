@@ -32,6 +32,8 @@ STATUS = f"{RUN}/status.json"
 STATS = f"{RUN}/belacoder-stats.txt"     # die letzten Regelzeilen von belacoder (nur Zahlen), im RAM
 STATS_KEEP = 3000
 LISTEN_PORT = 9100
+VIEW_LIVE = False         # kann die gestartete Pipeline kleine Bilder ein-/ausblenden und stumm schalten (Ansicht im Betrieb)?
+AUDIO_LIVE = False        # und die Tonquelle wechseln (Ton-Umschalter)?
 DELAY_LIVE = False        # hat die gestartete Pipeline den Steuerbaustein pbctl?
 DELAY_LIVE_PIPS = False   # und kann er auch die kleinen Bilder verzögern?
 SWAP_BASE = None          # Tausch ohne Neustart: {"cams": [...], "group": n} der gestarteten Pipeline, sonst None
@@ -236,7 +238,7 @@ def write_pipeline(cfg):
         put_state_file("main-delay-ms", " ".join(map(str, vals)) + "\n")
     except OSError:
         pass
-    global DELAY_LIVE, DELAY_LIVE_PIPS, SWAP_BASE
+    global DELAY_LIVE, DELAY_LIVE_PIPS, SWAP_BASE, VIEW_LIVE, AUDIO_LIVE
     DELAY_LIVE = "pbctl" in text
     DELAY_LIVE_PIPS = "pip-queue=" in text or "cam1=" in text
     plan = server.PipelineStore.swap_plan(cfg) if "pbpipsel" in text else None
@@ -248,6 +250,25 @@ def write_pipeline(cfg):
     try:
         if plan:                                  # Anfangszustand des Umschalters: wie gebaut (Hauptbild = erste Kamera)
             put_state_file(server.SWAP_SELECT, plan["line"] + "\n")
+    except OSError:
+        pass
+    # Ansicht im Betrieb (kleine Bilder ein-/ausblenden, Tonquelle, stumm): Anfangszustand wie gebaut; stumm bleibt bei einem Neustart der
+    # Sendekette erhalten (die Oberfläche setzt es beim Start einer neuen Sendung zurück)
+    VIEW_LIVE = "name=avol" in text and "pbctl" in text
+    AUDIO_LIVE = VIEW_LIVE and "pbpipsel name=asel" in text
+    try:
+        os.unlink(server.VIEW_STATE)
+    except OSError:
+        pass
+    try:
+        if VIEW_LIVE:
+            mute = 0
+            try:
+                parts = open(f"{STATE}/{server.VIEW_FILE}").read().split()
+                mute = 1 if len(parts) >= 3 and parts[2] == "1" else 0
+            except OSError:
+                pass
+            put_state_file(server.VIEW_FILE, server.PipelineStore.view_line(cfg, mute) + "\n")
     except OSError:
         pass
     return text
@@ -402,6 +423,7 @@ class Sender:
             data = {"state": self.state, "since": self.since, "server": self.sv["name"],
                     "restarts": dict(self.restarts), "last": self.last, "last_age": int(time.time() - self.last_at) if self.last_at else None, "time": int(time.time()),
                     "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
+                    "view_live": VIEW_LIVE, "audio_live": AUDIO_LIVE,
                     "applied": self.plan.get("sig")}
         if self.fo is not None:
             keys = configured_keys(self.plan["cfg"])
@@ -600,7 +622,7 @@ class Sender:
                 time.sleep(0.2)
             if p.poll() is None:
                 p.kill()
-        for f in (STATUS, STATS, f"{RUN}/srtla-links.txt"):
+        for f in (STATUS, STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE):
             try:
                 os.remove(f)
             except OSError:

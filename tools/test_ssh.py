@@ -48,7 +48,9 @@ class HelperTests(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.req = os.path.join(self.d, "ssh-request")
         self.run = os.path.join(self.d, "run")
-        p = mock.patch.multiple(H, REQ=self.req, RUN=self.run, STATUS=self.run + "/status.json")
+        os.makedirs(self.d + "/bela")
+        p = mock.patch.multiple(H, REQ=self.req, RUN=self.run, STATUS=self.run + "/status.json", BELA_DIR=self.d + "/bela", PASS_FILE=self.d + "/ssh-pass.json",
+                                SHADOW=self.d + "/shadow", STATE=self.d)
         p.start()
         self.addCleanup(p.stop)
 
@@ -100,12 +102,21 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(self.go("start", FakeSystemctl(stays=False)), 1)             # startete nicht wirklich
         self.assertIn("nicht gestartet", self.status()["message"])
 
-    def test_helper_never_touches_passwords_keys_or_configuration(self):
+    def test_helper_never_touches_keys_or_configuration(self):
         src = open(os.path.join(ROOT, "install", "pipbox-ssh.py"), encoding="utf-8").read()
         code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith(("#", '"""')))
-        for forbidden in ("passwd", "chpasswd", "sshd_config", "authorized_keys", "PermitRootLogin", "enable", "disable", "mask", "usermod"):
-            self.assertNotIn(forbidden, code.replace('"""', ""), forbidden)                  # (die Passwort-Zeile wird nur gelesen und verglichen)
-        self.assertNotIn('"w"', code.split("def password_state")[1].split("def systemctl")[0])    # die Prüfung schreibt nichts
+        for forbidden in ("sshd_config", "authorized_keys", "PermitRootLogin", "enable", "disable", "mask", "usermod", "useradd", "userdel", "sudoers"):
+            self.assertNotIn(forbidden, code.replace('"""', ""), forbidden)
+        self.assertNotIn('"w"', code.split("def password_state")[1].split("def store_ours")[0])        # die Prüfung schreibt nichts
+
+    def test_password_is_only_given_to_chpasswd_through_stdin(self):
+        src = open(os.path.join(ROOT, "install", "pipbox-ssh.py"), encoding="utf-8").read()
+        self.assertEqual(src.count('["chpasswd"]'), 1)
+        self.assertIn('input=f"{user}:{password}\\n"', src)                                         # über stdin, nicht als Argument
+        self.assertNotRegex(src, r'\["chpasswd",')                                                     # kein Argument hinter dem Programm
+        for line in src.splitlines():
+            if "print(" in line or "write_status(" in line:
+                self.assertNotIn("password", line.replace("password_state", ""), line)           # nie in Protokoll oder Statusmeldung
 
 
 class DeveloperTests(unittest.TestCase):
@@ -161,22 +172,30 @@ class DeveloperTests(unittest.TestCase):
 
     def test_unknown_actions_are_refused(self):
         dev, d = self.make({"ssh_user": "user"}, {"ssh_pass": "x"})
-        for bad in ("restart", "enable", "", None, 5, "start; reboot", ["start"]):
+        for bad in ("restart", "enable", "", None, 5, "start; reboot", ["start"], "RESET", "reset; reboot"):
             with self.assertRaises(ValueError, msg=str(bad)):
                 dev.request(bad, True)
         self.assertFalse(os.path.exists(os.path.join(d, "ssh-request")))
 
-    def test_start_without_a_created_password_needs_confirmation(self):
-        for config in ({"password_hash": "x"}, None):
+    def test_start_never_asks_for_confirmation_but_reset_does(self):
+        for config in ({"password_hash": "x"}, None, {"ssh_pass": "x"}):
             dev, d = self.make({"ssh_user": "user"}, config)
-            with self.assertRaises(ValueError) as e:
-                dev.request("start", False)
-            self.assertIn("Bestätigung", str(e.exception))
-            self.assertFalse(os.path.exists(os.path.join(d, "ssh-request")))
-            dev.request("start", True)
-            self.assertTrue(os.path.exists(os.path.join(d, "ssh-request")))
+            dev.request("start", False)
+            self.assertEqual(open(os.path.join(d, "ssh-request")).read(), "start\n")
+            dev.request("stop", False)
         dev, d = self.make({"ssh_user": "user"}, {"password_hash": "x"})
-        dev.request("stop", False)                                                  # Ausschalten braucht nie eine Bestätigung
+        with self.assertRaises(ValueError) as e:
+            dev.request("reset", False)
+        self.assertIn("Bestätigung", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(d, "ssh-request")))
+        dev.request("reset", True)
+        self.assertEqual(open(os.path.join(d, "ssh-request")).read(), "reset\n")
+
+    def test_reset_needs_a_known_ssh_user(self):
+        dev, d = self.make(None, None)
+        self.assertFalse(dev.status()["can_reset"])
+        with self.assertRaises(ValueError):
+            dev.request("reset", True)
 
     def test_helper_missing_or_no_ssh_service(self):
         dev, d = self.make({"ssh_user": "user"}, {}, helper=False)
@@ -245,7 +264,7 @@ class PasswordTests(unittest.TestCase):
             dev = self.dev({"ssh_user": "user"}, config)
             with self.assertRaises(ValueError, msg=str(config)) as e:
                 dev.password()
-            self.assertIn("Original-Oberfläche", str(e.exception))
+            self.assertIn("zurücksetzen", str(e.exception))
 
     def test_status_never_contains_the_password(self):
         dev = self.dev({"ssh_user": "user"}, {"ssh_pass": "abcDEF123", "ssh_pass_hash": "root:$6$xyz"}, "generated")
@@ -311,6 +330,203 @@ class HelperPasswordCheck(unittest.TestCase):
             st = json.load(open(d + "/run/status.json"))
             self.assertEqual((st["state"], st["password_state"]), ("done", "own"))
             self.assertNotIn("user:", json.dumps(st))
+
+
+class ResetTests(unittest.TestCase):
+    """Passwort erzeugen (Knopf "Passwort zurücksetzen" und erstes Einschalten)."""
+
+    LINE = "user:$6$salt$hash:19000:0:99999:7:::"
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        os.makedirs(self.d + "/bela")
+        self.run = self.d + "/run"
+        self.req = self.d + "/ssh-request"
+        p = mock.patch.multiple(H, REQ=self.req, RUN=self.run, STATUS=self.run + "/status.json", BELA_DIR=self.d + "/bela", PASS_FILE=self.d + "/ssh-pass.json",
+                                SHADOW=self.d + "/shadow", STATE=self.d)
+        p.start()
+        self.addCleanup(p.stop)
+        json.dump({"ssh_user": "user"}, open(self.d + "/bela/setup.json", "w"))
+        open(self.d + "/shadow", "w").write("root:*:19000:0:99999:7:::\n" + self.LINE + "\n")
+        self.calls = []
+
+    def chpasswd(self, rc=0, missing=False, new_line=None):
+        def fake(cmd, **kw):
+            self.calls.append((cmd, kw.get("input")))
+            if missing:
+                raise FileNotFoundError("chpasswd")
+            if rc == 0 and new_line:                                    # das echte chpasswd schreibt eine neue Zeile in /etc/shadow
+                open(self.d + "/shadow", "w").write("root:*:19000:0:99999:7:::\n" + new_line + "\n")
+            return mock.Mock(returncode=rc, stdout="", stderr="Fehler mit Geheimnis")
+        return mock.patch.object(H.subprocess, "run", fake)
+
+    def go(self, word, sc=None):
+        open(self.req, "w").write(word)
+        with mock.patch.object(H, "systemctl", sc or FakeSystemctl()):
+            return H.main()
+
+    def status(self):
+        return json.load(open(self.run + "/status.json"))
+
+    NEW = "user:$6$neu$gesetzt:19001:0:99999:7:::"
+
+    def test_reset_sets_a_random_password_through_stdin_and_remembers_it(self):
+        with self.chpasswd(new_line=self.NEW):
+            self.assertEqual(self.go("reset"), 0)
+        cmd, given = self.calls[0]
+        self.assertEqual(cmd, ["chpasswd"])                                                # kein Passwort als Argument
+        user, _, pw = given.strip().partition(":")
+        self.assertEqual(user, "user")
+        self.assertRegex(pw, r"^[A-Za-z0-9]{20}$")
+        saved = json.load(open(self.d + "/ssh-pass.json"))
+        self.assertEqual((saved["user"], saved["password"], saved["hash"]), ("user", pw, self.NEW))
+        self.assertEqual(stat.S_IMODE(os.stat(self.d + "/ssh-pass.json").st_mode), 0o600)
+        st = self.status()
+        self.assertEqual((st["state"], st["message"], st["password_state"]), ("done", "SSH-Passwort neu erzeugt", "generated"))
+        self.assertNotIn(pw, json.dumps(st))                                              # nie in der Statusmeldung
+        self.assertFalse(os.path.exists(self.req))
+
+    def test_two_resets_give_different_passwords(self):
+        pws = []
+        for i in range(2):
+            with self.chpasswd(new_line=self.NEW):
+                self.go("reset")
+            pws.append(json.load(open(self.d + "/ssh-pass.json"))["password"])
+        self.assertNotEqual(pws[0], pws[1])
+
+    def test_reset_failures_leave_no_file_and_no_secret_in_the_message(self):
+        for kw in ({"rc": 1}, {"missing": True}):
+            with self.chpasswd(**kw):
+                self.assertEqual(self.go("reset"), 1)
+            st = self.status()
+            self.assertEqual(st["state"], "error")
+            self.assertNotIn("Geheimnis", st["message"])
+            self.assertFalse(os.path.exists(self.d + "/ssh-pass.json"))
+
+    def test_reset_without_ssh_user_does_nothing(self):
+        os.remove(self.d + "/bela/setup.json")
+        with self.chpasswd():
+            self.assertEqual(self.go("reset"), 1)
+        self.assertEqual(self.calls, [])
+        json.dump({"ssh_user": "root; reboot"}, open(self.d + "/bela/setup.json", "w"))
+        with self.chpasswd():
+            self.assertEqual(self.go("reset"), 1)
+        self.assertEqual(self.calls, [])
+
+    def test_first_start_creates_a_password_before_ssh_goes_up(self):
+        sc = FakeSystemctl()
+        with self.chpasswd(new_line=self.NEW):
+            self.assertEqual(self.go("start", sc), 0)
+        self.assertEqual(len(self.calls), 1)                                               # genau ein Passwort erzeugt
+        self.assertTrue(os.path.exists(self.d + "/ssh-pass.json"))
+        self.assertIn(("start", "ssh"), sc.calls)
+        self.assertEqual(self.status()["message"], "SSH eingeschaltet")
+
+    def test_start_does_not_touch_an_existing_password(self):
+        json.dump({"ssh_pass": "vomOriginal"}, open(self.d + "/bela/config.json", "w"))          # die Original-Oberfläche hat eines erzeugt
+        with self.chpasswd():
+            self.assertEqual(self.go("start"), 0)
+        self.assertEqual(self.calls, [])
+        os.remove(self.d + "/bela/config.json")
+        H.store_ours("user", "meinPasswort", self.LINE)                                          # oder IRL4YOU BOX
+        with self.chpasswd():
+            self.assertEqual(self.go("start"), 0)
+        self.assertEqual(self.calls, [])
+
+    def test_failed_password_creation_stops_the_start(self):
+        sc = FakeSystemctl()
+        with self.chpasswd(rc=1):
+            self.assertEqual(self.go("start", sc), 1)
+        self.assertNotIn(("start", "ssh"), sc.calls)                                        # SSH geht nicht mit dem Auslieferungspasswort auf
+        self.assertIn("nicht eingeschaltet", self.status()["message"])
+
+    def test_start_without_a_known_user_just_starts(self):
+        os.remove(self.d + "/bela/setup.json")
+        sc = FakeSystemctl()
+        with self.chpasswd():
+            self.assertEqual(self.go("start", sc), 0)
+        self.assertEqual(self.calls, [])
+        self.assertIn(("start", "ssh"), sc.calls)
+
+    def test_stop_never_creates_a_password(self):
+        sc = FakeSystemctl()
+        sc.active = True
+        with self.chpasswd():
+            self.assertEqual(self.go("stop", sc), 0)
+        self.assertEqual(self.calls, [])
+
+    def test_state_of_a_password_made_here(self):
+        H.store_ours("user", "meinPasswort", self.LINE)
+        self.assertEqual(H.password_state(), "generated")
+        open(self.d + "/shadow", "w").write("user:$6$ander$es:19002:0:99999:7:::\n")             # jemand hat es mit passwd geändert
+        self.assertEqual(H.password_state(), "own")
+        os.remove(self.d + "/shadow")
+        self.assertEqual(H.password_state(), "unknown")
+
+    def test_store_never_follows_a_planted_link(self):
+        victim = self.d + "/wichtig"
+        open(victim, "w").write("unberührt")
+        os.symlink(victim, self.d + "/ssh-pass.json.tmp")
+        H.store_ours("user", "pw", self.LINE)
+        self.assertEqual(open(victim).read(), "unberührt")
+        os.remove(self.d + "/ssh-pass.json")
+        os.symlink(victim, self.d + "/ssh-pass.json")
+        H.store_ours("user", "pw2", self.LINE)
+        self.assertEqual(open(victim).read(), "unberührt")
+        self.assertEqual(json.load(open(self.d + "/ssh-pass.json"))["password"], "pw2")
+
+    def test_password_of_another_user_is_not_used(self):
+        H.store_ours("andere", "fremd", self.LINE)
+        self.assertIsNone(H.load_ours("user"))
+        self.assertFalse(H.generated_password_exists("user"))
+
+
+class OwnPasswordOnTheServer(unittest.TestCase):
+    def make(self, setup, config, ours=None):
+        d = tempfile.mkdtemp()
+        os.makedirs(d + "/belaUI")
+        if setup is not None:
+            json.dump(setup, open(d + "/belaUI/setup.json", "w"))
+        if config is not None:
+            json.dump(config, open(d + "/belaUI/config.json", "w"))
+        if ours is not None:
+            json.dump(ours, open(d + "/ssh-pass.json", "w"))
+        dev = server.Developer(d, False, d + "/belaUI/config.json")
+        dev.STATUS, dev.HELPER = d + "/status.json", d + "/h"
+        open(dev.HELPER, "w").close()
+        server._TTL.clear()
+        for p in (mock.patch.object(dev, "_has_unit", lambda: True), mock.patch.object(dev, "_systemctl", lambda *a: (0, "inactive"))):
+            p.start()
+            self.addCleanup(p.stop)
+        return dev
+
+    def test_own_password_comes_first_and_counts_as_created(self):
+        dev = self.make({"ssh_user": "user"}, {"ssh_pass": "alt"}, {"user": "user", "password": "NeuVonUns123", "hash": "x"})
+        self.assertEqual(dev.password()["password"], "NeuVonUns123")
+        self.assertTrue(dev.status()["password_created"])
+        self.assertNotIn("NeuVonUns123", json.dumps(dev.status()))
+        dev = self.make({"ssh_user": "user"}, {}, {"user": "user", "password": "NurVonUns123", "hash": "x"})
+        self.assertTrue(dev.status()["password_created"])                                    # auch ohne Passwort der Original-Oberfläche
+        self.assertEqual(dev.password()["user"], "user")
+
+    def test_own_password_of_another_user_or_broken_file_is_ignored(self):
+        for ours in ({"user": "andere", "password": "x", "hash": "h"}, {"user": "user", "password": "", "hash": "h"}, {"user": "user"}, ["x"]):
+            dev = self.make({"ssh_user": "user"}, {"ssh_pass": "vomOriginal"}, ours)
+            self.assertEqual(dev.password()["password"], "vomOriginal", str(ours))
+
+    def test_without_any_password_the_message_points_to_reset(self):
+        dev = self.make({"ssh_user": "user"}, {})
+        with self.assertRaises(ValueError) as e:
+            dev.password()
+        self.assertIn("zurücksetzen", str(e.exception))
+
+    def test_demo_reset_changes_the_password(self):
+        dev = server.Developer(tempfile.mkdtemp(), True)
+        old = dev.password()["password"]
+        with self.assertRaises(ValueError):
+            dev.request("reset", False)
+        dev.request("reset", True)
+        self.assertNotEqual(dev.password()["password"], old)
 
 
 class Endpoints(unittest.TestCase):
@@ -381,15 +597,32 @@ class FilesAndPage(unittest.TestCase):
 
     def test_page(self):
         page = self.read("web", "index.html")
-        for needle in ('id="c_dev"', "Entwickler", 'id="dev_on"', 'id="dev_off"', 'id="dev_pw"', "/api/developer/password", "/api/developer", "Original-Oberfläche"):
+        for needle in ('id="c_dev"', "Entwickler", 'id="dev_toggle"', 'id="dev_pw"', 'id="dev_reset"', "/api/developer/password", "/api/developer",
+                       "Passwort ausblenden", "Passwort zurücksetzen"):
             self.assertIn(needle, page)
-        self.assertIn(".pwshow{", page)                                                  # Passwort groß und markierbar
+        self.assertIn(".pwshow{", page)                                                  # Passwort groß, Klick kopiert es
         self.assertIn('class="pwshow"', page)
-        self.assertIn("function copyText", page)                                         # Klick auf das Passwort kopiert es
+        self.assertIn("function copyText", page)
         self.assertIn('closest(".pwshow")', page)
-        self.assertIn("ein Klick kopiert es", page)
         self.assertLess(page.index('id="c_logs"'), page.index('id="c_dev"'))             # "nach Protokolle"
         self.assertLess(page.index('id="c_dev"'), page.index('id="c_power"'))
+
+    def test_card_follows_the_feedback_of_the_issue(self):
+        page = self.read("web", "index.html")
+        html = page[page.index('id="c_dev"'):page.index('id="c_power"')]
+        js = page[page.index("// ---- Entwickler"):page.index("// ---- Box herunterfahren")]
+        self.assertNotIn("dev_open", page)                                               # kein Knopf "Original öffnen"
+        self.assertNotIn("Original-Oberfläche öffnen", page)
+        self.assertNotIn("Hier wird nur der Dienst", page)                              # Beschreibungstext entfernt
+        self.assertNotIn("ein Klick kopiert es", js + html)                              # Text über dem SSH-Passwort entfernt
+        self.assertNotIn("<p", html)
+        toggle = js.split('$("dev_toggle").addEventListener')[1].split('$("dev_pw").addEventListener')[0]
+        self.assertNotIn("confirm(", toggle)                                             # kein Popup beim Einschalten
+        self.assertIn('"SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"")', js)
+        self.assertIn('d.active?"SSH ausschalten":"SSH einschalten"', js)               # ein Knopf an derselben Stelle
+        self.assertEqual(html.count("<button"), 3)                                       # Umschalter, Passwort anzeigen/ausblenden, zurücksetzen
+        self.assertIn("devPwShown", js)                                                  # Passwort wieder ausblenden
+        self.assertIn("confirm(", js.split('$("dev_reset").addEventListener')[1])        # beim Zurücksetzen bleibt die Rückfrage
 
 
 if __name__ == "__main__":
