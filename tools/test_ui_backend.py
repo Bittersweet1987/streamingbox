@@ -1817,6 +1817,62 @@ class AutoSystemCheck(unittest.TestCase):
         self.assertIn("last_check", saved)
 
 
+class UpdateFreshCheck(unittest.TestCase):
+    """Eine neue Version war bis zu sechs Stunden unsichtbar, wenn die Box kurz davor nachgefragt hatte (Meldung: "Er findet auf der Box die 75 nicht")."""
+
+    def sw(self, answers, sending=False):
+        send = mock.Mock(_active=lambda: sending)
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, send)
+        sw.version = "0.9.74"
+        sw.started -= 3 * 3600                                      # nicht in der ersten halben Stunde nach dem Start
+        calls = []
+
+        def get(name, limit):
+            calls.append(name)
+            return (answers.pop(0) if len(answers) > 1 else answers[0]) if name == "VERSION" else "## 0.9.75 (Beta)\n- x\n"
+        return sw, calls, mock.patch.object(sw, "_get", get)
+
+    def test_background_check_still_waits_six_hours(self):
+        sw, calls, patch = self.sw(["0.9.74\n", "0.9.75\n"])
+        with patch:
+            sw.check()
+            sw.cache_t -= 3600
+            self.assertEqual(sw.status()["latest"], "0.9.74")        # ohne fresh: der Zwischenspeicher gilt (kein Mobilfunk-Verkehr ohne Grund)
+        self.assertEqual(calls.count("VERSION"), 1)
+
+    def test_opening_the_page_renews_an_answer_older_than_five_minutes(self):
+        sw, calls, patch = self.sw(["0.9.74\n", "0.9.75\n"])
+        with patch:
+            sw.check()
+            sw.cache_t -= 6 * 60
+            st = sw.status(fresh=True)
+        self.assertEqual((st["latest"], st["newer"]), ("0.9.75", True))
+        self.assertEqual(calls.count("VERSION"), 2)
+
+    def test_a_recent_answer_is_not_asked_again(self):
+        sw, calls, patch = self.sw(["0.9.74\n", "0.9.75\n"])
+        with patch:
+            sw.check()
+            sw.cache_t -= 60
+            self.assertEqual(sw.status(fresh=True)["latest"], "0.9.74")
+        self.assertEqual(calls.count("VERSION"), 1)
+
+    def test_nothing_is_asked_while_sending(self):
+        sw, calls, patch = self.sw(["0.9.74\n", "0.9.75\n"], sending=True)
+        with patch:
+            sw.cache, sw.cache_t = {"latest": "0.9.74", "checked_at": 1}, time.time() - 3600
+            self.assertEqual(sw.status(fresh=True)["latest"], "0.9.74")
+        self.assertEqual(calls, [])
+
+    def test_endpoint_and_page_use_it(self):
+        src = open(os.path.join(os.path.dirname(HERE), "server.py"), encoding="utf-8").read()
+        self.assertIn('fresh="fresh=1" in q', src)
+        page = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('swLoad(false,true);', page)                                   # beim Öffnen der Seite
+        self.assertIn('$("swcard").addEventListener("toggle"', page)                 # und beim Aufklappen der Karte
+        self.assertIn('?fresh=1', page)
+
+
 class UpdateVersionCheck(unittest.TestCase):
     """Die Karte "Software-Update" zeigte nach einem Update "installiert 0.9.64" und "neueste auf GitHub 0.9.63": Die Antwort kam aus einem veralteten
     Zwischenspeicher (raw.githubusercontent.com hält eine neue Version bis zu fünf Minuten zurück)."""

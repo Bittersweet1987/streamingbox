@@ -1544,9 +1544,9 @@ function fmtNotes(t){
   });
   close(); return out;
 }
-async function swLoad(force){
+async function swLoad(force,fresh){
   let d;
-  try{ d=await srtlaCall("GET","/api/swupdate"+(force?"?check=1":"")); }
+  try{ d=await srtlaCall("GET","/api/swupdate"+(force?"?check=1":(fresh?"?fresh=1":""))); }
   catch(e){ if(swPending) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
   if(swFirst===null) swFirst=d.current;
   if(swPending){
@@ -1629,6 +1629,8 @@ $("sw_rollback").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/swupdate",{action:"rollback",confirm:true}); }catch(x){ swPending=0; $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
+swLoad(false,true);                                                   // beim Öffnen der Seite: eine Antwort, die nicht älter als fünf Minuten ist (neue Version sofort sichtbar)
+$("swcard").addEventListener("toggle",()=>{ if($("swcard").open) swLoad(false,true); });   // und beim Aufklappen der Karte
 (function swLoop(){ (swPending||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending?2000:8000)); })();
 // Nach dem automatischen Neuladen kurz bestätigen, dass das Update geklappt hat
 try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent="✔ Update installiert: Die Box läuft jetzt mit Version "+v+"."; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}

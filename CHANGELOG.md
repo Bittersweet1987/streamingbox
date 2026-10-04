@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.76 (Beta)
+- Behoben: **Eine neue Version war auf der Box bis zu sechs Stunden unsichtbar** (Rückmeldung: "Er findet auf der Box die 75 nicht"). Die Karte "Software-Update" fragt GitHub von selbst nur alle sechs Stunden und merkt sich die Antwort. Wer kurz vor einer neuen Version nachgefragt hatte, sah sie nicht, bis er "Nach Updates suchen" drückte. Das Archiv der Version war in Ordnung (auch gegen die Prüfung des Update-Helfers getestet), es lag nur am Zwischenspeicher der Box.
+  - **Jetzt:** Wer die Seite öffnet oder die Karte "Software-Update" aufklappt, bekommt eine Antwort, die **nicht älter als fünf Minuten** ist (ältere werden erneuert). Die Abfrage im Hintergrund bleibt bei sechs Stunden, und während einer Übertragung wird weiterhin nicht nachgefragt (kein Mobilfunk-Verkehr ohne Grund). Der Knopf "Nach Updates suchen" erzwingt die Abfrage wie bisher.
+  - **Hinweis:** Wer gerade eine ältere Version hat, sieht die neue Version erst nach einem Druck auf "Nach Updates suchen" oder nach dem Update auf 0.9.76 (die Box fragt dann beim Öffnen der Seite).
+- Tests: `tools/test_ui_backend.py` (206): Hintergrundabfrage wartet weiter sechs Stunden, Öffnen erneuert eine Antwort älter als fünf Minuten, eine frische Antwort wird nicht erneuert, keine Abfrage während der Übertragung, Endpunkt und Seite.
+
 ## 0.9.75 (Beta)
 - Geändert (Issue #8, "Deep Dive": TP-Link-Stick zeigt in der Original-Oberfläche Netze, bei uns nicht): **Die Netzsuche arbeitet jetzt wie die der Original-Oberfläche und liefert bei einem leeren Ergebnis technische Angaben.** Die Ursache für den TP-Link konnte ich ohne seinen Stick nicht beweisen; verglichen habe ich den Ablauf der Original-Oberfläche (`belaUI.js`, nur gelesen) mit unserem und drei Unterschiede gefunden, die ich angeglichen habe:
   - **Listen lesen wie das Original:** Das Original liest `nmcli device wifi list --rescan no` **ohne `ifname`** (alle Karten, zugeordnet nach der Spalte DEVICE). Wir lasen nur mit `ifname`. Jetzt wird die Liste **auf beiden Wegen gelesen und vereinigt**; Netze einer anderen Karte kommen nicht in die Liste.

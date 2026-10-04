@@ -2736,7 +2736,8 @@ class SwUpdate:
     eine Auslösedatei mit einem festen Stichwort (install / rollback) ab. Laden, Prüfen und Einspielen macht der
     getrennte Root-Helfer pipbox-swupdate.py.
     """
-    CHECK_EVERY = 6 * 3600     # Sekunden zwischen zwei Abfragen bei GitHub
+    CHECK_EVERY = 6 * 3600     # Sekunden zwischen zwei Abfragen bei GitHub (Abfrage von selbst im Hintergrund)
+    FRESH_AFTER = 5 * 60       # wer die Seite oder die Karte öffnet, bekommt eine Antwort, die nicht älter als so viele Sekunden ist
     RETRY_AFTER_ERROR = 30 * 60   # ein Fehlversuch (kein Internet) wird früher wiederholt
     EARLY_SECONDS = 30 * 60       # in der ersten halben Stunde nach dem Start (Router und Mobilfunk brauchen oft einige Minuten) ...
     RETRY_EARLY = 3 * 60          # ... wird ein Fehlversuch schon nach 3 Minuten wiederholt
@@ -2810,13 +2811,17 @@ class SwUpdate:
                     break
         return "\n".join(out) if out else cls._first_section(text)
 
-    def check(self, force=False):
-        """Fragt die neueste Version auf GitHub ab (höchstens alle 6 Stunden und nie während einer Übertragung, außer force)."""
+    def check(self, force=False, fresh=False):
+        """Fragt die neueste Version auf GitHub ab (im Hintergrund höchstens alle 6 Stunden und nie während einer Übertragung, außer force). fresh: wer
+        die Seite oder die Karte öffnet, will wissen, ob es gerade eine neue Version gibt: Eine Antwort, die älter als fünf Minuten ist, wird erneuert
+        (vorher blieb eine neue Version bis zu sechs Stunden unsichtbar, wenn die Box kurz davor nachgefragt hatte)."""
         with self.lock:
             early = time.time() - self.started < self.EARLY_SECONDS
             wait = (self.RETRY_EARLY if early else self.RETRY_AFTER_ERROR) if self.cache and self.cache.get("error") else self.CHECK_EVERY
             if self.cache and self.cache.get("stale"):
                 wait = self.RETRY_EARLY                    # die Antwort war älter als die installierte Version: bald noch einmal fragen
+            if fresh:
+                wait = min(wait, self.FRESH_AFTER)
             if not force and self.cache and (time.time() - self.cache_t < wait or self.send._active()):
                 return self.cache
             if not force and not self.cache and not self.demo and self.send._active():
@@ -2907,8 +2912,8 @@ class SwUpdate:
                         "relation": "aktuell" if v == self.version else ("neuer" if vkey(v) > vkey(self.version) else "älter")})
         return res
 
-    def status(self, force=False):
-        chk = self.check(force)
+    def status(self, force=False, fresh=False):
+        chk = self.check(force, fresh)
         if self.demo:
             st = dict(self.fake) or {}
         else:
@@ -3515,7 +3520,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/remote":
             return self.reply(200, self.remote.status())
         if path == "/api/swupdate":
-            return self.reply(200, self.swupdate.status(force="check=1" in (self.path.split("?", 1) + [""])[1]))
+            q = (self.path.split("?", 1) + [""])[1]
+            return self.reply(200, self.swupdate.status(force="check=1" in q, fresh="fresh=1" in q))
         if path == "/api/update":
             try:
                 self.updates.auto_check(present=True)       # Wer die Seite öffnet, soll gleich wissen, ob es Updates gibt (einmal je Start, still)
