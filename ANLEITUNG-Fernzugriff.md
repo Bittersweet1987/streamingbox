@@ -59,8 +59,8 @@ wenn die Box mit Tailscale verbunden ist).
   im Internet erreichbar. Geschützt ist sie dann **nur durch das BELABOX-Passwort**. Verwenden Sie dafür ein **langes, starkes Passwort**.
 - Der Gerätename steht in öffentlichen Zertifikatslisten; Suchprogramme finden die Seite und probieren die Anmeldung aus. Wiederholte
   falsche Anmeldungen sperren den jeweiligen Absender für 5 Minuten.
-- Die Freigabe **endet nach 8 Stunden von selbst** (ein Zeitgeber auf der Box prüft alle 5 Minuten, auch nach einem Neustart). Die Karte
-  zeigt die Uhrzeit. **„Öffentliche Freigabe beenden“** schaltet sie sofort ab; die Freigabe im privaten Netz bleibt.
+- Die Freigabe hat **keine Zeitgrenze**: Sie bleibt an, auch nach einem Neustart der Box, bis Sie sie beenden. Die Karte zeigt eine rote
+  Warnung, solange sie an ist. **„Öffentliche Freigabe beenden“** schaltet sie sofort ab; die Freigabe im privaten Netz bleibt.
 - Tailscale muss Funnel für Ihr Netz **einmal erlauben**: Verlangt es das, zeigt die Karte einen Link zur Tailscale-Verwaltung.
   Danach erneut auf den Knopf klicken.
 - Beim Beenden setzt Tailscale **alle** Freigaben der Box zurück (`tailscale funnel reset`) und die Box stellt nur die der Oberfläche

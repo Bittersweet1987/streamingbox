@@ -1048,6 +1048,43 @@ class CameraConnection(unittest.TestCase):
         self.assertIn("wird in ihrer DJI-Karte gewählt", src)
 
 
+class HeaderControls(unittest.TestCase):
+    """Kopfleiste: Live-Knopf (Zustand der Sendung, Start und Beenden mit Rückfrage); Abmelden steht in der Karte "Box ausschalten und abmelden"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = open(os.path.join(server.WEB_DIR, "index.html"), encoding="utf-8").read()
+        cls.header = cls.html[cls.html.index("<header>"):cls.html.index("</header>")]
+
+    def test_live_button_is_in_the_header_and_uses_the_existing_send_api(self):
+        self.assertIn('id="hdr_live"', self.header)
+        self.assertIn("function updHdrLive", self.html)
+        self.assertIn("updHdrLive(d);", self.html)                                # wird bei jeder Abfrage des Sendezustands nachgeführt
+        self.assertIn("confirm(\"Die Sendung jetzt beenden?", self.html)          # Beenden nur mit Rückfrage
+        self.assertEqual(self.html.count('{action:"start",confirm:true}'), 1)     # ein gemeinsamer Weg zum Starten (Live-Karte und Kopfleiste)
+        self.assertEqual(self.html.count('"/api/send",{action:"stop"}'), 1)       # ein gemeinsamer Weg zum Beenden
+
+    def test_update_hints_are_buttons_in_the_right_group_of_the_header(self):
+        """Die gelben Update-Hinweise (Oberfläche, System) stehen als gleichartige Knöpfe in der Gruppe rechts, nicht mehr als Punkte am Titel."""
+        group = self.header[self.header.index('class="hdr"'):]
+        for i in ("hdr_upd", "hdr_sys"):
+            self.assertIn('<button type="button" id="%s" class="updbtn" hidden' % i, group)
+            self.assertNotIn('id="%s"' % i, self.header[:self.header.index('class="hdr"')])
+        self.assertNotIn("updlink", self.html)
+
+    def test_data_badge_no_longer_says_live(self):
+        self.assertNotIn('mode.textContent=m.demo?"Demo-Werte":"live"', self.html)
+        self.assertIn('"Demo-Werte":"verbunden"', self.html)
+
+    def test_logout_moved_from_the_header_to_the_power_card(self):
+        self.assertNotIn('id="logout"', self.header)
+        card = self.html[self.html.index('id="c_power"'):self.html.index("</details>", self.html.index('id="c_power"'))]
+        self.assertIn('id="logout"', card)
+        self.assertIn("Box ausschalten und abmelden", card)
+        self.assertEqual(self.html.count('id="logout"'), 1)
+        self.assertIn('$("logout").addEventListener("click"', self.html)
+
+
 class HiddenAttribute(unittest.TestCase):
 
     """Ein Element mit hidden muss auch wirklich verschwinden: eine Klasse mit display (z. B. .row, .updlink) überstimmt sonst das Attribut.
@@ -1157,7 +1194,7 @@ class UpdateHelperRepair(unittest.TestCase):
 
 
 class FunnelRemote(unittest.TestCase):
-    """Öffentliche Freigabe (Funnel): nur auf ausdrückliche Anforderung, mit Zeitgrenze und Wächter."""
+    """Öffentliche Freigabe (Funnel): nur auf ausdrückliche Anforderung, ohne Zeitgrenze (bleibt bis zum Beenden)."""
 
     @classmethod
     def setUpClass(cls):
@@ -1171,8 +1208,7 @@ class FunnelRemote(unittest.TestCase):
         self.status = {}
         self.calls = []
         self.cfg = {}
-        self.patches = [mock.patch.object(self.m, "RUN", self.d), mock.patch.object(self.m, "FUNNEL_UNTIL", os.path.join(self.d, "funnel-until")),
-                        mock.patch.object(self.m, "LOCK", os.path.join(self.d, "lock")), mock.patch.object(self.m, "log", lambda msg: None),
+        self.patches = [mock.patch.object(self.m, "RUN", self.d), mock.patch.object(self.m, "LOCK", os.path.join(self.d, "lock")), mock.patch.object(self.m, "log", lambda msg: None),
                         mock.patch.object(self.m, "status", lambda **kw: self.status.update(kw)),
                         mock.patch.object(self.m, "installed", lambda: True),
                         mock.patch.object(self.m, "serve_config", lambda: self.cfg)]
@@ -1197,16 +1233,18 @@ class FunnelRemote(unittest.TestCase):
         self.assertFalse(self.m.funnel_active({"Web": self.on()["Web"], "AllowFunnel": {"box.example.ts.net:443": False}}))
         self.assertFalse(self.m.funnel_active({}))
 
-    def test_funnel_on_sets_a_time_limit(self):
+    def test_funnel_on_has_no_time_limit(self):
+        """Issue 2: Die Freigabe bleibt bis zum Beenden an, auch nach einem Neustart (Tailscale behält sie)."""
         with mock.patch.object(self.m.subprocess, "run", self.fake_run(become=self.on())):
-            before = time.time()
             self.m.do_funnel_on()
         self.assertEqual(self.calls[0][:3], ["tailscale", "funnel", "--bg"])
         self.assertIn("8780", self.calls[0])
-        until = self.m.funnel_until()
-        self.assertTrue(before + 8 * 3600 - 5 <= until <= time.time() + 8 * 3600 + 5)
-        self.assertEqual(self.status["funnel_until"], until)
         self.assertEqual(self.status["state"], "idle")
+        self.assertNotIn("funnel_until", self.status)
+        self.assertNotIn("Stunden", self.status["message"])
+        self.assertIn("bis sie beendet wird", self.status["message"])
+        for gone in ("guard", "funnel_until", "set_funnel_until", "FUNNEL_HOURS", "FUNNEL_UNTIL"):
+            self.assertFalse(hasattr(self.m, gone), gone)
 
     def test_funnel_not_allowed_in_the_tailnet_shows_the_link(self):
         out = "Funnel not available; HTTPS must be enabled. Visit https://login.tailscale.com/f/funnel?node=abc123 to enable"
@@ -1214,17 +1252,14 @@ class FunnelRemote(unittest.TestCase):
             self.m.do_funnel_on()
         self.assertEqual(self.status["state"], "needs_funnel")
         self.assertTrue(self.status["hint_url"].startswith("https://login.tailscale.com/f/funnel"))
-        self.assertEqual(self.m.funnel_until(), 0)
 
     def test_funnel_failure_is_reported(self):
         with mock.patch.object(self.m.subprocess, "run", self.fake_run(rc=1, out="irgendein anderer Fehler")):
             with self.assertRaises(RuntimeError):
                 self.m.do_funnel_on()
-        self.assertEqual(self.m.funnel_until(), 0)
 
     def test_funnel_off_resets_and_restores_only_the_private_share(self):
         self.cfg = self.on()
-        self.m.set_funnel_until(time.time() + 3600)
         def run(args, **kw):
             self.calls.append(list(args))
             if args[:3] == ["tailscale", "serve", "--bg"]:
@@ -1234,8 +1269,7 @@ class FunnelRemote(unittest.TestCase):
             self.m.do_funnel_off()
         self.assertEqual(self.calls[0], ["tailscale", "funnel", "reset"])
         self.assertEqual(self.calls[1][:3], ["tailscale", "serve", "--bg"])
-        self.assertEqual(self.m.funnel_until(), 0)
-        self.assertEqual(self.status["funnel_until"], 0)
+        self.assertEqual(self.status["state"], "idle")
 
     def test_funnel_off_complains_if_it_stays_on(self):
         self.cfg = self.on()
@@ -1245,52 +1279,19 @@ class FunnelRemote(unittest.TestCase):
                 self.m.do_funnel_off()
         self.assertIn("sudo tailscale funnel reset", str(e.exception))
 
-    def test_guard_ends_expired_or_unlimited_funnel_and_leaves_valid_ones(self):
-        offs = []
-        with mock.patch.object(self.m, "do_funnel_off", lambda msg="": offs.append(msg)):
-            self.cfg = {}
-            self.assertEqual(self.m.guard(), 0)
-            self.assertEqual(offs, [])                                          # nichts an: nichts zu tun
-            self.cfg = self.on()
-            self.m.set_funnel_until(time.time() + 600)
-            self.m.guard()
-            self.assertEqual(offs, [])                                          # gültige Zeitgrenze
-            self.m.set_funnel_until(time.time() - 5)
-            self.m.guard()
-            self.assertEqual(len(offs), 1)                                      # abgelaufen
-            self.m.set_funnel_until(0)
-            self.m.guard()
-            self.assertEqual(len(offs), 2)                                      # keine Zeitgrenze (z. B. nach einem Neustart)
-
-    def test_guard_leaves_foreign_funnels_alone_and_clears_stale_limits(self):
-        offs = []
-        with mock.patch.object(self.m, "do_funnel_off", lambda msg="": offs.append(msg)):
-            self.cfg = self.on(proxy="http://127.0.0.1:3000")
-            self.m.guard()
-            self.assertEqual(offs, [])
-            self.cfg = {}
-            self.m.set_funnel_until(time.time() + 600)
-            self.m.guard()
-            self.assertEqual(self.m.funnel_until(), 0)                          # Funnel ist aus: alte Zeitgrenze wird gelöscht
-
-    def test_guard_does_nothing_while_the_helper_is_busy(self):
-        import fcntl
+    def test_a_leftover_guard_timer_of_an_earlier_version_does_nothing(self):
+        """Der Zeitgeber früherer Versionen ruft den Helfer mit "guard" auf: Er beendet nichts mehr (kein Aufräumen nach 8 Stunden)."""
         offs = []
         self.cfg = self.on()
-        lock = open(self.m.LOCK, "w")
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            code = ("import fcntl,os,sys\nf=open(sys.argv[1],'w')\n"
-                    "try:\n fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('frei')\nexcept OSError:\n print('belegt')\n")
-            r = subprocess.run([sys.executable, "-c", code, self.m.LOCK], capture_output=True, text=True)
-            self.assertEqual(r.stdout.strip(), "belegt")                          # Sperre wirkt über Prozesse hinweg
-        finally:
-            lock.close()
+        with mock.patch.object(self.m, "do_funnel_off", lambda msg="": offs.append(msg)), \
+                mock.patch.object(self.m.sys, "argv", ["pipbox-remote.py", "guard"]):
+            self.assertEqual(self.m.main(), 0)
+        self.assertEqual(offs, [])
+        self.assertEqual(self.calls, [])
 
     def test_mode_list_has_both_funnel_words(self):
         self.assertIn("funnel_on", self.m.MODES)
         self.assertIn("funnel_off", self.m.MODES)
-        self.assertEqual(self.m.FUNNEL_HOURS, 8)
 
 
 class FunnelRequests(unittest.TestCase):
@@ -1313,7 +1314,8 @@ class FunnelRequests(unittest.TestCase):
         r.request("funnel_on", True, public=True)
         st = r.status()
         self.assertTrue(st["funnel"])
-        self.assertGreater(st["funnel_until"], time.time() + 7 * 3600)
+        self.assertNotIn("funnel_until", st)
+        self.assertNotIn("peers", st)                                            # Issue 2: die Geräteliste "Weitere Geräte in Ihrem Netz" ist weg
 
     def test_funnel_off_only_when_it_is_on(self):
         r = self.remote(serve=True)
@@ -1353,7 +1355,7 @@ class AutoSystemCheck(unittest.TestCase):
         return self.U.auto_check_due(st if st is not None else {"state": "done", "last_check": now - self.DAY - 5}, now, uptime, streaming, pending, last_try, helper)
 
     def test_interval_is_six_hours_and_retry_one_hour(self):
-        self.assertEqual((self.U.AUTO_EVERY, self.U.AUTO_RETRY), (6 * 3600, 3600))
+        self.assertEqual((self.U.AUTO_EVERY, self.U.AUTO_RETRY, self.U.AUTO_AFTER_BOOT, self.U.AUTO_RETRY_EARLY), (6 * 3600, 3600, 120, 300))
         self.assertEqual((server.SwUpdate.CHECK_EVERY, server.SwUpdate.RETRY_AFTER_ERROR), (6 * 3600, 1800))
 
     def test_due_after_the_interval_and_never_checked(self):
@@ -1363,8 +1365,25 @@ class AutoSystemCheck(unittest.TestCase):
 
     def test_not_due_when_checked_recently(self):
         now = 10 * self.DAY
-        self.assertFalse(self.due(st={"state": "done", "last_check": now - 3600}, now=now))
-        self.assertFalse(self.due(st={"state": "done", "last_check": now - self.DAY + 60}, now=now))
+        up = 9 * self.DAY                                                           # die Box läuft schon lange
+        self.assertFalse(self.due(st={"state": "done", "last_check": now - 3600}, now=now, uptime=up))
+        self.assertFalse(self.due(st={"state": "done", "last_check": now - self.DAY + 60}, now=now, uptime=up))
+
+    def test_once_after_every_start_even_if_checked_recently(self):
+        """Nach dem Start der Box wird immer einmal gesucht, auch wenn die letzte Suche (z. B. vor dem Neustart) noch keine 6 Stunden her ist."""
+        now = 10 * self.DAY
+        st = {"state": "done", "last_check": now - 1800}                            # vor 30 Minuten
+        self.assertTrue(self.due(st=st, now=now, uptime=300))                       # die Box ist erst seit 5 Minuten an: davor war der Start
+        self.assertFalse(self.due(st=st, now=now, uptime=3600))                     # an seit einer Stunde, Suche war danach: nicht wieder
+        self.assertTrue(self.due(st={"state": "never"}, now=now, uptime=130))
+
+    def test_failed_search_is_repeated_sooner_in_the_first_half_hour(self):
+        now = 10 * self.DAY
+        st = {"state": "never"}
+        self.assertFalse(self.due(st=st, now=now, uptime=600, last_try=now - 200))
+        self.assertTrue(self.due(st=st, now=now, uptime=600, last_try=now - 400))   # Router und Mobilfunk brauchen oft einige Minuten
+        self.assertFalse(self.due(st=st, now=now, uptime=4000, last_try=now - 400)) # später wieder nur stündlich
+        self.assertTrue(self.due(st=st, now=now, uptime=4000, last_try=now - 3700))
 
     def test_never_while_sending_or_busy_or_pending(self):
         self.assertFalse(self.due(streaming=True))
@@ -1374,7 +1393,8 @@ class AutoSystemCheck(unittest.TestCase):
         self.assertFalse(self.due(helper=False))
 
     def test_not_right_after_boot_and_with_retry_pause(self):
-        self.assertFalse(self.due(uptime=120))
+        self.assertFalse(self.due(uptime=60))                                        # Dienste und Netz kommen noch hoch
+        self.assertTrue(self.due(uptime=120))                                        # zwei Minuten nach dem Start: suchen
         now = 10 * self.DAY
         self.assertFalse(self.due(now=now, last_try=now - 1800))                     # vor kurzem versucht (z. B. kein Internet)
         self.assertTrue(self.due(now=now, last_try=now - 2 * 3600))
@@ -1389,6 +1409,7 @@ class AutoSystemCheck(unittest.TestCase):
             def _active(self):
                 return False
         sw = server.SwUpdate(tempfile.mkdtemp(), False, Idle())
+        sw.started = 1000.0 - 3 * 3600                          # läuft schon lange (die erste halbe Stunde nach dem Start gilt unten)
         calls = []
 
         def fake_get(name, limit):
@@ -1415,6 +1436,35 @@ class AutoSystemCheck(unittest.TestCase):
             sw.check()
             self.assertGreater(len(calls), n)                     # nach über 6 Stunden neu
 
+    def test_github_check_retries_after_three_minutes_in_the_first_half_hour(self):
+        class Idle:
+            def _active(self):
+                return False
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, Idle())
+        calls = []
+
+        def fake_get(name, limit):
+            calls.append(name)
+            raise OSError("kein Netz")
+        t = [5000.0]
+        sw.started = t[0]
+        with mock.patch.object(sw, "_get", fake_get), mock.patch.object(server.time, "time", lambda: t[0]):
+            sw.check()
+            n = len(calls)
+            t[0] += 120
+            sw.check()
+            self.assertEqual(len(calls), n)                       # nach 2 Minuten noch nicht
+            t[0] += 90                                            # 3,5 Minuten nach dem Start des Dienstes
+            sw.check()
+            self.assertGreater(len(calls), n)
+            n = len(calls)
+            t[0] += 3600                                          # später: nur noch nach 30 Minuten
+            sw.check()
+            m = len(calls)
+            t[0] += 600
+            sw.check()
+            self.assertEqual(len(calls), m)
+
     def test_github_auto_check_does_not_ask_while_sending(self):
         class Busy:
             def _active(self):
@@ -1430,6 +1480,23 @@ class AutoSystemCheck(unittest.TestCase):
             self.assertTrue(u.auto_check())
             self.assertEqual(open(os.path.join(d, "update-request")).read(), "autocheck\n")
             self.assertFalse(u.auto_check())                                          # Anforderung liegt noch: nicht noch einmal
+
+    def test_opening_the_page_after_a_start_searches_right_away(self):
+        """Issue 1: Wer sich kurz nach dem Start anmeldet, soll gleich wissen, ob es Updates gibt, ohne die zwei Minuten abzuwarten."""
+        d, u = self.make()
+        st = {"state": "never", "last_check": 0, "streaming": False, "helper_installed": True}
+        with mock.patch.object(u, "status", lambda: st), \
+                mock.patch.object(server, "read", lambda p, d=None: "30\n" if "uptime" in p else (d or "")):
+            self.assertFalse(u.auto_check())                                          # die Schleife wartet noch
+            self.assertTrue(u.auto_check(present=True))                               # die Anmeldung nicht
+            self.assertEqual(open(os.path.join(d, "update-request")).read(), "autocheck\n")
+            os.remove(os.path.join(d, "update-request"))
+            self.assertFalse(u.auto_check(present=True))                              # nicht bei jedem Seitenaufruf wieder (Pause nach dem Versuch)
+        streaming = dict(st, streaming=True)
+        with mock.patch.object(u, "status", lambda: streaming), \
+                mock.patch.object(server, "read", lambda p, d=None: "9999\n" if "uptime" in p else (d or "")):
+            u.last_try = 0.0
+            self.assertFalse(u.auto_check(present=True))                              # nie während der Übertragung
 
     def test_demo_and_api_do_not_trigger_it(self):
         d, u = self.make()

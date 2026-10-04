@@ -1584,7 +1584,8 @@ def vkey(v):
 class Remote:
     """Fernzugriff über Tailscale. Lesen darf dieser Dienst (tailscale status), Verändern macht der Root-Helfer
     pipbox-remote.py über eine Auslösedatei mit einem Stichwort aus fester Liste. Funnel (öffentlich im Internet) gibt es nur auf
-    ausdrückliche Anforderung (funnel_on mit Bestätigung "public") und es endet nach 8 Stunden von selbst."""
+    ausdrückliche Anforderung (funnel_on mit Bestätigung "public"); sie hat keine Zeitgrenze und bleibt auch nach einem Neustart der
+    Box bis zum Beenden bestehen."""
     STATUS = "/run/pipbox-remote/status.json"
     ACTIONS = ("install", "login", "down", "serve_on", "serve_off", "funnel_on", "funnel_off", "logout")
 
@@ -1615,15 +1616,15 @@ class Remote:
     def status(self):
         if self.demo:
             d = {"installed": True, "backend": "Running", "connected": True, "name": "irl4you-box.demo.ts.net",
-                 "ip": "100.64.0.1", "tailnet": "demo", "peers": [{"name": "handy", "os": "iOS", "online": True}],
+                 "ip": "100.64.0.1", "tailnet": "demo",
                  "serve": bool(self.fake.get("serve")), "url": "https://irl4you-box.demo.ts.net/" if self.fake.get("serve") else "",
-                 "funnel": bool(self.fake.get("funnel")), "funnel_until": int(self.fake.get("funnel_until", 0)),
+                 "funnel": bool(self.fake.get("funnel")),
                  "state": "idle", "step": "", "message": self.fake.get("message", ""), "login_url": "",
                  "hint_url": "", "helper_installed": True}
             return d
         installed = bool(shutil.which("tailscale"))
-        out = {"installed": installed, "backend": "", "connected": False, "name": "", "ip": "", "tailnet": "", "peers": [],
-               "serve": False, "url": "", "funnel": False, "funnel_until": 0, "state": "idle", "step": "", "message": "", "login_url": "",
+        out = {"installed": installed, "backend": "", "connected": False, "name": "", "ip": "", "tailnet": "",
+               "serve": False, "url": "", "funnel": False, "state": "idle", "step": "", "message": "", "login_url": "",
                "hint_url": "", "helper_installed": os.path.exists("/etc/systemd/system/pipbox-remote.path")}
         try:
             with open(self.STATUS) as f:
@@ -1644,8 +1645,6 @@ class Remote:
         ips = d.get("TailscaleIPs") or []
         out["ip"] = next((i for i in ips if ":" not in i), "")
         out["tailnet"] = (d.get("CurrentTailnet") or {}).get("Name", "")
-        out["peers"] = [{"name": p.get("HostName", ""), "os": p.get("OS", ""), "online": bool(p.get("Online"))}
-                        for p in (d.get("Peer") or {}).values()]
         if d.get("AuthURL"):
             out["login_url"] = d["AuthURL"]
         if out["connected"]:
@@ -1657,8 +1656,6 @@ class Remote:
                     if "127.0.0.1:%d" % 8780 in str(h2.get("Proxy", "")):
                         out["serve"], out["url"] = True, "https://" + host.replace(":443", "") + "/"
             out["funnel"] = any((sv.get("AllowFunnel") or {}).values())
-            until = int(h.get("funnel_until") or 0)
-            out["funnel_until"] = until if out["funnel"] and until > time.time() else 0
         return out
 
     def request(self, action, confirm, public=False):
@@ -1687,7 +1684,7 @@ class Remote:
             elif action == "serve_off":
                 self.fake = {"serve": False, "message": "Demo: beendet."}
             elif action == "funnel_on":
-                self.fake = {"serve": True, "funnel": True, "funnel_until": time.time() + 8 * 3600, "message": "Demo: öffentlich freigegeben."}
+                self.fake = {"serve": True, "funnel": True, "message": "Demo: öffentlich freigegeben."}
             elif action == "funnel_off":
                 self.fake = {"serve": True, "funnel": False, "message": "Demo: öffentliche Freigabe beendet."}
             return
@@ -1962,6 +1959,8 @@ class SwUpdate:
     """
     CHECK_EVERY = 6 * 3600     # Sekunden zwischen zwei Abfragen bei GitHub
     RETRY_AFTER_ERROR = 30 * 60   # ein Fehlversuch (kein Internet) wird früher wiederholt
+    EARLY_SECONDS = 30 * 60       # in der ersten halben Stunde nach dem Start (Router und Mobilfunk brauchen oft einige Minuten) ...
+    RETRY_EARLY = 3 * 60          # ... wird ein Fehlversuch schon nach 3 Minuten wiederholt
     RAW = "https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/"
     API = "https://api.github.com/repos/IRL4YOU/irl4you-pip/releases?per_page=30"
     STATUS = "/run/pipbox-swupdate/status.json"
@@ -1973,6 +1972,7 @@ class SwUpdate:
         self.demo, self.send = demo, send
         self.lock = threading.Lock()
         self.cache, self.cache_t = None, 0.0
+        self.started = time.time()
         self.rel_cache, self.rel_t = [], 0.0
         here = os.path.dirname(os.path.abspath(__file__))
         self.version = (read(os.path.join(here, "VERSION"), "") or "0.0.0").strip()
@@ -2000,7 +2000,8 @@ class SwUpdate:
     def check(self, force=False):
         """Fragt die neueste Version auf GitHub ab (höchstens alle 6 Stunden und nie während einer Übertragung, außer force)."""
         with self.lock:
-            wait = self.RETRY_AFTER_ERROR if self.cache and self.cache.get("error") else self.CHECK_EVERY
+            early = time.time() - self.started < self.EARLY_SECONDS
+            wait = (self.RETRY_EARLY if early else self.RETRY_AFTER_ERROR) if self.cache and self.cache.get("error") else self.CHECK_EVERY
             if not force and self.cache and (time.time() - self.cache_t < wait or self.send._active()):
                 return self.cache
             if not force and not self.cache and not self.demo and self.send._active():
@@ -2027,13 +2028,13 @@ class SwUpdate:
     def auto_loop(self):
         """Fragt von selbst nach (alle 6 Stunden, check() hält das ein und fragt nie während einer Übertragung), damit der Punkt
         "Oberfläche" in der Kopfleiste auch dann stimmt, wenn gerade niemand die Seite offen hat."""
-        time.sleep(90)
+        time.sleep(30)
         while True:
             try:
                 self.check()
             except Exception as e:                # nie den Dienst beenden
                 print("swupdate auto_check:", e)
-            time.sleep(15 * 60)
+            time.sleep(60 if time.time() - self.started < self.EARLY_SECONDS else 15 * 60)
 
     def releases(self, force=False):
         """Veröffentlichte Versionen (Releases) auf GitHub: [{version, date, notes}], höchstens alle 6 Stunden, nie während einer Übertragung."""
@@ -2164,6 +2165,7 @@ class Updates:
         self.log_path = os.path.join(state_dir, "update.log")
         self.fake = {}
         self.lock = threading.Lock()
+        self.last_try = 0.0              # wann zuletzt eine stille Suche angefordert wurde (Schleife und Anmeldung teilen sich das)
 
     def boot_id(self):
         return (read("/proc/sys/kernel/random/boot_id", "demo") or "demo").strip()
@@ -2233,7 +2235,9 @@ class Updates:
 
     AUTO_EVERY = 6 * 3600         # so oft sucht die Box von selbst nach Systemupdates (nie während einer Übertragung)
     AUTO_RETRY = 3600             # nach einer Suche ohne Ergebnis (kein Internet) erst nach einer Stunde wieder
-    AUTO_AFTER_BOOT = 10 * 60     # nach dem Start der Box nicht sofort suchen
+    AUTO_AFTER_BOOT = 2 * 60      # nach dem Start der Box zwei Minuten abwarten (Dienste und Netz kommen hoch), dann suchen
+    EARLY_UPTIME = 30 * 60        # in der ersten halben Stunde nach dem Start (Router und Mobilfunk brauchen oft einige Minuten) ...
+    AUTO_RETRY_EARLY = 5 * 60     # ... wird ein Fehlversuch schon nach 5 Minuten wiederholt
 
     @classmethod
     def auto_check_due(cls, st, now, uptime, streaming, request_pending, last_try, helper=True):
@@ -2242,39 +2246,51 @@ class Updates:
             return False
         if st.get("state") in ("running", "rebooting"):
             return False
-        if last_try and now - last_try < cls.AUTO_RETRY:
+        retry = cls.AUTO_RETRY_EARLY if uptime < cls.EARLY_UPTIME else cls.AUTO_RETRY
+        if last_try and now - last_try < retry:
             return False
         last = st.get("last_check") or 0
+        if last < now - uptime:
+            return True                # seit dem Start der Box noch nicht gesucht: immer einmal nach dem Start
         return now - last >= cls.AUTO_EVERY
 
-    def auto_check(self, now=None, last_try=None):
+    def auto_check(self, now=None, last_try=None, present=False):
         """Legt, wenn es Zeit ist, die Anforderung "autocheck" ab. True, wenn angefordert wurde. Der Helfer sucht still: ohne Zustand
-        "läuft", ohne Fehlermeldung bei fehlendem Internet; das Ergebnis erscheint wie bei der Suche per Knopf (gelber Punkt in der Kopfleiste)."""
+        "läuft", ohne Fehlermeldung bei fehlendem Internet; das Ergebnis erscheint wie bei der Suche per Knopf (gelber Punkt in der Kopfleiste).
+        present: Jemand hat die Oberfläche geöffnet (Anmeldung): dann nicht erst AUTO_AFTER_BOOT nach dem Start abwarten."""
         if self.demo:
             return False
         try:
             uptime = float((read("/proc/uptime", "") or "0").split()[0])
         except (ValueError, IndexError):
             uptime = 0.0
+        if present:
+            uptime = max(uptime, float(self.AUTO_AFTER_BOOT))
         st = self.status()
+        if last_try is None:
+            last_try = self.last_try
         if not self.auto_check_due(st, now or time.time(), uptime, st.get("streaming", False), os.path.exists(self.req), last_try,
                                    helper=st.get("helper_installed", False)):
             return False
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write("autocheck\n")
+        self.last_try = time.time()
         return True
 
     def auto_loop(self):
-        last_try = 0.0
-        time.sleep(60)
+        time.sleep(30)
         while True:
             try:
-                if self.auto_check(last_try=last_try):
-                    last_try = time.time()
+                self.auto_check()
             except Exception as e:                # nie den Dienst beenden
                 print("auto_check:", e)
-            time.sleep(15 * 60)
+            # in der ersten halben Stunde nach dem Start jede Minute nachsehen (die Suche selbst ist erst nach AUTO_AFTER_BOOT fällig)
+            try:
+                early = float((read("/proc/uptime", "") or "0").split()[0]) < self.EARLY_UPTIME
+            except (ValueError, IndexError):
+                early = False
+            time.sleep(60 if early else 15 * 60)
 
     def _fake(self, mode):
         f = self.fake
@@ -2411,6 +2427,25 @@ class DjiService:
                 return None
         return None
 
+    EXTRAS_TTL = 3.0
+
+    def camera_extras(self):
+        """{Schlüssel: {battery, battery_age, charging}} der DJI-Kameras aus dem Zustand des Dienstes (3 Sekunden zwischengespeichert,
+        die Statusseite fragt oft). Ohne Dienst leer."""
+        now = time.monotonic()
+        hit = getattr(self, "_extras", None)
+        if hit and now - hit[0] < self.EXTRAS_TTL:
+            return hit[1]
+        out = {}
+        try:
+            for c in self._call({"cmd": "state"}, timeout=2).get("cameras", []):
+                if c.get("rtmp_key") and c.get("battery") is not None:
+                    out[c["rtmp_key"]] = {"battery": c["battery"], "battery_age": c.get("battery_age"), "charging": c.get("charging")}
+        except (RuntimeError, ValueError):
+            pass
+        self._extras = (now, out)
+        return out
+
     def _ensure_listed(self, cameras):
         """Jede Kamera des Dienstes steht auch in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
         if not self.cams:
@@ -2478,11 +2513,11 @@ class DjiService:
                     "stabilization": "off", "autoconnect": True, "saved": ["KameraNetz"], "in_range": True, "retry_in": 0,
                     "publishing": False, "locked": False, "detail": "", "battery": None}
             f["cameras"]["D0:D0:4B:00:00:01"] = dict(base, addr="D0:D0:4B:00:00:01", name="Kamera vorn", model="Osmo Action 5 Pro",
-                                                     kind="action5", rtmp_key="dji-000001", state="streaming", battery=82,
+                                                     kind="action5", rtmp_key="dji-000001", state="streaming", battery=82, charging=True, battery_age=3,
                                                      publishing=True, locked=True, detail="rtmp://192.168.80.1:1935/publish/dji-000001")
             f["cameras"]["F0:4F:E2:00:00:02"] = dict(base, addr="F0:4F:E2:00:00:02", name="Kamera hinten", model="Osmo Pocket 3",
                                                      kind="pocket3", rtmp_key="dji-000002", state="error", autoconnect=False,
-                                                     resolution="720p", bitrate=4000, retry_in=0,
+                                                     resolution="720p", bitrate=4000, retry_in=0, battery=18, battery_age=95, charging=False,
                                                      detail="Kamera nicht gefunden. Ist sie an, Bluetooth aktiv und nicht mit dem Handy verbunden?")
         if cmd == "state":
             return {"cameras": list(f["cameras"].values()), "scan": f["scan"], "scanning": f["scanning"], "scan_error": "",
@@ -2614,6 +2649,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metrics":
             m = self.sampler.sample()
             m["cameras"] = self.cams.listing(self.host(), self.djisvc.host_for_key)
+            extras = self.djisvc.camera_extras()
+            for c in m["cameras"]:
+                c.update(extras.get(c["key"], {}))             # Akkustand der DJI-Kameras (Status, Kameras)
             m["uplinks"] = uplink_states(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
             pic = self.send.picture()
             for c in m["cameras"]:
@@ -2636,6 +2674,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/swupdate":
             return self.reply(200, self.swupdate.status(force="check=1" in (self.path.split("?", 1) + [""])[1]))
         if path == "/api/update":
+            try:
+                self.updates.auto_check(present=True)       # Wer die Seite öffnet, soll gleich wissen, ob es Updates gibt (einmal je Start, still)
+            except Exception as e:
+                print("auto_check (Anmeldung):", e)
             return self.reply(200, self.updates.status())
         if path == "/api/dji":
             return self.reply(200, self.djisvc.status())

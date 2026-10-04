@@ -7,13 +7,23 @@
 <style>
 :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4}
 *{box-sizing:border-box}
-[hidden]{display:none!important}   /* Klassen mit display (z. B. .row, .updlink) dürfen das Attribut hidden nicht überstimmen */
+[hidden]{display:none!important}   /* Klassen mit display (z. B. .row, .updbtn) dürfen das Attribut hidden nicht überstimmen */
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,system-ui,sans-serif}
 header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;margin:12px auto 0;max-width:calc(980px - 0px);width:calc(100% - 32px);border:1px solid var(--line);border-radius:14px;background:var(--card);position:sticky;top:8px;z-index:50;box-shadow:0 0 0 8px var(--bg),0 10px 20px 6px rgba(2,6,23,.5)}   /* Kopfleiste bleibt beim Scrollen oben stehen */
 .card{scroll-margin-top:calc(var(--hdrh,64px) + 20px)}   /* Sprung zu einer Karte (z. B. gelber Punkt) landet unter der festen Kopfleiste, nicht dahinter */
 h1{font-size:17px;margin:0;color:var(--accent)}
 .badge{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--line);color:var(--muted)}
 .badge.demo{background:var(--warn);color:#0f172a}
+.livebtn{font-size:12px;font-weight:700;padding:3px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer;letter-spacing:.02em}
+.livebtn.on{background:var(--crit);border-color:var(--crit);color:#fff}
+.livebtn.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
+.livebtn:disabled{opacity:.55;cursor:not-allowed}
+/* Kopfleiste: alle Elemente (Knöpfe, Live-Knopf, Anzeige) gleiche Form, Höhe und Schrift: abgerundetes Rechteck wie die Knöpfe der Seite */
+header .hdr button,header .hdr>.badge{box-sizing:border-box;min-height:30px;padding:4px 12px;font-size:13px;line-height:20px;border-radius:8px;border:1px solid var(--line);margin:0}
+header .hdr>.badge{display:inline-flex;align-items:center;background:var(--card);color:var(--muted);font-weight:400}
+header .hdr>.badge.demo{background:var(--warn);border-color:var(--warn);color:#0f172a;font-weight:600}
+header .hdr button.foldm{font-size:16px;padding:2px 12px}
+header .hdr .livebtn{font-weight:700}
 main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr))}
 .card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
 .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 10px}
@@ -26,13 +36,10 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
-.updlink{display:inline-block;margin-left:10px;padding:4px;line-height:0;vertical-align:middle;border-radius:50%}
-.updlink .dot{margin:0;width:11px;height:11px;box-shadow:0 0 0 2px rgba(245,158,11,.35)}
-.updlink:focus-visible{outline:2px solid var(--warn);outline-offset:1px}
-.updlink{text-decoration:none}
-.updtx{margin-left:6px;font-size:12px;font-weight:400;color:var(--muted);line-height:1;vertical-align:middle}
-.updlink .dot{display:inline-block;vertical-align:middle}
-@media(max-width:620px){.updtx{display:none}}
+/* Update-Hinweise in der Kopfleiste: gelb umrandet, nur sichtbar, wenn es etwas gibt; sonst gleiche Form wie die übrigen Knöpfe dort */
+header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);color:var(--text);font-weight:600}
+.updbtn .dot{margin:0 6px 0 0;width:9px;height:9px;vertical-align:baseline}
+@media(max-width:620px){.updbtn .u1{display:none}}
 #alerts{display:grid;gap:8px}
 #alerts:empty{display:none}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
@@ -81,6 +88,8 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .camcol{display:flex;flex-direction:column;gap:8px;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
 .camcol[hidden]{display:none}
 .camcol.slotoff{display:none}
+.batt{font-size:12px;margin-left:6px;white-space:nowrap}
+.batt.stale{opacity:.6}
 .cam .camnet{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px}
 .cam .camnet select{padding:2px 6px;font-size:12px;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
@@ -163,9 +172,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 </style>
 </head>
 <body>
-<header><h1>IRL4YOU BOX<a id="hdr_upd" class="updlink" href="#swcard" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="updtx">Oberfläche</span></a><a id="hdr_sys" class="updlink" href="#updcard" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="updtx">System</span></a></h1><span class="hdr">
+<header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <span id="mode" class="badge">verbinde…</span> <button class="del" id="logout">Abmelden</button></span></header>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button> <span id="mode" class="badge" title="Verbindung der Seite zur Box">verbinde…</span></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
@@ -330,7 +339,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="r_login" hidden><a id="r_loginlink" class="btnlink" target="_blank" rel="noopener noreferrer" href="#">Bei Tailscale anmelden</a>
       <div class="ph">Der Link öffnet Tailscale. Melden Sie sich mit Ihrem Konto an (z. B. GitHub oder Google) und klicken Sie dort auf „Connect“. Danach hier einen Moment warten.</div></div>
     <div id="r_url_row" class="row" hidden><span>Adresse im privaten Netz</span><span><a id="r_url" target="_blank" rel="noopener noreferrer" href="#"></a> <button id="r_copy" type="button" class="sec" style="padding:2px 8px;font-size:12px">Kopieren</button></span></div>
-    <div id="r_peers" class="ph"></div>
     <div id="r_warn" class="err" hidden>Achtung: „Funnel“ ist an, die Oberfläche ist öffentlich im Internet erreichbar. Mit „Freigabe beenden“ abschalten.</div>
     <div class="actions" id="r_actions"></div>
     <div id="r_msg" class="ph"></div>
@@ -393,9 +401,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <label class="logopt"><input type="radio" name="logmode" value="ausfuehrlich"> <b>Ausführlich</b>: Protokolle dauerhaft auf der Karte (Journal höchstens 30 MB und 7 Tage, Zustandsprotokoll höchstens 4 MB, alle 10 Sekunden). Für die Fehlersuche, zum Beispiel wenn sich die Box von selbst ausschaltet.</label>
     <div id="logmsg" class="ph"></div>
   </details>
-  <details class="card wide" id="c_power"><summary><span class="sumh">Box ausschalten</span></summary>
-    <div class="ph" style="margin-top:0">Fährt die Box sauber herunter oder startet sie neu. Wenn die Box ausgeschaltet ist, kann sie über die Oberfläche nicht wieder eingeschaltet werden: dafür den Strom kurz trennen oder die Ein-Taste nutzen.</div>
-    <div class="actions"><button id="pw_off" type="button" class="warnbtn">Herunterfahren</button> <button id="pw_reboot" type="button" class="sec">Neu starten</button></div>
+  <details class="card wide" id="c_power"><summary><span class="sumh">Box ausschalten und abmelden</span></summary>
+    <div class="ph" style="margin-top:0">Fährt die Box sauber herunter oder startet sie neu. Wenn die Box ausgeschaltet ist, kann sie über die Oberfläche nicht wieder eingeschaltet werden: dafür den Strom kurz trennen oder die Ein-Taste nutzen. „Abmelden“ beendet die Anmeldung auf diesem Gerät, auch eine mit „Angemeldet bleiben“ gemerkte.</div>
+    <div class="actions"><button id="pw_off" type="button" class="warnbtn">Herunterfahren</button> <button id="pw_reboot" type="button" class="sec">Neu starten</button> <button id="logout" type="button" class="sec" title="Von dieser Box abmelden (auch eine gemerkte Anmeldung)">Abmelden</button></div>
     <div id="pwmsg" class="ph"></div>
   </details>
 </main>
@@ -428,8 +436,16 @@ function upDot(u){
   if(u.state==="reserve") return `<span class="dot wait" title="In Reserve${rtt} (Laufzeit zu hoch oder unruhig, es werden kaum Pakete gesendet)"></span>`;
   return '<span class="dot off" title="Nicht verbunden oder kein Netz"></span>';
 }
+// Akkustand einer DJI-Kamera: über 75 % grün, unter 25 % rot, sonst Standardfarbe; Steckersymbol, wenn sie lädt. Ohne Bluetooth bleibt der
+// zuletzt gemeldete Wert stehen und wird blasser, mit Angabe, wie alt er ist.
+function battHtml(c){
+  if(c.battery==null) return "";
+  const col=c.battery>75?"var(--ok)":(c.battery<25?"var(--crit)":""), age=c.battery_age, stale=age!=null&&age>600;
+  const when=stale?` (Stand vor ${age>=3600?Math.round(age/3600)+" Std.":Math.round(age/60)+" Min."})`:"";
+  return ` <span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", lädt":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
+}
 function renderCamLights(list){
-  setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
+  setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}${battHtml(c)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
 const netLabel=o=>`${o.label} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
@@ -609,7 +625,9 @@ function djiDynamic(){
     if((c.state==="idle"||c.state==="error")&&c.publishing){ txt="Stream läuft (ohne Bluetooth)"; col="var(--warn)"; }
     const e=card.querySelector(".dstate"); e.textContent=txt; e.style.color=col;
     if(!card.querySelector(".d-name").matches(":focus")){ const nm=djiName(c); card.querySelector(".dname").textContent=nm; }
-    card.querySelector(".dbatt").textContent=c.battery!=null?c.battery+" %":"";
+    { const b=card.querySelector(".dbatt"), a=c.battery_age, stale=a!=null&&a>600;
+      b.textContent=c.battery!=null?(c.charging?"🔌 ":"")+c.battery+" %"+(stale?" (alt)":""):"";
+      b.style.color=c.battery==null?"":(c.battery>75?"var(--ok)":(c.battery<25?"var(--crit)":"")); b.style.opacity=stale?".6":""; }
     let det=c.detail||(c.state==="idle"?(c.in_range?"In Reichweite":"Zuletzt nicht gesehen"):"");
     const left=Math.max(0,(c.retry_in||0)-Math.floor((Date.now()-djiRecv)/1000));
     if(c.state==="error"&&c.retry_in&&c.autoconnect) det+=(det?" – ":"")+"neuer Versuch in "+left+" s";
@@ -1012,6 +1030,7 @@ let smStart=false; try{ smStart=localStorage.getItem("pb_sendemodus")==="1"; }ca
 async function sendLoad(){
   let d; try{ d=await srtlaCall("GET","/api/send"); }catch(e){ return; }
   sendData=d;
+  updHdrLive(d);
   $("livestate").textContent=LIVE_LABEL[d.state]||d.state;
   $("livestate").style.color=d.state==="running"?"var(--ok)":(d.state==="restarting"?"var(--warn)":(d.state==="refused"?"var(--crit)":""));
   $("liveserver").textContent=d.server?"Server: "+d.server.name:"";
@@ -1060,12 +1079,13 @@ $("live_restart").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/send",{action:"restart",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
   sendLoad();
 });
-$("live_go").addEventListener("click",async()=>{
+async function doLiveStart(){
   const s=sendData&&sendData.server; if(!s) return;
   if(!confirm(`Jetzt LIVE senden?\n\nZiel: ${s.name}\n\nDas Bild wird sofort zum Server übertragen.`)) return;
-  try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
+  try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; alert(x.message); }
   setTimeout(sendLoad,800);
-});
+}
+$("live_go").addEventListener("click",doLiveStart);
 function seamlessTo(main,key){      // läuft die Sendekette im Tausch-Betrieb und gehören beide Kameras zur Tauschgruppe?
   const g=(sendData&&sendData.swap_group)||[]; return !!(sendData&&sendData.active&&g.includes(main)&&g.includes(key));
 }
@@ -1075,9 +1095,22 @@ $("swapbtns").addEventListener("click",async e=>{
   if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm("Hauptbild: "+b.textContent.trim()+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
   try{ const r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
-$("live_stop").addEventListener("click",async()=>{
+async function doLiveStop(){
   try{ await srtlaCall("POST","/api/send",{action:"stop"}); }catch(x){ $("liveerr").textContent=x.message; }
   setTimeout(sendLoad,800);
+}
+$("live_stop").addEventListener("click",doLiveStop);
+// Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (beim Beenden mit Rückfrage)
+function updHdrLive(d){
+  const b=$("hdr_live"), live=!!d.active, busy=d.state==="restarting"||d.state==="starting"||d.state==="stopping";
+  b.hidden=false; b.className="livebtn"+(live&&!busy?" on":"")+(busy?" busy":"");
+  b.textContent=busy?(LIVE_LABEL[d.state]==="Wird beendet…"?"Wird beendet…":"Verbinde …"):(live?"● LIVE":"Live gehen");
+  b.disabled=busy||(!live&&!d.can_start);
+  b.title=busy?(LIVE_LABEL[d.state]||""):(live?"Es wird gesendet. Klicken beendet die Sendung (mit Rückfrage).":(d.can_start?"Nicht live. Klicken startet die Sendung (mit Rückfrage).":"Kann nicht starten: "+((d.reasons||[]).join(" · ")||"Bedingungen nicht erfüllt")));
+}
+$("hdr_live").addEventListener("click",async()=>{
+  if(sendData&&sendData.active){ if(confirm("Die Sendung jetzt beenden?\n\nDas Bild geht zum Server nicht mehr weiter.")) await doLiveStop(); }
+  else await doLiveStart();
 });
 sendLoad(); setInterval(()=>{ if(!document.hidden) sendLoad(); },2000);
 let rBusy=false, rDeclinedMem=false;
@@ -1092,13 +1125,10 @@ async function rLoad(){
   const login=d.login_url&&/^https:\/\/(login|console)\.tailscale\.com\//.test(d.login_url);
   $("r_login").hidden=!login; if(login) $("r_loginlink").href=d.login_url;
   const ur=$("r_url_row"); ur.hidden=!(d.connected&&d.serve&&d.url); if(!ur.hidden){ $("r_url").textContent=d.url; $("r_url").href=d.url; }
-  const others=(d.peers||[]).filter(p=>p.name);
-  $("r_peers").textContent=d.connected?(others.length?"Weitere Geräte in Ihrem Netz: "+others.map(p=>p.name+" ("+(p.os||"?")+(p.online?", online":", offline")+")").join(", ")+".":"Noch kein weiteres Gerät in Ihrem Netz. Installieren Sie Tailscale auf Handy oder Rechner und melden Sie sich mit demselben Konto an."):"";
   { const w=$("r_warn"); w.hidden=!d.funnel;
-    if(d.funnel){ const t=d.funnel_until?new Date(d.funnel_until*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"";
-      w.textContent="Achtung: Die Oberfläche ist gerade öffentlich im Internet erreichbar (Funnel)."+(t?" Die Freigabe endet automatisch um "+t+" Uhr.":" Es gibt keine Zeitgrenze, die Box beendet sie in wenigen Minuten von selbst.")+" Mit „Öffentliche Freigabe beenden“ abschalten."; } }
+    if(d.funnel) w.textContent="Achtung: Die Oberfläche ist öffentlich im Internet erreichbar (Funnel). Das bleibt so, auch nach einem Neustart der Box, bis Sie die Freigabe mit „Öffentliche Freigabe beenden“ abschalten."; }
   const acts=$("r_actions"); acts.innerHTML="";
-  const FUNNEL_ASK="Die Oberfläche öffentlich im Internet freigeben (Funnel)?\n\nDanach kann JEDER im Internet, der die Adresse der Box kennt, die Anmeldeseite öffnen, auch ohne Tailscale. Geschützt ist die Box dann nur durch das BELABOX-Passwort.\n\n• Nur mit einem starken, langen Passwort verwenden.\n• Die Freigabe endet nach 8 Stunden von selbst.\n• Der Gerätename steht in öffentlichen Zertifikatslisten und wird von Suchprogrammen gefunden, die Anmeldeseite wird dann ausprobiert.\n\nWenn Sie nur von eigenen Geräten zugreifen wollen, reicht die Freigabe im privaten Netz (Tailscale-App auf dem Gerät).\n\nWirklich öffentlich freigeben?";
+  const FUNNEL_ASK="Die Oberfläche öffentlich im Internet freigeben (Funnel)?\n\nDanach kann JEDER im Internet, der die Adresse der Box kennt, die Anmeldeseite öffnen, auch ohne Tailscale. Geschützt ist die Box dann nur durch das BELABOX-Passwort.\n\n• Nur mit einem starken, langen Passwort verwenden.\n• Die Freigabe bleibt an, auch nach einem Neustart der Box, bis Sie sie mit „Öffentliche Freigabe beenden“ abschalten.\n• Der Gerätename steht in öffentlichen Zertifikatslisten und wird von Suchprogrammen gefunden, die Anmeldeseite wird dann ausprobiert.\n\nWenn Sie nur von eigenen Geräten zugreifen wollen, reicht die Freigabe im privaten Netz (Tailscale-App auf dem Gerät).\n\nWirklich öffentlich freigeben?";
   const add=(txt,act,cls,ask,extra)=>{ const b=document.createElement("button"); b.type="button"; if(cls) b.className=cls; b.textContent=txt; b.disabled=rBusy||!d.helper_installed;
     b.addEventListener("click",async()=>{ if(ask&&!confirm(ask)) return; try{ await srtlaCall("POST","/api/remote",Object.assign({action:act,confirm:true},extra||{})); $("r_msg").textContent="Wird ausgeführt …"; }catch(x){ $("r_msg").textContent=x.message; } setTimeout(rLoad,1200); }); acts.append(b); };
   if(!d.installed){
@@ -1224,7 +1254,7 @@ async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}
     const m=await resp.json();
-    const mode=$("mode"); mode.textContent=m.demo?"Demo-Werte":"live"; mode.className="badge"+(m.demo?" demo":"");
+    const mode=$("mode"); mode.textContent=m.demo?"Demo-Werte":"verbunden"; mode.className="badge"+(m.demo?" demo":"");
     $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":"höchster Kern "+fmt(m.cpu.max,0)+" %"; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
     $("fanline").hidden=m.fan_pct==null; if(m.fan_pct!=null) $("fan").textContent=fmt(m.fan_pct,0);

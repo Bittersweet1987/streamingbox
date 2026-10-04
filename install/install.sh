@@ -86,8 +86,9 @@ PY
     install -m 755 "$HERE/install/pipbox-remote.py" /opt/pipbox/pipbox-remote.py
     install -m 644 "$HERE/install/pipbox-remote.service" /etc/systemd/system/pipbox-remote.service
     install -m 644 "$HERE/install/pipbox-remote.path" /etc/systemd/system/pipbox-remote.path
-    install -m 644 "$HERE/install/pipbox-funnel-guard.service" /etc/systemd/system/pipbox-funnel-guard.service
-    install -m 644 "$HERE/install/pipbox-funnel-guard.timer" /etc/systemd/system/pipbox-funnel-guard.timer
+    # Frühere Versionen beendeten die öffentliche Freigabe (Funnel) nach 8 Stunden mit einem Zeitgeber: entfällt, sie bleibt bis zum Beenden
+    systemctl disable --now pipbox-funnel-guard.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer
     # Bluetooth-Treiber für Realtek-Sticks, die der Kernel nicht kennt (TP-Link UB500 u. a.): Quellen, Helfer, Zeitgeber und udev-Regel (beim Einstecken)
     install -d /opt/pipbox/btusb-src
     for f in btusb.c btintel.h btbcm.h btrtl.h COPYING README.md; do install -m 644 "$HERE/bluetooth-src/$f" "/opt/pipbox/btusb-src/$f"; done
@@ -179,7 +180,7 @@ PY
     systemctl enable pipbox.service pipbox-dji.service
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-funnel-guard.timer pipbox-btdriver.timer
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-btdriver.timer
     systemctl restart pipbox.service
     systemctl start --no-block pipbox-btdriver.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."

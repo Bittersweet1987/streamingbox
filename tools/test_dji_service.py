@@ -631,6 +631,23 @@ class Session(unittest.TestCase):
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
+    def test_battery_is_reported_with_age_and_unknown_charging(self):
+        async def go():
+            sim = CameraSim(battery=18)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            self.assertIsNone(dm.cameras[ADDR].public()["battery"])               # vor dem ersten Wert: unbekannt
+            self.assertIsNone(dm.cameras[ADDR].public()["battery_age"])
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            pub = cam.public()
+            self.assertEqual((pub["battery"], pub["charging"]), (18, None))      # Laden kennen wir noch nicht: nie geraten
+            self.assertGreaterEqual(pub["battery_age"], 0)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
     def test_search_is_off_after_a_camera_was_not_found(self):
         async def go():
             sim = CameraSim()
@@ -668,8 +685,11 @@ class Session(unittest.TestCase):
             cam = dm.cameras[ADDR]
             self.assertTrue(await self.wait_state(cam, ("streaming",)))
             n = len(sim.sent)
+            self.assertEqual(cam.public()["battery"], 77)
             sim.drop_bluetooth()
             await asyncio.sleep(1.2)
+            self.assertEqual(cam.public()["battery"], 77)                         # der letzte Wert bleibt stehen ...
+            self.assertLessEqual(cam.public()["battery_age"], 3)                   # ... mit seinem Alter
             self.assertEqual(cam.state, "streaming")                              # nicht "error", keine neue Sitzung
             self.assertIn("Bluetooth", cam.detail)
             self.assertEqual(len(sim.sent), n)                                    # nichts Neues an die Kamera gesendet
@@ -1090,6 +1110,22 @@ class DjiServiceTests(unittest.TestCase):
         self.assertEqual(self.svc.fps_for_key("dji-000002"), 30)                  # ungültiger Wert: Standard
         self.assertIsNone(self.svc.fps_for_key("cam-abc"))
         self.assertIsNone(self.svc.fps_for_key("dji-ffffff"))
+
+    def test_battery_of_dji_cameras_comes_from_the_service_state(self):
+        self.srv.cameras = [{"addr": ADDR, "rtmp_key": "dji-000001", "battery": 82, "battery_age": 4, "charging": True},
+                            {"addr": ADDR2, "rtmp_key": "dji-000002", "battery": None},
+                            {"addr": "AA:BB:CC:00:00:03", "rtmp_key": "dji-000003", "battery": 20, "battery_age": 900, "charging": None}]
+        got = self.svc.camera_extras()
+        self.assertEqual(got["dji-000001"], {"battery": 82, "battery_age": 4, "charging": True})
+        self.assertNotIn("dji-000002", got)                                       # unbekannter Akkustand: nichts anzeigen
+        self.assertEqual(got["dji-000003"]["battery_age"], 900)
+        self.srv.cameras = []
+        self.assertIn("dji-000001", self.svc.camera_extras())                     # kurz zwischengespeichert (die Statusseite fragt oft)
+        self.svc._extras = None
+        self.assertEqual(self.svc.camera_extras(), {})
+        self.svc.PORT = 1                                                         # Dienst weg: leer, kein Fehler
+        self.svc._extras = None
+        self.assertEqual(self.svc.camera_extras(), {})
 
     def test_demo_mode_works_without_any_service(self):
         svc = server.DjiService(self.state, self.cams, "publish", 1935, demo=True)

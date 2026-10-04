@@ -350,7 +350,10 @@ class Camera:
         self.cfg = cfg
         self.state = "idle"
         self.detail = ""
-        self.battery = None
+        self.battery = None          # zuletzt gemeldeter Akkustand in Prozent; bleibt nach dem Verlust von Bluetooth stehen (mit Alter)
+        self.battery_at = 0.0        # wann er gemeldet wurde
+        self.charging = None         # lädt die Kamera? None = unbekannt (siehe status_details)
+        self._status_hex = ''
         self.task = None
         self.stop_requested = False
         self.manual_off = False      # "Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden"
@@ -380,7 +383,9 @@ class Camera:
         c["saved"] = [n["ssid"] for n in self.cfg.get("saved", [])]   # nur die Namen, nie die Passwörter
         retry_in = max(0, int(self.retry_at - time.time())) if self.retry_at else 0
         c.update({"addr": self.addr, "state": self.state, "detail": self.detail,
-                  "battery": self.battery, "in_range": time.time() - self.last_seen < 30,
+                  "battery": self.battery, "charging": self.charging,
+                  "battery_age": int(time.time() - self.battery_at) if self.battery_at else None,
+                  "in_range": time.time() - self.last_seen < 30,
                   "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked()})
         return c
 
@@ -499,6 +504,13 @@ class Camera:
             self.last_rx = time.time()
             if msg.type == TY_STATUS and len(msg.payload) >= 21:
                 self.battery = msg.payload[20]
+                self.battery_at = time.time()
+                # Zur Klärung, ob die Statusnachricht auch "lädt" enthält: ändert sich ein anderes Byte als der Akkustand, ins Journal
+                rest = bytes(msg.payload[:20]) + bytes(msg.payload[21:])
+                if rest.hex() != self._status_hex:
+                    if self._status_hex:
+                        log.info("%s: Statusnachricht (%d Byte, Akku %d %%): %s", self.addr, len(msg.payload), self.battery, msg.payload.hex())
+                    self._status_hex = rest.hex()
                 return
             queue.put_nowait(msg)
 
@@ -605,7 +617,6 @@ class Camera:
                 now = time.time()
                 if disconnected.is_set() and not bt_lost:
                     bt_lost = True
-                    self.battery = None
                     log.info("%s: Bluetooth-Verbindung getrennt, prüfe den Stream", self.addr)
                 if now - last_check >= self.STREAM_CHECK_SECONDS or (bt_lost and last_check == 0):
                     last_check = now
@@ -652,7 +663,6 @@ class Camera:
                 else:
                     log.info("%s: %s (%s)", self.addr, msg, type(e).__name__)
                 self.set_state("error", msg)
-            self.battery = None
             if self.stop_requested or not self.cfg.get("autoconnect"):
                 self.retry_at = 0
                 return
