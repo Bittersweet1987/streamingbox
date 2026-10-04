@@ -357,7 +357,7 @@ class StatusOrder(unittest.TestCase):
     def test_upload_then_cameras_then_system(self):                                         # Issue #22
         i = PAGE.index('<div class="statgrid">')
         grid = PAGE[i:PAGE.index("</details>", i)]
-        pos = [grid.index(m) for m in ('<div class="sech">Upload', 'id="camlights"', '<div class="sech">System</div>')]
+        pos = [grid.index(m) for m in ('<div class="sech">Up- und Download</div>', 'id="camlights"', '<div class="sech">System</div>')]
         self.assertEqual(pos, sorted(pos))
         self.assertEqual(grid.count('<div class="statbox">'), 3)
         for needle in ('id="net"', 'id="cpu"', 'id="mem"', 'id="cpubar"', 'id="membar"'):                 # nichts ging beim Umstellen verloren

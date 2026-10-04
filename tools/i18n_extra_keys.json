@@ -48,5 +48,18 @@
  "unbekannt",
  "aktuell",
  "vergessen",
- "beschnitten"
+ "beschnitten",
+ "gespeichert",
+ "Das Tongerät ist belegt",
+ "HDMI-Gerät nicht gefunden",
+ "Keine Verbindung zum RTMP-Eingang der Box",
+ "Der Hardware-Kodierer meldet einen Fehler",
+ "Die Einspeisung wurde beendet",
+ "Der Stream kommt nicht in der Box an",
+ "Start nicht möglich: {1}",
+ "Einschalten: ja oder nein",
+ "Bitrate: {1} bis {2} kbit/s",
+ "Bildrate: 25 oder 30",
+ "Ton: HDMI-Ton oder ohne Ton",
+ "startet …"
 ]
