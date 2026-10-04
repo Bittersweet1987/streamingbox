@@ -32,6 +32,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Linux-Kernel (GPL-2.0), Ordner `bluetooth-src/`
+
+Der Ordner `bluetooth-src/` enthält **unveränderte** Quelldateien des Linux-Kernels v5.10.160 (`drivers/bluetooth/btusb.c`, `btintel.h`, `btbcm.h`, `btrtl.h`) unter der
+**GPL-2.0** (Lizenztext in `bluetooth-src/COPYING`). Sie gehören nicht zur MIT-Lizenz dieses Projekts. `install/pipbox-btdriver.py` baut daraus auf der Box das Modul `btusb` mit einigen
+zusätzlichen USB-Kennungen für Realtek-Sticks; die einzige Änderung am Quelltext sind zusätzliche Tabellenzeilen, die der Helfer beim Bau einfügt. Das so gebaute Modul steht wie der Kernel
+unter der GPL-2.0; der Quelltext dazu ist dieser Ordner samt `pipbox-btdriver.py`.
+
 ## BELABOX
 
 Unabhängiges Zusatzprojekt, kein Produkt von BELABOX, Radxa oder DJI.

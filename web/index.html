@@ -528,8 +528,12 @@ function djiRender(d){
   $("djinote").style.color=(d.scan_error||netDown)?"var(--crit)":"";
   { const pr=(d.adapter_problems||[]).map(x=>x.hint), ad=d.adapters||[];       // Bluetooth-Stick, der keinen Adapter ergibt, oder welcher Adapter läuft
     const el=$("djiadapt");
-    if(pr.length){ el.textContent=pr.join(" "); el.style.color="var(--crit)"; }
-    else { el.textContent=ad.length?"Bluetooth-Adapter: "+ad.map(a=>(a.usb_id||"eingebaut")+(a.powered?"":" (aus)")).join(", "):"Kein Bluetooth-Adapter gefunden."; el.style.color=""; } }
+    const dr=d.driver||{}, drTxt=dr.message&&["working","waiting","failed","unsupported","ok"].includes(dr.state)?dr.message:"";   // Treiber für Realtek-Sticks (Helfer pipbox-btdriver)
+    const bad=pr.length||dr.state==="failed"||dr.state==="unsupported";
+    if(pr.length&&!(drTxt&&dr.state!=="ok")){ el.textContent=pr.join(" "); }
+    else if(pr.length){ el.textContent=drTxt; }
+    else { el.textContent=(ad.length?"Bluetooth-Adapter: "+ad.map(a=>(a.usb_id||"eingebaut")+(a.powered?"":" (aus)")).join(", ")+".":"Kein Bluetooth-Adapter gefunden.")+(drTxt?" "+drTxt:""); }
+    el.style.color=bad?"var(--crit)":""; }
   const S=d.sessions||{}, box=$("djilist");
   const sess=x=>S[x.address.toUpperCase()]||{state:"idle",message:""};
   const act=s=>!["idle","failed"].includes(s.state);

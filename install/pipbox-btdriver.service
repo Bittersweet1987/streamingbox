@@ -1,0 +1,9 @@
+[Unit]
+Description=IRL4YOU BOX Bluetooth-Treiber für Realtek-Sticks (baut bei Bedarf das Modul btusb neu)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/pipbox/pipbox-btdriver.py auto
+TimeoutStartSec=25min
+Nice=10

@@ -17,6 +17,7 @@ import time
 # ---------------------------------------------------------------- Bluetooth-Sticks
 
 SYSFS_USB = "/sys/bus/usb/devices"
+BTDRIVER_STATUS = "/run/pipbox-btdriver/status.json"     # schreibt der Root-Helfer pipbox-btdriver.py (Treiber für Realtek-Sticks)
 BARROT_VENDOR = "33fa"      # Barrot Technology (z. B. UGREEN Bluetooth 5.4 und 6.0, Modell CM748)
 BARROT_HINT = ("Dieser Stick hat einen BARROT-Chip (zum Beispiel UGREEN Bluetooth 5.4 oder 6.0). Der Kernel dieser BELABOX (5.10) "
                "unterstützt ihn nicht: Der Chip bleibt beim Start hängen, es entsteht kein Bluetooth-Adapter. Ein Update dieses Pakets "
@@ -285,7 +286,14 @@ class Dji:
                     ids.append(uid)
         except Exception:
             pass
-        info = {"adapters": adapters, "adapter_problems": adapter_problems(ids, usb_bluetooth_devices())}
+        drv = {}
+        try:
+            with open(BTDRIVER_STATUS) as f:
+                raw = json.load(f)
+            drv = {"state": str(raw.get("state", "")), "message": str(raw.get("message", ""))[:300]}
+        except (OSError, ValueError, AttributeError):
+            pass
+        info = {"adapters": adapters, "adapter_problems": adapter_problems(ids, usb_bluetooth_devices()), "driver": drv}
         self._adapt = (now, info)
         return info
 

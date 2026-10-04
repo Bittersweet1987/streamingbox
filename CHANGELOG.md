@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.9.45 (Beta)
+- Neu: **Treiber für Realtek-Bluetooth-Sticks, die der Kernel 5.10 nicht kennt (TP-Link UB500 u. a.), richtet die Box beim Einstecken selbst ein.** Ohne ihn starten diese Sticks ohne Firmware, finden keine Kameras und wirken tot. Beim Einstecken (udev-Regel) oder beim Start (Zeitgeber nach 3 Minuten, danach alle 15 Minuten)
+  prüft der neue Root-Helfer `pipbox-btdriver.py`, ob ein solcher Stick steckt; wenn ja, baut er aus den mitgelieferten, **unveränderten Kernelquellen** (`bluetooth-src/`, v5.10.160, GPL-2.0, SHA-256 geprüft) das Modul `btusb` neu, mit zusätzlichen Zeilen `BTUSB_REALTEK` für `2357:0604` (TP-Link UB500), `2550:8761`, `2c4e:0115` (Mercusys MA530), `0bda:8771`, `0bda:a725`, `2b89:8761` und
+  `0b05:190e` (ASUS USB-BT500; löst nichts aus, bekommt aber die Firmware), spielt es nach `/lib/modules/<Kernel>/updates/btusb.ko` ein und lädt Bluetooth neu. Probebau auf der Orange Pi 5 Plus: 7 Sekunden, `vermagic`, Abhängigkeiten und Alias-Tabelle identisch mit dem Standardmodul.
+- Sicherheitsnetz: nur für den Kernel 5.10.160; nichts aus dem Internet; **nie während einer Übertragung** (das Neuladen trennt Bluetooth, der Helfer wartet); nach dem Laden müssen ein Adapter da sein, das neue Modul wirklich laufen und die Firmware ohne Fehler laden, sonst wird alles zurückgerollt und für diese Kombination nicht noch einmal versucht (der Standardtreiber läuft weiter);
+  das Standardmodul des Kernels wird nie überschrieben; `install.sh uninstall` entfernt das eingespielte Modul. Ohne passenden Stick tut der Helfer nichts (auf Boxen mit dem ASUS-Stick ändert sich nichts).
+- Neu: Die Karte "DJI-Kameras (Bluetooth)" zeigt den Zustand des Treibers ("wird gebaut", "wartet auf das Ende der Übertragung", "eingerichtet", Fehler mit Grund).
+- Weiter nicht unterstützt: UGREEN Bluetooth 5.4 und 6.0 (BARROT-Chip): Dafür müsste der Kern des Kernels (`hci_core`) geändert werden, das lässt sich so nicht nachladen; die Oberfläche sagt es im Klartext.
+- Geändert: Lizenzhinweis für die mitgelieferten Kernelquellen in `NOTICE.md` und `bluetooth-src/README.md`.
+- Tests: Quellen und Patch (nur zusätzliche Zeilen, idempotent), Erkennung, kompletter Ablauf mit nachgestellten Bausteinen (Erfolg, kein Adapter, Firmwarefehler, altes Modul läuft noch, Bau schlägt fehl, keine Schleife, Warten während der Übertragung), Bau, Rückbau, Verdrahtung (udev, Einheiten, Installer).
+  **Noch nicht mit einem echten TP-Link-Stick ausprobiert**; der Nutzer mit den Sticks testet.
+
 ## 0.9.44 (Beta)
 - Neu: **Knopf "Öffentlich im Internet freigeben (Funnel)" in der Karte "Fernzugriff"** (sichtbar, wenn die Box mit Tailscale verbunden ist). Damit erreicht auch jemand **ohne Tailscale-App** die Oberfläche. Das ist ausdrücklich eine **Ausnahme von der bisherigen Regel "nie öffentlich"** und deshalb vorsichtig gebaut:
   Aus ist der Standard, ein Klick braucht eine ausführliche Warnung und die Bestätigung (der Server verlangt zusätzlich das Merkmal `public`); solange Funnel an ist, steht eine rote Warnung mit der Uhrzeit des Endes in der Karte; **nach 8 Stunden beendet ein Zeitgeber die Freigabe von selbst**

@@ -256,7 +256,7 @@ class InstallScript(unittest.TestCase):
         self.assertIn('"$HERE/install/pipbox-funnel-guard.timer" /etc/systemd/system/pipbox-funnel-guard.timer', s)
         self.assertIn('"$HERE/install/pipbox-funnel-guard.service" /etc/systemd/system/pipbox-funnel-guard.service', s)
         self.assertIn("pipbox-logmode.path pipbox-funnel-guard.timer", s)                      # eingeschaltet
-        self.assertIn("systemctl disable --now pipbox-funnel-guard.timer", s)                  # bei der Deinstallation ausgeschaltet
+        self.assertIn("pipbox-funnel-guard.timer pipbox-send.service", s.split("uninstall)")[1])      # bei der Deinstallation ausgeschaltet
         self.assertIn("/etc/systemd/system/pipbox-funnel-guard.timer", s.split("uninstall)")[1])
         timer = rd(os.path.join(ROOT, "install", "pipbox-funnel-guard.timer"))
         self.assertIn("OnBootSec=", timer)
