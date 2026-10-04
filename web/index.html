@@ -388,7 +388,7 @@ let camsByKey={};
 const camDotCls=c=>"dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
 const camDotTitle=c=>c.state!=="live"?(c.state==="unknown"?"Status unbekannt":"Kein Signal"):(c.pic==="an"?"Sendet und ist im Bild":(c.pic==="wartet"?`Sendet, kommt in ${c.pic_wait} s ins Bild`:(c.pic==="aus"?"Sendet, ist noch nicht im Bild":"Sendet")));
 function renderCamLights(list){
-  setHtml($("camlights"),list.length?list.map(c=>`<div class="clight"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
+  setHtml($("camlights"),list.length?list.map(c=>`<div class="clight"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span><span>${esc(c.name)}</span><span class="muted" style="margin-left:auto">${c.state==="live"?fmt(c.mbit)+" Mbit/s":"–"}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 function renderCams(list){
   const box=$("cams");

@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.28 (Beta)
+- Neu: Im Kasten "Kameras" der Karte "Status" steht hinter jeder Kamera die aktuelle Eingangsbitrate in Mbit/s (bei einer Kamera ohne Signal ein Strich). So fällt eine schwach sendende Kamera auf, bevor sie ausfällt.
+
 ## 0.9.27 (Beta)
 - Neu: Die Karte "Status" zeigt jetzt die Kameras mit Ampel, nur Name und farbiger Punkt (grün = im Bild, gelb = sendet, aber noch nicht im Bild, rot = kein Signal, grau = unbekannt). Man sieht
   den Zustand der Kameras so, ohne die Karte "Kameras" zu öffnen. Beim Darüberfahren steht die Erklärung.
