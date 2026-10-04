@@ -2,14 +2,58 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.42 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
+**Version 0.9.42 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+
+## Installation auf der Box
+
+Voraussetzung: eine BELABOX mit dem BELABOX-Image (getestet: Radxa ROCK 5B+ und Orange Pi 5 Plus), Internet auf der Box und ein
+Terminal auf der Box (SSH oder Tastatur). Nicht während einer Übertragung installieren.
+
+**Schritt 1: BELABOX-Passwort.** Hat die BELABOX noch kein Passwort (frisches Image), zuerst in der BELABOX-Oberfläche
+(`http://<Adresse der Box>/`) eines festlegen. Die Oberfläche dieses Pakets meldet sich mit demselben Passwort an; einen eigenen Setup-Code gibt es nicht.
+
+**Schritt 2: Installieren.** Auf der Box im Terminal:
+
+```sh
+cd /tmp
+wget -O irl4you-pip.tar.gz https://github.com/IRL4YOU/irl4you-pip/archive/refs/heads/main.tar.gz
+tar xzf irl4you-pip.tar.gz
+cd irl4you-pip-main
+sudo sh install/install.sh
+```
+
+Die Installation lädt fehlende Pakete nach und baut den Bild-in-Bild-Baustein und den SRTLA-Sender selbst; das kann einige
+Minuten dauern.
+
+**Schritt 3: Anmelden.** Im Browser `http://<Adresse der Box>:8780` öffnen und mit dem BELABOX-Passwort anmelden. Ist in Schritt 1
+noch kein Passwort gesetzt worden, steht auf der Seite, dass es zuerst in der BELABOX-Oberfläche festgelegt werden muss; die Seite
+wartet darauf und zeigt die Anmeldung dann von selbst.
+
+Spätere Versionen spielt die Karte "Software-Update" in der Oberfläche ein, ein erneutes Installieren ist nicht nötig.
+
+Das Paket schreibt nach der Installation sehr wenig auf die Speicherkarte ("Protokolle: sparsam"). Für die Fehlersuche lässt
+sich in der Karte "Protokolle" die ausführliche Stufe einschalten.
+
+Rückweg: `sudo sh install/install.sh uninstall`.
+Die Deinstallation entfernt Dienste und Programme. Liegen bleiben der Zustand (`/var/lib/pipbox`), die Sicherungen
+(`/var/lib/pipbox-backup`), die Protokolle (`/var/log/pipbox-*.log`) und der Benutzer `pipbox`. Die Journal-Einstellung
+und `/etc/pipbox` werden entfernt.
+
+Optional, **nicht automatisch installiert** (`install/optional/`, nur für den Aufbau des Entwicklers auf der ROCK 5B+):
+`pipbox-net.service` hält die feste Zweitadresse 192.168.80.50 für ein Kameranetz an `eth1`, und
+`80-pipbox-no-internal-bt.rules` schaltet das eingebaute Bluetooth-Modul ab, damit nur ein USB-Bluetooth-Stick genutzt wird.
+Der Knopf für **System-Updates** installiert echte Systemupdates (Kernel, BELABOX-Pakete) und kann die Box nach einem
+Stromausfall unbrauchbar machen. Nur ohne laufende Übertragung und mit stabiler Stromversorgung benutzen.
+
+## Stand und Test
+
+Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
 Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 13 Mbit/s, die Box war dabei zu rund 70 Prozent im
 Leerlauf (CPU im Mittel etwa 25 bis 30 Prozent, 35 bis 37 °C). Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
 ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN").
 Auf der Radxa ROCK 5B+ wurde nur ein älterer Stand getestet (0.9.10).
 
-Eigenständiges Zusatzpaket für eine BELABOX, **getrennt von der Original-Oberfläche**. Es ändert nur eine
-Einstellung des RTMP-Servers der BELABOX (Leerlaufgrenze für Kameras, mit Sicherung und Rückweg; ein kleiner apt-Haken stellt sie nach einem Update des BELABOX-Pakets wieder her) und sonst keine
+Das Paket ändert nur eine Einstellung des RTMP-Servers der BELABOX (Leerlaufgrenze für Kameras, mit Sicherung und Rückweg; ein kleiner apt-Haken stellt sie nach einem Update des BELABOX-Pakets wieder her) und sonst keine
 BELABOX-Dateien, damit BELABOX-Updates weiter möglich bleiben. Eigene Weboberfläche mit Anmeldung über das
 vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein eigenes Passwort).
 
@@ -27,7 +71,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Pipeline:** eine Kamera oder Bild-in-Bild mit bis zu drei kleinen Bildern (vier Kameras), Ecke und Größe wählbar, Ton von
   jeder Kamera. Die kleinen Bilder lassen sich in einer Vorschau frei verschieben (oder als Ecke wählen). Ein kleiner eigener GStreamer-Baustein (`gst/`) schreibt die kleinen Bilder in einem Durchgang direkt in
   das Hauptbild. Fällt eine Kamera aus, schaltet die Box automatisch auf die übrigen um (das dauert etwa 5 Sekunden ohne Bild) und nimmt die Kamera erst nach 60 Sekunden stabilem Signal wieder auf.
-- **Hauptbild wählen:** Bei Bild-in-Bild steht in der Live-Karte unter "Hauptbild" ein Schalter mit den Kameras, die im Bild sind. Die aktuelle Hauptkamera ist hervorgehoben, ein Klick auf eine andere macht sie zum Hauptbild und tauscht die beiden (Kamera und Verzögerung bleiben beisammen, Ecke, Größe und Ton bleiben am Platz). Läuft die Sendung, startet der Encoder dafür neu und das Bild ist etwa 5 Sekunden unterbrochen. **Experimentell:** Wählt man im Bildaufbau "Hauptbild tauschen ohne Unterbrechung" (Hauptbild und erstes kleines Bild, oder alle Kameras), läuft der Tausch ohne Neustart des Encoders als harter Schnitt, Ton inklusive. Dafür dekodiert die Box jede Kamera der Gruppe zweimal (groß und klein, bei vier Kameras 6 statt 4, bei "alle" 8 Dekodierungen). Bisher nur mit Testbildern auf der Box geprüft, noch nicht mit echten Kameras; die Kameras der Gruppe sollten dieselbe Auflösung senden. Eine Überblendung ist geplant.
+- **Hauptbild wählen:** Bei Bild-in-Bild steht in der Live-Karte unter "Hauptbild" ein Schalter mit den Kameras, die im Bild sind. Die aktuelle Hauptkamera ist hervorgehoben, ein Klick auf eine andere macht sie zum Hauptbild und tauscht die beiden (Kamera und Verzögerung bleiben beisammen, Ecke, Größe und Ton bleiben am Platz). Läuft die Sendung, startet der Encoder dafür neu und das Bild ist etwa 5 Sekunden unterbrochen. **Experimentell:** Wählt man im Bildaufbau "Hauptbild tauschen ohne Unterbrechung" (Hauptbild und erstes kleines Bild, oder alle Kameras), läuft der Tausch ohne Neustart des Encoders als harter Schnitt, Ton inklusive. Dafür dekodiert die Box jede Kamera der Gruppe zweimal (groß und klein, bei vier Kameras 6 statt 4, bei "alle" 8 Dekodierungen). Im Heimnetz mit vier DJI-Kameras geprüft (mehrere Tausche in Folge, ohne Neustart und ohne Einbruch im Upload); noch nicht über längere Zeit und unterwegs. Die Kameras der Gruppe sollten dieselbe Auflösung senden. Eine Überblendung ist geplant.
 - **Gleichlauf:** Verzögerung für Hauptbild und jedes kleine Bild per Regler (0 bis 3000 ms), bei laufender Sendekette ohne
   Neustart änderbar. Zum Abgleichen liegt eine Stoppuhr unter `tools/stopwatch.html`.
 - **Ausgangswerte (frei änderbar):** Hauptbild 1080p/30 fps/8 Mbit/s, kleine Bilder 720p/30 fps/4 Mbit/s (nach der Rolle in
@@ -94,41 +138,6 @@ python3 server.py --demo
 ```
 
 Dann `http://127.0.0.1:8780/` öffnen.
-
-## Installation auf der Box
-
-Voraussetzung: eine BELABOX mit dem BELABOX-Image (getestet: Radxa ROCK 5B+ und Orange Pi 5 Plus), Internet auf der Box und ein
-Terminal auf der Box (SSH oder Tastatur). Nicht während einer Übertragung installieren.
-
-```sh
-cd /tmp
-wget -O irl4you-pip.tar.gz https://github.com/IRL4YOU/irl4you-pip/archive/refs/heads/main.tar.gz
-tar xzf irl4you-pip.tar.gz
-cd irl4you-pip-main
-sudo sh install/install.sh
-```
-
-Fehlt `wget`, geht auch `curl -L -o irl4you-pip.tar.gz https://github.com/IRL4YOU/irl4you-pip/archive/refs/heads/main.tar.gz`.
-Die Installation lädt fehlende Pakete nach und baut den Bild-in-Bild-Baustein und den SRTLA-Sender selbst; das kann einige
-Minuten dauern.
-
-Danach im Browser `http://<Adresse der Box>:8780` öffnen und mit dem BELABOX-Passwort anmelden. Hat die BELABOX noch kein
-Passwort (frisches Image), steht auf der Seite, dass es zuerst in der BELABOX-Oberfläche (`http://<Adresse der Box>/`) festgelegt werden muss; die Seite wartet darauf und zeigt die Anmeldung dann von selbst. Einen Setup-Code gibt es nicht. Spätere Versionen spielt die Karte
-"Software-Update" in der Oberfläche ein, ein erneutes Installieren ist nicht nötig.
-
-Das Paket schreibt nach der Installation sehr wenig auf die Speicherkarte ("Protokolle: sparsam"). Für die Fehlersuche lässt
-sich in der Karte "Protokolle" die ausführliche Stufe einschalten.
-
-Rückweg: `sudo sh install/install.sh uninstall`.
-Die Deinstallation entfernt Dienste und Programme. Liegen bleiben der Zustand (`/var/lib/pipbox`), die Sicherungen
-(`/var/lib/pipbox-backup`), die Protokolle (`/var/log/pipbox-*.log`) und der Benutzer `pipbox`. Die Journal-Einstellung
-und `/etc/pipbox` werden entfernt.
-
-Optional, **nicht automatisch installiert** (`install/optional/`, nur für den Aufbau des Entwicklers auf der ROCK 5B+):
-`pipbox-net.service` hält die feste Zweitadresse 192.168.80.50 für ein Kameranetz an `eth1`, und
-`80-pipbox-no-internal-bt.rules` schaltet das eingebaute Bluetooth-Modul ab, damit nur ein USB-Bluetooth-Stick genutzt wird.
-Der Knopf für **System-Updates** installiert echte Systemupdates (Kernel, BELABOX-Pakete) und kann die Box nach einem
-Stromausfall unbrauchbar machen. Nur ohne laufende Übertragung und mit stabiler Stromversorgung benutzen.
 
 ## Software-Update
 
