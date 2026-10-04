@@ -178,6 +178,8 @@ PY
     /opt/pipbox/pipbox-nginx-guard.sh
     systemctl daemon-reload
     systemctl enable pipbox.service pipbox-dji.service
+    # Kein Trennen der Kameras vor dem Neustart des Bluetooth-Dienstes: BlueZ hält die Verbindung, der neue Dienst verwendet sie weiter. Ein Trennen
+    # ließe die Kamera etwa eine Minute lang keine Verbindung annehmen.
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
     systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-btdriver.timer

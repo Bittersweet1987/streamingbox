@@ -164,6 +164,19 @@ def bluez_objects():
         return {}
 
 
+def bluez_device_state(addr, objects=None):
+    """Was BlueZ über ein Gerät weiß: {"path", "connected", "resolved", "name"} oder None, wenn es BlueZ nicht kennt. Eine Kamera kann in BlueZ
+    verbunden bleiben, auch wenn der Dienst, der sie verbunden hat, beendet wurde: Dann lässt sich die Verbindung weiterverwenden."""
+    objs = bluez_objects() if objects is None else objects
+    want = str(addr).upper()
+    for path, ifs in objs.items():
+        d = ifs.get("org.bluez.Device1")
+        if d and str(d.get("Address", "")).upper() == want:
+            return {"path": str(path), "connected": bool(d.get("Connected", False)), "resolved": bool(d.get("ServicesResolved", False)),
+                    "name": str(d.get("Name", ""))}
+    return None
+
+
 def adapter_info(objects=None):
     """Welche Bluetooth-Adapter laufen (USB-Kennung, Adresse, an/aus), welche Sticks stecken, ohne einen Adapter zu ergeben,
     und was der Treiber-Helfer meldet. objects: für Tests; sonst von BlueZ gelesen."""

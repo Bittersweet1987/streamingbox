@@ -88,6 +88,16 @@ class BluetoothSticks(unittest.TestCase):
         self.assertEqual(dji.usb_id_for_hci("hci1", bt), "")                    # eingebaut: kein USB-Gerät darüber
         self.assertEqual(dji.usb_id_for_hci("hci9", bt), "")                    # gibt es nicht
 
+    def test_bluez_device_state_reads_connection_and_path(self):
+        objs = {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Address": "AA"}},
+                "/org/bluez/hci0/dev_58_B8_58_F0_4F_E2": {"org.bluez.Device1": {"Address": "58:B8:58:F0:4F:E2", "Connected": True, "ServicesResolved": False, "Name": "OsmoAction4-4FE1"}},
+                "/org/bluez/hci0/dev_0C_9A": {"org.bluez.Device1": {"Address": "0C:9A:E6:19:5F:AF", "Connected": False}}}
+        st = dji.bluez_device_state("58:b8:58:f0:4f:e2", objs)                     # Groß-/Kleinschreibung egal
+        self.assertEqual(st, {"path": "/org/bluez/hci0/dev_58_B8_58_F0_4F_E2", "connected": True, "resolved": False, "name": "OsmoAction4-4FE1"})
+        self.assertFalse(dji.bluez_device_state("0C:9A:E6:19:5F:AF", objs)["connected"])
+        self.assertIsNone(dji.bluez_device_state("11:22:33:44:55:66", objs))        # BlueZ kennt das Gerät nicht
+        self.assertIsNone(dji.bluez_device_state("58:B8:58:F0:4F:E2", {}))          # BlueZ nicht erreichbar
+
     def test_stick_names_come_from_sysfs_for_bluetooth_and_wlan(self):
         """Issue #6: Der Name des Sticks (Produkt, Hersteller, Kennung) wird angezeigt, so wie die Box ihn aus /sys liest (Werte von der echten Box)."""
         usb = self.usb([("5-1.4", "0b05", "190E", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),

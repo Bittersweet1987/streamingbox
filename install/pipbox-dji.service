@@ -7,6 +7,7 @@ Wants=bluetooth.service
 ExecStart=/usr/bin/python3 -u /opt/pipbox/dji_daemon.py --state /var/lib/pipbox
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=25
 User=pipbox
 Group=pipbox
 SupplementaryGroups=bluetooth

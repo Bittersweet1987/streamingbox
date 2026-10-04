@@ -7,6 +7,7 @@ Verhalten von bleak/BlueZ selbst, Funkreichweite, das Verhalten der echten Kamer
 import asyncio
 import json
 import os
+import re
 import socketserver
 import sys
 import tempfile
@@ -468,6 +469,9 @@ class CameraSim:
         self.client = None
         self.scan_on_during_connect = None
         self.found = True
+        self.link_closed = 0               # wie oft die Bluetooth-Verbindung getrennt wurde
+        self.on_reply = None               # Haken: wird mit jeder Nachricht des Dienstes aufgerufen, bevor die Kamera antwortet
+        self.fail_connect = 0              # so viele Verbindungsversuche scheitern (Zeitüberschreitung, wie eine Kamera in der Wartezeit nach dem Trennen)
 
     def status_message(self, mv=None, ma=None, battery=None, extra=None):
         import struct
@@ -504,6 +508,10 @@ class FakeClient:
         s.connecting += 1
         s.scan_on_during_connect = SHARED["scans_on"] > 0                 # BlueZ vergisst die Kamera, wenn die Suche vorher endet
         s.max_connecting = max(s.max_connecting, SHARED["active"] + 1)
+        if s.fail_connect > 0:
+            s.fail_connect -= 1
+            s.connecting -= 1
+            raise asyncio.TimeoutError()
         SHARED["active"] += 1
         await asyncio.sleep(s.connect_delay)
         SHARED["active"] -= 1
@@ -513,6 +521,14 @@ class FakeClient:
 
     async def __aexit__(self, *a):
         self.is_connected = False
+        self.sim.link_closed += 1
+
+    async def disconnect(self):
+        if self.is_connected:
+            self.is_connected = False
+            self.sim.link_closed += 1
+            if self.sim.disconnect_cb:
+                self.sim.disconnect_cb(self)
 
     async def start_notify(self, ch, cb):
         if ch.uuid.startswith("0000fff4"):
@@ -522,6 +538,8 @@ class FakeClient:
     async def write_gatt_char(self, ch, data, response=False):
         msg = dd.Message.decode(data)
         self.sim.sent.append(msg)
+        if self.sim.on_reply:
+            self.sim.on_reply(msg)
         asyncio.get_event_loop().call_soon(self.cb, None, self.sim.reply(msg))
 
 
@@ -569,8 +587,10 @@ class Session(unittest.TestCase):
         for p in self.patches:
             p.start()
 
-        async def noop(addr):
-            return None
+        self.cleanups = []
+
+        async def noop(addr, remove=True):
+            self.cleanups.append((addr, remove))
         self.patches.append(mock.patch.object(dd, "bluez_cleanup", noop))
         self.patches[-1].start()
 
@@ -993,6 +1013,214 @@ class Session(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- Übernahme der früheren Version
+
+class GracefulRelease(Session):
+    """Beim Beenden des Dienstes (Neustart, Update) und bei einem Abbruch während des Einrichtens bleibt die Kamera nicht hängen: Sie bekommt ein
+    ordentliches Trennen. Vorher riss der Dienst die Verbindung einfach ab, und die Kamera antwortete danach erst nach ein bis vier Minuten."""
+
+    def test_shutdown_leaves_a_streaming_camera_untouched(self):
+        """Eine streamende Kamera bleibt beim Beenden des Dienstes unberührt: kein Stopp, kein Trennen. BlueZ hält die Verbindung, der nächste Dienst verwendet
+        sie weiter. (Ein Trennen ließe die Kamera etwa eine Minute lang keine Verbindung annehmen: gemessen auf der Box.)"""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            n_sent, cleanups = len(sim.sent), list(self.cleanups)
+            t0 = time.time()
+            await dm.shutdown()
+            self.assertLess(time.time() - t0, 1.0)                                        # kein Warten auf die Sitzung
+            self.assertEqual(sim.link_closed, 0)                                          # Verbindung nicht getrennt
+            self.assertTrue(sim.client.is_connected)
+            self.assertFalse(cam.task.done())                                             # Sitzung läuft unverändert weiter
+            self.assertEqual(len(sim.sent), n_sent)                                       # kein Stopp-Befehl: Die Kamera streamt weiter
+            self.assertEqual(self.cleanups, cleanups)                                     # BlueZ wird nicht angefasst
+            self.assertTrue(dm.closing)
+            cam.task.cancel()
+            await asyncio.gather(cam.task, return_exceptions=True)
+        arun(go())
+
+    def test_shutdown_during_setup_stops_between_steps_and_disconnects(self):
+        """Eine Sitzung mitten im Einrichten bleibt nicht halb eingerichtet zurück: Sie hört nach dem laufenden Schritt auf und trennt."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            started = {"done": False}
+            futures = []
+
+            def hook(msg):
+                if msg.id == dd.ID_PREPARE and not started["done"]:
+                    started["done"] = True
+                    futures.append(asyncio.ensure_future(dm.shutdown()))              # der Dienst wird beendet, während die Kamera eingerichtet wird
+            sim.on_reply = hook
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            for _ in range(300):
+                if futures and futures[0].done():
+                    break
+                await asyncio.sleep(0.02)
+            self.assertTrue(futures and futures[0].done())
+            ids = [m.id for m in sim.sent]
+            self.assertNotIn(dd.ID_WIFI, ids)
+            self.assertNotIn(dd.ID_START, ids)
+            self.assertGreaterEqual(sim.link_closed, 1)
+            self.assertTrue(cam.task.done())
+        arun(go())
+
+    def test_shutdown_with_nothing_connected_is_quick_and_harmless(self):
+        async def go():
+            dm = dd.Daemon(tempfile.mkdtemp())
+            t0 = time.time()
+            await dm.shutdown()
+            self.assertLess(time.time() - t0, 1.0)
+        arun(go())
+
+    def test_supervisor_does_not_start_anything_while_closing(self):
+        src = open(dd.__file__, encoding="utf-8").read()
+        self.assertIn("and not cam.manual_off and not self.closing", src)
+
+    def reuse_env(self, sim, state_fn):
+        """Nachbau: BlueZ meldet die Kamera als verbunden (state_fn) und make_ble_device liefert das Gerät der Nachbildung."""
+        p1 = mock.patch.object(dji, "bluez_device_state", state_fn)
+        p2 = mock.patch.object(dd, "make_ble_device", lambda st, addr: types.SimpleNamespace(address=addr, sim=sim))
+        p1.start()
+        p2.start()
+        self.patches += [p1, p2]
+
+    def test_a_link_that_bluez_still_holds_is_reused_without_search_or_cleanup(self):
+        """Nach einem Neustart oder Absturz des Dienstes hält BlueZ die Kamera noch verbunden: Sie wird weiterverwendet. Kein Trennen (die Kamera
+        nähme danach etwa eine Minute lang keine Verbindung an), keine Suche, keine Aufräumaktion."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            seen = []
+            self.reuse_env(sim, lambda addr, objects=None: seen.append(addr) or {"path": "/org/bluez/hci0/dev_X", "connected": True, "resolved": True, "name": "Osmo"})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            self.assertEqual(seen[0], ADDR)
+            self.assertEqual(self.cleanups, [])                                    # nichts getrennt, nichts entfernt
+            self.assertEqual(SHARED["scans_on"], 0)
+            self.assertFalse(cam.reuse_failed)
+            self.assertEqual([m.id for m in sim.sent][:2], [dd.ID_PAIR, dd.ID_STOP])
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_a_failed_reuse_falls_back_to_cleanup_and_a_fresh_connection(self):
+        async def go():
+            sim = CameraSim()
+            sim.fail_connect = 1                                                   # die weiterverwendete Verbindung antwortet nicht
+            self.install({ADDR: sim})
+            self.reuse_env(sim, lambda addr, objects=None: {"path": "/org/bluez/hci0/dev_X", "connected": True, "resolved": True, "name": ""})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, autoconnect=True)                            # damit nach dem Fehler ein zweiter Versuch folgt
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",), 10), cam.detail)
+            self.assertEqual(self.cleanups, [(ADDR, True)])                        # der zweite Versuch räumt auf (trennen und entfernen) und sucht neu
+            self.assertFalse(cam.reuse_failed)                                     # nach dem Erfolg wieder zurückgesetzt
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_no_reuse_when_bluez_does_not_hold_the_camera(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            self.reuse_env(sim, lambda addr, objects=None: {"path": "/org/bluez/hci0/dev_X", "connected": False, "resolved": False, "name": ""})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(dm.cameras[ADDR], ("streaming",)))
+            self.assertEqual(self.cleanups, [(ADDR, True)])                        # wie bisher: aufräumen, suchen, verbinden
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_stop_during_setup_leaves_between_steps_and_disconnects(self):
+        """"Trennen" oder "Neu verbinden", während die Kamera eingerichtet wird: Die Sitzung hört nach dem laufenden Schritt auf, startet den Stream
+        nicht und trennt die Verbindung ordentlich (kein Abreißen mitten in einer Nachricht)."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            cam_holder = {}
+
+            def hook(msg):
+                if msg.id == dd.ID_PREPARE:                                  # mitten im Einrichten: der Nutzer drückt "Trennen"
+                    cam_holder["cam"].stop_requested = True
+            sim.on_reply = hook
+            cam = cam_holder["cam"] = dm.cameras[ADDR]
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            for _ in range(200):
+                if cam.task is not None and cam.task.done():
+                    break
+                await asyncio.sleep(0.02)
+            self.assertTrue(cam.task.done())
+            ids = [m.id for m in sim.sent]
+            self.assertNotIn(dd.ID_WIFI, ids)                                  # nach dem Schritt "Vorbereiten" ist Schluss
+            self.assertNotIn(dd.ID_START, ids)
+            self.assertGreaterEqual(sim.link_closed, 1)                          # Verbindung getrennt
+            self.assertFalse(sim.client.is_connected)
+        arun(go())
+
+    def test_restart_during_setup_reconnects_after_a_clean_leave(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            first = {"done": False}
+            cam = dm.cameras[ADDR]
+
+            def hook(msg):
+                if msg.id == dd.ID_PREPARE and not first["done"]:
+                    first["done"] = True
+                    asyncio.ensure_future(cam.restart())                    # "Neu verbinden" mitten im Einrichten
+            sim.on_reply = hook
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(cam, ("streaming",), 10), cam.detail)    # zweiter Anlauf läuft durch
+            self.assertGreaterEqual(sim.link_closed, 1)                                     # der erste wurde ordentlich getrennt
+            self.assertEqual([m.id for m in sim.sent].count(dd.ID_START), 1)                # der Stream wurde genau einmal gestartet
+        arun(go())
+
+    def test_failure_right_after_a_link_ended_is_a_calm_hint_not_a_red_error(self):
+        """Nach dem Ende einer Verbindung meldet sich die Kamera etwa eine Minute lang nicht (gemessen): Der Dienst zeigt dann einen Hinweis statt eines Fehlers."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, autoconnect=True)
+            cam = dm.cameras[ADDR]
+            self.assertFalse(cam.recovering(asyncio.TimeoutError()))                       # noch nie verbunden gewesen: ein echter Fehler
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})                           # die Verbindung endet
+            self.assertGreater(cam.link_ended, 0)
+            self.assertTrue(cam.recovering(asyncio.TimeoutError()))                        # Zeitüberschreitung kurz danach: Wartezeit der Kamera
+            self.assertTrue(cam.recovering(RuntimeError("failed to discover services, device disconnected")))
+            self.assertFalse(cam.recovering(RuntimeError("etwas anderes")))
+            cam.link_ended = time.time() - cam.AFTER_LINK_SECONDS - 5                       # lange her: wieder ein echter Fehler
+            self.assertFalse(cam.recovering(asyncio.TimeoutError()))
+        arun(go())
+
+    def test_daemon_wires_signals_and_the_unit_waits_long_enough(self):
+        src = open(dd.__file__, encoding="utf-8").read()
+        self.assertIn("loop.add_signal_handler(sig, stop.set)", src)
+        self.assertIn("signal.SIGTERM", src)
+        unit = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "install", "pipbox-dji.service"), encoding="utf-8").read()
+        self.assertRegex(unit, r"TimeoutStopSec=(\d+)")
+        self.assertGreaterEqual(int(re.search(r"TimeoutStopSec=(\d+)", unit).group(1)), 20)   # länger als die Wartezeit des Beendens (20 s)
+        self.assertIn("os._exit(0)", src)                                                      # kein Aufräumen durch asyncio.run: es würde die Verbindungen trennen
+        install = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "install", "install.sh"), encoding="utf-8").read()
+        self.assertNotIn("bluetoothctl disconnect", install)                                  # kein Trennen vor dem Neustart: BlueZ hält die Verbindung, der neue Dienst nutzt sie weiter
+
 
 class Migration(unittest.TestCase):
     def legacy(self, d, net="eth2", wifi=True):

@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 import struct
 import subprocess
 import time
@@ -299,10 +300,10 @@ def preferred_adapter():
     return names[0]
 
 
-async def bluez_cleanup(addr):
+async def bluez_cleanup(addr, remove=True):
     """Einen hängenden BlueZ-Eintrag verwerfen. Eine Kamera, die ohne ordentliches Trennen verschwand, kann sonst in BlueZ
-    "verbunden" bleiben und sich nie wieder melden."""
-    for args in (["disconnect", addr], ["remove", addr]):
+    "verbunden" bleiben und sich nie wieder melden. Mit remove=False wird die Verbindung nur getrennt (beim Beenden des Dienstes)."""
+    for args in ((["disconnect", addr], ["remove", addr]) if remove else (["disconnect", addr],)):
         try:
             p = await asyncio.create_subprocess_exec("bluetoothctl", *args,
                                                      stdout=asyncio.subprocess.DEVNULL,
@@ -310,6 +311,16 @@ async def bluez_cleanup(addr):
             await asyncio.wait_for(p.wait(), 8)
         except Exception:
             pass
+
+
+def make_ble_device(state, addr):
+    """Ein bleak-Gerät für eine Kamera, die BlueZ schon verbunden hält (ohne Suche; die Kamera wirbt dann nicht mehr)."""
+    from bleak.backends.device import BLEDevice
+    details = {"path": state["path"], "props": {"Address": addr, "Name": state.get("name", "")}}
+    try:
+        return BLEDevice(addr, state.get("name") or None, details)
+    except TypeError:                                           # ältere bleak-Versionen verlangen den Empfangspegel
+        return BLEDevice(addr, state.get("name") or None, details, -60)
 
 
 def cfg_kind(cfg):
@@ -350,6 +361,7 @@ class CameraError(Exception):
 class Camera:
     """Zustand und BLE-Sitzung einer eingerichteten Kamera."""
 
+    AFTER_LINK_SECONDS = 90     # so lange nach dem Ende einer Verbindung gilt ein Fehlschlag beim Verbinden als "die Kamera erholt sich noch"
     RETRY_SCHEDULE = (8, 8, 15, 30)   # Sekunden bis zum nächsten Versuch nach dem 1., 2., 3. ... Fehlversuch (Suchen stört die stehenden Verbindungen)
     SEARCH_SECONDS = 15
     STREAM_CHECK_SECONDS = 5    # so oft wird geprüft, ob der Stream noch ankommt
@@ -380,6 +392,11 @@ class Camera:
         self.typed_network = True
         self._scanner = None
         self._search_started = 0.0
+        self._client = None           # die Bluetooth-Verbindung der laufenden Sitzung (zum ordentlichen Trennen beim Beenden des Dienstes)
+        self.link_ended = 0.0         # wann zuletzt eine Bluetooth-Verbindung zu dieser Kamera endete (danach nimmt sie etwa eine Minute lang keine neue an)
+        self._reusing = False         # diese Sitzung nutzt eine Verbindung weiter, die BlueZ schon hält
+        self.reuse_failed = False     # das Weiterverwenden hat nicht geklappt: der nächste Versuch räumt auf und verbindet neu
+        self.leaving = False          # der Dienst wird beendet: Sitzung ohne Stopp des Streams verlassen, Verbindung ordentlich trennen
 
     def locked(self):
         """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet."""
@@ -433,6 +450,21 @@ class Camera:
         """Die Werbung der Kamera suchen und die Suche LAUFEN LASSEN, bis die Verbindung steht (stop_scan). BlueZ vergisst eine
         Kamera, sobald die Suche endet ("device not found"); gemessen auf der Box, so lief schon die frühere Version. Der Aufrufer
         hält das gemeinsame Schloss (nur eine Suche oder ein Verbindungsaufbau zur Zeit)."""
+        # Hält BlueZ die Kamera noch verbunden (der Dienst wurde beendet oder ist abgestürzt, die Verbindung blieb), wird sie weiterverwendet: Ein Trennen
+        # lässt die Kamera etwa eine Minute lang keine neue Verbindung annehmen (gemessen: Verbindungsaufbau gelingt auf Funkebene, die Kamera bricht ihn
+        # nach 250 ms ab, "Connection Failed to be Established"), ein Weiterverwenden dauert Sekunden.
+        self._reusing = False
+        if not self.reuse_failed and not self.stop_requested:
+            try:
+                st = await asyncio.get_event_loop().run_in_executor(None, dji.bluez_device_state, self.addr)
+            except Exception:
+                st = None
+            if st and st.get("connected"):
+                log.info("%s: BlueZ hält die Kamera noch verbunden, die Verbindung wird weiterverwendet", self.addr)
+                self._reusing = True
+                self.force_cleanup = False
+                self._search_started = time.time()
+                return make_ble_device(st, self.addr)
         if self.fail_count >= 2 or self.force_cleanup:
             self.force_cleanup = False
             await bluez_cleanup(self.addr)
@@ -495,6 +527,9 @@ class Camera:
         try:
             await self._connect_and_stream(loop, ssid, password, rtmp_url, key, release)
         finally:
+            if self._client is not None:
+                self.link_ended = time.time()
+            self._client = None
             await release()
 
     async def _connect_and_stream(self, loop, ssid, password, rtmp_url, key, release):
@@ -553,6 +588,7 @@ class Camera:
         self.last_rx = time.time()
         t_connect = time.time()
         async with BleakClient(device, timeout=20, disconnected_callback=lambda c: disconnected.set()) as client:
+            self._client = client
             t_connected = time.time()
             write_char = None
             for service in client.services:
@@ -584,12 +620,19 @@ class Camera:
                 except asyncio.TimeoutError:
                     raise CameraError("Die Kopplung wurde an der Kamera nicht bestätigt")
 
+            # "Trennen", "Neu verbinden" oder das Beenden des Dienstes während des Einrichtens: zwischen den Schritten ordentlich aufhören (die
+            # Verbindung wird beim Verlassen getrennt). Ein Abbruch mitten in einem Schritt ließ die Kamera minutenlang nicht mehr antworten.
+            if self.stop_requested:
+                return
+
             # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
             self.set_state("preparing", "Stream wird vorbereitet")
             await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
             await wait_for(ID_STOP)
             await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
             await wait_for(ID_PREPARE)
+            if self.stop_requested:
+                return
 
             self.set_state("wifi", ssid)
             await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
@@ -598,6 +641,8 @@ class Camera:
                 raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
             if self.typed_network and ssid:
                 self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
+            if self.stop_requested:
+                return
 
             # 3. Bildstabilisierung bei den Modellen, die sie brauchen
             if model_kind in CONFIGURE_KINDS:
@@ -605,6 +650,8 @@ class Camera:
                 await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
                                    build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
                 await wait_for(ID_CONFIGURE)
+            if self.stop_requested:
+                return
 
             # 4. den RTMP-Stream starten
             self.set_state("starting", "Stream wird gestartet")
@@ -616,6 +663,7 @@ class Camera:
             await wait_for(ID_START, 30)
             self.set_state("streaming", rtmp_url)
             self.fail_count = 0
+            self.reuse_failed = False
 
             # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen. Geht nur die
             #    Bluetooth-Verbindung verloren, während der Stream noch ankommt, läuft er unverändert weiter (die frühere Version
@@ -657,7 +705,7 @@ class Camera:
                 if not bt_lost and now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
                     raise CameraError("Die Bluetooth-Verbindung ging verloren")
 
-            if self.stop_requested and client.is_connected and not bt_lost:
+            if self.stop_requested and client.is_connected and not bt_lost and not self.leaving:
                 self.set_state("stopping", "Stream wird beendet")
                 try:
                     await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
@@ -678,16 +726,23 @@ class Camera:
                 raise
             except CameraError as e:
                 self.fail_count += 1
+                self._reuse_failed_now()
                 self.set_state("error", str(e))
             except Exception as e:
                 self.fail_count += 1
+                self._reuse_failed_now()
                 msg = friendly_error(e)
                 if msg is None:
                     log.exception("Sitzung fehlgeschlagen")
                     msg = "%s: %s" % (type(e).__name__, e)
                 else:
                     log.info("%s: %s (%s)", self.addr, msg, type(e).__name__)
-                self.set_state("error", msg)
+                if self.recovering(e):
+                    # Kurz nach dem Ende einer Verbindung meldet sich die Kamera erst nach etwa einer Minute wieder (gemessen): kein roter Fehler, der
+                    # zu Tastendrücken verleitet (jedes Trennen beginnt die Wartezeit von vorn), sondern ein Hinweis; der Dienst versucht es weiter.
+                    self.set_state("connecting", "Die Kamera meldet sich nach dem Trennen oft erst nach etwa einer Minute wieder. Der Dienst versucht es weiter.")
+                else:
+                    self.set_state("error", msg)
             if self.stop_requested or not self.cfg.get("autoconnect"):
                 self.retry_at = 0
                 return
@@ -701,6 +756,19 @@ class Camera:
             self.retry_at = 0
             if self.stop_requested:
                 return
+
+    def recovering(self, exc):
+        """Ist ein Fehlschlag beim Verbinden nur die Wartezeit der Kamera nach dem Ende einer Verbindung?"""
+        connect_failure = isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "disconnected" in str(exc).lower() or "failed to discover" in str(exc).lower()
+        return connect_failure and 0 < time.time() - self.link_ended < self.AFTER_LINK_SECONDS
+
+    def _reuse_failed_now(self):
+        """Ein Versuch mit der weiterverwendeten Verbindung ist gescheitert: Der nächste Versuch trennt, räumt BlueZ auf und verbindet neu."""
+        if self._reusing:
+            log.info("%s: Die weiterverwendete Verbindung hat nicht funktioniert, der nächste Versuch verbindet neu", self.addr)
+            self._reusing = False
+            self.reuse_failed = True
+            self.force_cleanup = True
 
     def retry_delay(self):
         """Wartezeit bis zum nächsten Versuch: wächst mit den Fehlversuchen in Folge."""
@@ -719,6 +787,16 @@ class Camera:
         self.manual_off = False
         self.force_cleanup = True
         self.task = asyncio.ensure_future(self.run_loop())
+
+    async def release_link(self):
+        """Die Bluetooth-Verbindung zur Kamera jetzt ordentlich trennen (Beenden des Dienstes). Ohne ordentliches Trennen hält die Kamera die alte
+        Verbindung noch eine ganze Weile für belegt und antwortet dem neu gestarteten Dienst erst nach Minuten."""
+        client = self._client
+        if client is not None:
+            try:
+                await asyncio.wait_for(client.disconnect(), 5)
+            except Exception as e:
+                log.info("%s: Trennen beim Beenden fehlgeschlagen: %s", self.addr, e)
 
     async def stop_session(self):
         self.stop_requested = True
@@ -847,6 +925,7 @@ class Daemon:
         self.scanning = False
         self.scan_error = ""
         self.ble_lock = self.conn_lock = asyncio.Lock()   # eine Suche oder ein Verbindungsaufbau zur Zeit (Suche und Verbinden stören sich)
+        self.closing = False                              # der Dienst wird beendet: nichts mehr starten
         self.token = self._load_token()
         self._opts = (0.0, [])
         self._adapt = None
@@ -1126,9 +1205,35 @@ class Daemon:
             for cam in list(self.cameras.values()):
                 key = cam.cfg.get("rtmp_key") or "cam1"
                 cam.publishing = bool(await loop.run_in_executor(None, rtmp_publishing, key, self.stat_url))
-                if cam.cfg.get("autoconnect") and not cam.running() and not cam.manual_off:
+                if cam.cfg.get("autoconnect") and not cam.running() and not cam.manual_off and not self.closing:
                     log.warning("%s: Verbindungsschleife lief nicht, wird neu gestartet", cam.addr)
                     cam.start()
+
+    SETTLED_STATES = ("streaming",)       # Sitzungen in diesem Zustand bleiben beim Beenden des Dienstes unberührt
+
+    async def shutdown(self, wait=8):
+        """Beim Beenden des Dienstes (Neustart, Software-Update) die Kameras so zurücklassen, dass der nächste Dienst sofort weitermachen kann.
+        Eine Kamera, die gerade streamt, bleibt unberührt: Weder Stream noch Bluetooth-Verbindung werden beendet. BlueZ hält die Verbindung
+        weiter, und der neue Dienst verwendet sie weiter (Sekunden). Ein Trennen ließe die Kamera etwa eine Minute lang keine Verbindung annehmen
+        (gemessen). Eine Sitzung mitten im Einrichten hört dagegen nach dem laufenden Schritt auf und trennt, damit sie nicht halb eingerichtet
+        zurückbleibt. Alles ist zeitlich begrenzt."""
+        self.closing = True
+        cams = list(self.cameras.values())
+        busy = [c for c in cams if c.task is not None and not c.task.done() and c.state not in self.SETTLED_STATES]
+        for cam in busy:
+            cam.leaving = True
+            cam.stop_requested = True
+            cam.wake.set()
+        tasks = [c.task for c in busy]
+        if tasks:
+            await asyncio.wait(tasks, timeout=wait)              # die Sitzungen verlassen sich selbst und trennen dabei
+        for cam in busy:
+            if cam.task is not None and not cam.task.done():
+                await cam.release_link()
+                cam.task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=3)
+        log.info("Kameras zurückgelassen: %d streamen weiter (Verbindung bleibt), %d Sitzungen beendet", len(cams) - len(busy), len(busy))
 
     async def main(self, host=LISTEN_HOST, port=LISTEN_PORT):
         server = await asyncio.start_server(self.client, host, port)
@@ -1143,7 +1248,31 @@ class Daemon:
 
 
 async def amain(args):
-    await Daemon(args.state, args.rtmp_port, args.rtmp_app, args.stat_url).main(LISTEN_HOST, args.port)
+    daemon = Daemon(args.state, args.rtmp_port, args.rtmp_app, args.stat_url)
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):          # systemctl restart/stop: erst die Kameras freigeben, dann beenden
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
+    main_task = asyncio.ensure_future(daemon.main(LISTEN_HOST, args.port))
+    stopper = asyncio.ensure_future(stop.wait())
+    await asyncio.wait({main_task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+    if stop.is_set():
+        log.info("wird beendet")
+        try:
+            await asyncio.wait_for(daemon.shutdown(), 20)
+        except Exception as e:
+            log.info("Beenden der Sitzungen unvollständig: %s", e)
+        # Sofort und ohne weiteres Aufräumen beenden: asyncio.run würde die Sitzungen sonst abbrechen, und jede abgebrochene Sitzung trennt ihre
+        # Bluetooth-Verbindung (das wollen wir hier gerade nicht, siehe shutdown).
+        logging.shutdown()
+        os._exit(0)
+    stopper.cancel()
+    main_task.cancel()
+    if not main_task.cancelled() and main_task.done() and main_task.exception():
+        raise main_task.exception()
 
 
 def main():
