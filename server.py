@@ -588,15 +588,24 @@ class PipelineStore:
         except OSError:
             pass
 
-    def swap_main_pip(self):
-        """Hauptbild und erstes kleines Bild tauschen (Szenenwechsel, Stufe 1). Kamera und Verzögerung bleiben beisammen
-        (die Verzögerung gehört zur Kamera); Ecke, Größe, Position und die Wahl des Tons bleiben am Platz."""
+    SLOT_DELAY = {"pip": "pip_delay_ms", "pip2": "pip2_delay_ms", "pip3": "pip3_delay_ms"}
+
+    def swap_main_pip(self, with_key=None):
+        """Hauptbild gegen eine Kamera tauschen, die gerade als kleines Bild im Bild ist (Szenenwechsel, Stufe 1). Ohne Angabe
+        das erste kleine Bild. Kamera und Verzögerung bleiben beisammen (die Verzögerung gehört zur Kamera); Ecke, Größe,
+        Position und die Wahl des Tons (Hauptbild oder kleines Bild) bleiben am Platz."""
         with self.lock:
             c = self.cfg
             if c.get("type") != "pip" or not c.get("pip") or not c.get("main"):
                 raise ValueError("Zum Tauschen braucht es ein Hauptbild und ein kleines Bild")
-            c["main"], c["pip"] = c["pip"], c["main"]
-            c["main_delay_ms"], c["pip_delay_ms"] = c.get("pip_delay_ms", 0), c.get("main_delay_ms", 0)
+            slot = "pip"
+            if with_key:
+                slot = next((k for k in self.SLOT_DELAY if c.get(k) == with_key), None)
+                if slot is None:
+                    raise ValueError("Diese Kamera ist gerade nicht als kleines Bild im Bild")
+            dk = self.SLOT_DELAY[slot]
+            c["main"], c[slot] = c[slot], c["main"]
+            c["main_delay_ms"], c[dk] = c.get(dk, 0), c.get("main_delay_ms", 0)
             self.save()
 
     def set(self, req, camera_keys):
@@ -2273,7 +2282,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.swupdate.request(d.get("action"), d.get("confirm") is True, d.get("version"), d.get("older") is True)
                 return self.reply(200, {"ok": True})
             if path == "/api/pipeline/swap":
-                self.pipeline.swap_main_pip()
+                with_key = d.get("with")
+                if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
+                    raise ValueError("Kamera unbekannt")
+                self.pipeline.swap_main_pip(with_key)
                 restarted, note = self.send.restart_if_live()
                 return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
             if path == "/api/pipeline":

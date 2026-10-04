@@ -599,6 +599,21 @@ class SwapMainPip(unittest.TestCase):
         st.swap_main_pip()                           # zweimal tauschen = wie vorher
         self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["main_delay_ms"]), ("cam-a", "cam-b", 1500))
 
+    def test_swap_with_a_chosen_small_picture(self):
+        st = self.store({"type": "pip", "main": "cam-a", "pip": "cam-b", "pip2": "cam-c", "pip3": "cam-d", "corner2": 2,
+                         "main_delay_ms": 1500, "pip_delay_ms": 120, "pip2_delay_ms": 250, "pip3_delay_ms": 300})
+        st.swap_main_pip("cam-c")
+        c = st.cfg
+        self.assertEqual((c["main"], c["pip"], c["pip2"], c["pip3"]), ("cam-c", "cam-b", "cam-a", "cam-d"))
+        self.assertEqual((c["main_delay_ms"], c["pip_delay_ms"], c["pip2_delay_ms"], c["pip3_delay_ms"]), (250, 120, 1500, 300))
+        self.assertEqual(c["corner2"], 2)                                 # Ecke bleibt am Platz
+        st.swap_main_pip("cam-d")
+        self.assertEqual((st.cfg["main"], st.cfg["pip3"]), ("cam-d", "cam-c"))
+        with self.assertRaises(ValueError):                               # Kamera, die nicht als kleines Bild im Bild ist
+            st.swap_main_pip("cam-x")
+        with self.assertRaises(ValueError):                               # die Hauptkamera selbst ist kein kleines Bild
+            st.swap_main_pip(st.cfg["main"])
+
     def test_refuses_without_small_picture(self):
         for cfg in ({"type": "single", "main": "cam-a", "pip": ""}, {"type": "pip", "main": "cam-a", "pip": ""}):
             st = self.store(cfg)

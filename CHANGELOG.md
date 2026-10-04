@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.34 (Beta)
+- Geändert: **Hauptbild gegen eine frei gewählte Kamera tauschen.** In der Live-Karte steht (bei Bild-in-Bild) "Hauptbild tauschen mit:" und ein Knopf je Kamera, die gerade als kleines Bild im Bild ist (zum Beispiel "⇄ Action 6").
+  Ein Klick tauscht das Hauptbild mit genau dieser Kamera; Kamera und Verzögerung bleiben beisammen, Ecke, Größe, Position und die Wahl des Tons bleiben am Platz. Der Knopf "Bilder tauschen" aus 0.9.33 (immer das erste kleine Bild) entfällt.
+  `POST /api/pipeline/swap` nimmt dafür `{"with": "<Kamera-Schlüssel>"}`; ohne Angabe gilt das erste kleine Bild.
+- Tests: Tausch mit dem zweiten und dritten kleinen Bild, Ablehnung einer Kamera, die nicht im Bild ist, und der Hauptkamera selbst.
+
 ## 0.9.33 (Beta)
 - Neu: **Hauptbild und kleines Bild tauschen** (Knopf "⇄ Bilder tauschen" in der Live-Karte, sichtbar, wenn ein Bild-in-Bild mit mindestens einem kleinen Bild eingestellt ist). Der Tausch vertauscht das Hauptbild
   mit dem ersten kleinen Bild. Kamera und Verzögerung bleiben beisammen; Ecke, Größe, Position und die Wahl des Tons (Hauptbild oder kleines Bild) bleiben am Platz. Läuft die Sendung, startet der Encoder dafür neu und das
