@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.9.44 (Beta)
+- Neu: **Knopf "Öffentlich im Internet freigeben (Funnel)" in der Karte "Fernzugriff"** (sichtbar, wenn die Box mit Tailscale verbunden ist). Damit erreicht auch jemand **ohne Tailscale-App** die Oberfläche. Das ist ausdrücklich eine **Ausnahme von der bisherigen Regel "nie öffentlich"** und deshalb vorsichtig gebaut:
+  Aus ist der Standard, ein Klick braucht eine ausführliche Warnung und die Bestätigung (der Server verlangt zusätzlich das Merkmal `public`); solange Funnel an ist, steht eine rote Warnung mit der Uhrzeit des Endes in der Karte; **nach 8 Stunden beendet ein Zeitgeber die Freigabe von selbst**
+  (`pipbox-funnel-guard.timer`, alle 5 Minuten und 2 Minuten nach dem Start; die Zeitgrenze liegt im RAM, nach einem Neustart gilt eine noch aktive Freigabe als abgelaufen und wird beendet); "Öffentliche Freigabe beenden" schaltet sofort ab, die Freigabe im privaten Netz bleibt.
+  Der Root-Helfer bekommt die Stichworte `funnel_on` und `funnel_off` (weiter nur feste Stichworte, keine Eingaben der Oberfläche). Der Wächter ändert nur Funnel-Freigaben für die Oberfläche der Box, keine fremden. Verlangt Tailscale, Funnel für das Netz einmal zu erlauben, zeigt die Karte den Link dazu.
+  Beim Beenden setzt Tailscale alle Freigaben zurück; die Box stellt nur die der Oberfläche im privaten Netz wieder her.
+- Neu: Hinter dem Tailscale-Proxy (Serve und Funnel) zählt für die Sperre nach falschen Anmeldungen die Adresse des Absenders (letzter Eintrag von `X-Forwarded-For`, nur wenn die Anfrage vom Proxy auf der Box selbst kommt). Vorher hätte ein Angreifer über Funnel alle anderen mit ausgesperrt, weil für den Server alle von `127.0.0.1` kamen.
+- Behoben: **Die Karte der System-Updates klappte von selbst zu**, sobald keine Updates (mehr) anstanden, auch beim Laden der Seite. Sie öffnet sich weiter von selbst, wenn etwas ansteht (Updates, Fehler, Neustart nötig), klappt aber nie mehr von selbst zu.
+- Doku: `ANLEITUNG-Fernzugriff.md` beschreibt Funnel, seine Risiken und das automatische Ende; README und Sicherheitshinweise angepasst.
+- Tests: Helfer (Zeitgrenze, Wächter, fremde Freigaben, Fehlermeldung "Funnel nicht erlaubt"), Server (Bestätigungspflicht, Demo), Absenderadresse hinter dem Proxy, Installer-Einheiten. Mit echtem Tailscale und echtem Funnel **noch nicht ausprobiert**; die Befehle (`tailscale funnel --bg --yes 8780`, `tailscale funnel reset`) stammen aus der Hilfe der installierten Version 1.102.4.
+
 ## 0.9.43 (Beta)
 - Neu: **Die Oberfläche zeigt, welcher Bluetooth-Adapter für die DJI-Kameras läuft, und erkennt Sticks, aus denen der Kernel keinen Adapter macht.** Unter der Kartenüberschrift "DJI-Kameras (Bluetooth)" steht jetzt der laufende Adapter (USB-Kennung); steckt ein Stick, der keinen
   Adapter ergibt, steht dort der Grund, und die Suche meldet statt "Kein Bluetooth-Adapter gefunden" den Hinweis. Erkannt wird über `/sys` (Schnittstellenklasse Bluetooth oder Hersteller Barrot), nur lesend.

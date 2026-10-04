@@ -9,6 +9,7 @@ Fernzugriff von unterwegs läuft über `tailscale serve`.
 """
 import argparse
 import hashlib
+import ipaddress
 import hmac
 import json
 import math
@@ -1494,9 +1495,10 @@ def vkey(v):
 
 class Remote:
     """Fernzugriff über Tailscale. Lesen darf dieser Dienst (tailscale status), Verändern macht der Root-Helfer
-    pipbox-remote.py über eine Auslösedatei mit einem Stichwort aus fester Liste. Funnel (öffentlich) gibt es nicht."""
+    pipbox-remote.py über eine Auslösedatei mit einem Stichwort aus fester Liste. Funnel (öffentlich im Internet) gibt es nur auf
+    ausdrückliche Anforderung (funnel_on mit Bestätigung "public") und es endet nach 8 Stunden von selbst."""
     STATUS = "/run/pipbox-remote/status.json"
-    ACTIONS = ("install", "login", "down", "serve_on", "serve_off", "logout")
+    ACTIONS = ("install", "login", "down", "serve_on", "serve_off", "funnel_on", "funnel_off", "logout")
 
     def __init__(self, state_dir, demo):
         self.req = os.path.join(state_dir, "remote-request")
@@ -1527,12 +1529,13 @@ class Remote:
             d = {"installed": True, "backend": "Running", "connected": True, "name": "irl4you-box.demo.ts.net",
                  "ip": "100.64.0.1", "tailnet": "demo", "peers": [{"name": "handy", "os": "iOS", "online": True}],
                  "serve": bool(self.fake.get("serve")), "url": "https://irl4you-box.demo.ts.net/" if self.fake.get("serve") else "",
-                 "funnel": False, "state": "idle", "step": "", "message": self.fake.get("message", ""), "login_url": "",
+                 "funnel": bool(self.fake.get("funnel")), "funnel_until": int(self.fake.get("funnel_until", 0)),
+                 "state": "idle", "step": "", "message": self.fake.get("message", ""), "login_url": "",
                  "hint_url": "", "helper_installed": True}
             return d
         installed = bool(shutil.which("tailscale"))
         out = {"installed": installed, "backend": "", "connected": False, "name": "", "ip": "", "tailnet": "", "peers": [],
-               "serve": False, "url": "", "funnel": False, "state": "idle", "step": "", "message": "", "login_url": "",
+               "serve": False, "url": "", "funnel": False, "funnel_until": 0, "state": "idle", "step": "", "message": "", "login_url": "",
                "hint_url": "", "helper_installed": os.path.exists("/etc/systemd/system/pipbox-remote.path")}
         try:
             with open(self.STATUS) as f:
@@ -1566,13 +1569,17 @@ class Remote:
                     if "127.0.0.1:%d" % 8780 in str(h2.get("Proxy", "")):
                         out["serve"], out["url"] = True, "https://" + host.replace(":443", "") + "/"
             out["funnel"] = any((sv.get("AllowFunnel") or {}).values())
+            until = int(h.get("funnel_until") or 0)
+            out["funnel_until"] = until if out["funnel"] and until > time.time() else 0
         return out
 
-    def request(self, action, confirm):
+    def request(self, action, confirm, public=False):
         if action not in self.ACTIONS:
             raise ValueError("Unbekannte Aktion")
         if confirm is not True:
             raise ValueError("Bestätigung fehlt")
+        if action == "funnel_on" and public is not True:
+            raise ValueError("Die öffentliche Freigabe braucht eine ausdrückliche Bestätigung")
         st = self.status()
         if not st["helper_installed"]:
             raise ValueError("Der Fernzugriff-Helfer ist nicht installiert (install.sh erneut ausführen)")
@@ -1582,11 +1589,19 @@ class Remote:
             raise ValueError("Tailscale ist schon installiert")
         if action != "install" and not st["installed"]:
             raise ValueError("Tailscale ist noch nicht installiert")
+        if action == "funnel_on" and not st["connected"]:
+            raise ValueError("Zuerst mit Tailscale verbinden")
+        if action == "funnel_off" and not st["funnel"]:
+            raise ValueError("Die öffentliche Freigabe ist nicht an")
         if self.demo:
             if action == "serve_on":
                 self.fake = {"serve": True, "message": "Demo: freigegeben."}
             elif action == "serve_off":
                 self.fake = {"serve": False, "message": "Demo: beendet."}
+            elif action == "funnel_on":
+                self.fake = {"serve": True, "funnel": True, "funnel_until": time.time() + 8 * 3600, "message": "Demo: öffentlich freigegeben."}
+            elif action == "funnel_off":
+                self.fake = {"serve": True, "funnel": False, "message": "Demo: öffentliche Freigabe beendet."}
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -2361,7 +2376,17 @@ class Handler(BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "box").split(":")[0]
 
     def ip(self):
-        return self.client_address[0]
+        """Adresse des Gegenübers. Kommt die Anfrage vom Tailscale-Proxy auf dieser Box (Serve/Funnel), zählt die Adresse, die der
+        Proxy als letzte in X-Forwarded-For angehängt hat: So sperren fehlgeschlagene Anmeldungen einzelne Absender und nicht alle."""
+        peer = self.client_address[0]
+        if peer in ("127.0.0.1", "::1"):
+            last = (self.headers.get("X-Forwarded-For", "") or "").split(",")[-1].strip()
+            try:
+                ipaddress.ip_address(last)
+                return last
+            except ValueError:
+                pass
+        return peer
 
     def token(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -2495,7 +2520,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wifi.request(d)
                 return self.reply(200, {"ok": True})
             if path == "/api/remote":
-                self.remote.request(d.get("action"), d.get("confirm") is True)
+                self.remote.request(d.get("action"), d.get("confirm") is True, d.get("public") is True)
                 return self.reply(200, {"ok": True})
             if path == "/api/swupdate":
                 self.swupdate.request(d.get("action"), d.get("confirm") is True, d.get("version"), d.get("older") is True)

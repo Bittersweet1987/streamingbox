@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.43 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.44 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -83,8 +83,9 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **WLAN / Hotspot als Sendeweg:** Netze suchen, verbinden, trennen und als Sendeweg wählen, direkt in der Oberfläche
   (Root-Helfer mit festen Aktionen; das Passwort wird von diesem Projekt nicht gespeichert, NetworkManager legt es im WLAN-Profil ab).
 - **Box ausschalten:** Herunterfahren und Neu starten direkt in der Oberfläche (Root-Helfer mit fester Liste, Protokoll wird vorher sauber geschlossen).
-- **Fernzugriff (freiwillig):** Über Tailscale von unterwegs, nur im privaten Netz, nie öffentlich. Einrichten direkt in der
-  Oberfläche; Anleitung: [ANLEITUNG-Fernzugriff.md](ANLEITUNG-Fernzugriff.md).
+- **Fernzugriff (freiwillig):** Über Tailscale von unterwegs, standardmäßig nur im privaten Netz (nur Geräte in Ihrem Tailscale-Konto). Einrichten direkt in der
+  Oberfläche; Anleitung: [ANLEITUNG-Fernzugriff.md](ANLEITUNG-Fernzugriff.md). Wer auch **ohne Tailscale-App** von überall zugreifen will, kann auf
+  ausdrücklichen Knopfdruck **Funnel** einschalten (öffentlich im Internet, nur durch das BELABOX-Passwort geschützt, rote Warnung, endet nach 8 Stunden von selbst).
 - **Software-Update:** In der Oberfläche nach neuen Versionen suchen und installieren. Die letzten 5 Versionen bleiben
   gesichert; man kann gezielt auf eine Version wechseln, auch auf eine ältere (gesichert oder als Release `vX.Y.Z` auf
   GitHub). Nicht während einer Übertragung.

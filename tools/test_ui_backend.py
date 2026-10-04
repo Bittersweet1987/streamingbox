@@ -972,5 +972,193 @@ class UpdateHelperRepair(unittest.TestCase):
         self.assertIn("anderer Paketvorgang", self.status["message"])
 
 
+class FunnelRemote(unittest.TestCase):
+    """Öffentliche Freigabe (Funnel): nur auf ausdrückliche Anforderung, mit Zeitgrenze und Wächter."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pbremote_funnel", os.path.join(os.path.dirname(HERE), "install", "pipbox-remote.py"))
+        cls.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.m)
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.status = {}
+        self.calls = []
+        self.cfg = {}
+        self.patches = [mock.patch.object(self.m, "RUN", self.d), mock.patch.object(self.m, "FUNNEL_UNTIL", os.path.join(self.d, "funnel-until")),
+                        mock.patch.object(self.m, "LOCK", os.path.join(self.d, "lock")), mock.patch.object(self.m, "log", lambda msg: None),
+                        mock.patch.object(self.m, "status", lambda **kw: self.status.update(kw)),
+                        mock.patch.object(self.m, "installed", lambda: True),
+                        mock.patch.object(self.m, "serve_config", lambda: self.cfg)]
+        for p in self.patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def on(self, host="box.example.ts.net:443", proxy="http://127.0.0.1:8780"):
+        return {"TCP": {"443": {"HTTPS": True}}, "Web": {host: {"Handlers": {"/": {"Proxy": proxy}}}}, "AllowFunnel": {host: True}}
+
+    def fake_run(self, rc=0, out="", become=None):
+        def run(args, **kw):
+            self.calls.append(list(args))
+            if become is not None and args[:2] == ["tailscale", "funnel"] and "--bg" in args:
+                self.cfg = become
+            return mock.Mock(returncode=rc, stdout=out, stderr="")
+        return run
+
+    def test_funnel_active_only_for_the_ui_target(self):
+        self.assertTrue(self.m.funnel_active(self.on()))
+        self.assertFalse(self.m.funnel_active(self.on(proxy="http://127.0.0.1:3000")))     # fremde Freigabe zählt nicht
+        self.assertFalse(self.m.funnel_active({"Web": self.on()["Web"], "AllowFunnel": {"box.example.ts.net:443": False}}))
+        self.assertFalse(self.m.funnel_active({}))
+
+    def test_funnel_on_sets_a_time_limit(self):
+        with mock.patch.object(self.m.subprocess, "run", self.fake_run(become=self.on())):
+            before = time.time()
+            self.m.do_funnel_on()
+        self.assertEqual(self.calls[0][:3], ["tailscale", "funnel", "--bg"])
+        self.assertIn("8780", self.calls[0])
+        until = self.m.funnel_until()
+        self.assertTrue(before + 8 * 3600 - 5 <= until <= time.time() + 8 * 3600 + 5)
+        self.assertEqual(self.status["funnel_until"], until)
+        self.assertEqual(self.status["state"], "idle")
+
+    def test_funnel_not_allowed_in_the_tailnet_shows_the_link(self):
+        out = "Funnel not available; HTTPS must be enabled. Visit https://login.tailscale.com/f/funnel?node=abc123 to enable"
+        with mock.patch.object(self.m.subprocess, "run", self.fake_run(rc=1, out=out)):
+            self.m.do_funnel_on()
+        self.assertEqual(self.status["state"], "needs_funnel")
+        self.assertTrue(self.status["hint_url"].startswith("https://login.tailscale.com/f/funnel"))
+        self.assertEqual(self.m.funnel_until(), 0)
+
+    def test_funnel_failure_is_reported(self):
+        with mock.patch.object(self.m.subprocess, "run", self.fake_run(rc=1, out="irgendein anderer Fehler")):
+            with self.assertRaises(RuntimeError):
+                self.m.do_funnel_on()
+        self.assertEqual(self.m.funnel_until(), 0)
+
+    def test_funnel_off_resets_and_restores_only_the_private_share(self):
+        self.cfg = self.on()
+        self.m.set_funnel_until(time.time() + 3600)
+        def run(args, **kw):
+            self.calls.append(list(args))
+            if args[:3] == ["tailscale", "serve", "--bg"]:
+                self.cfg = {"Web": self.on()["Web"]}               # nur Serve, kein Funnel
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(self.m.subprocess, "run", run), mock.patch.object(self.m, "ts", lambda *a, **k: self.calls.append(["tailscale", *a])):
+            self.m.do_funnel_off()
+        self.assertEqual(self.calls[0], ["tailscale", "funnel", "reset"])
+        self.assertEqual(self.calls[1][:3], ["tailscale", "serve", "--bg"])
+        self.assertEqual(self.m.funnel_until(), 0)
+        self.assertEqual(self.status["funnel_until"], 0)
+
+    def test_funnel_off_complains_if_it_stays_on(self):
+        self.cfg = self.on()
+        with mock.patch.object(self.m.subprocess, "run", lambda *a, **k: mock.Mock(returncode=0, stdout="", stderr="")), \
+                mock.patch.object(self.m, "ts", lambda *a, **k: None):
+            with self.assertRaises(RuntimeError) as e:
+                self.m.do_funnel_off()
+        self.assertIn("sudo tailscale funnel reset", str(e.exception))
+
+    def test_guard_ends_expired_or_unlimited_funnel_and_leaves_valid_ones(self):
+        offs = []
+        with mock.patch.object(self.m, "do_funnel_off", lambda msg="": offs.append(msg)):
+            self.cfg = {}
+            self.assertEqual(self.m.guard(), 0)
+            self.assertEqual(offs, [])                                          # nichts an: nichts zu tun
+            self.cfg = self.on()
+            self.m.set_funnel_until(time.time() + 600)
+            self.m.guard()
+            self.assertEqual(offs, [])                                          # gültige Zeitgrenze
+            self.m.set_funnel_until(time.time() - 5)
+            self.m.guard()
+            self.assertEqual(len(offs), 1)                                      # abgelaufen
+            self.m.set_funnel_until(0)
+            self.m.guard()
+            self.assertEqual(len(offs), 2)                                      # keine Zeitgrenze (z. B. nach einem Neustart)
+
+    def test_guard_leaves_foreign_funnels_alone_and_clears_stale_limits(self):
+        offs = []
+        with mock.patch.object(self.m, "do_funnel_off", lambda msg="": offs.append(msg)):
+            self.cfg = self.on(proxy="http://127.0.0.1:3000")
+            self.m.guard()
+            self.assertEqual(offs, [])
+            self.cfg = {}
+            self.m.set_funnel_until(time.time() + 600)
+            self.m.guard()
+            self.assertEqual(self.m.funnel_until(), 0)                          # Funnel ist aus: alte Zeitgrenze wird gelöscht
+
+    def test_guard_does_nothing_while_the_helper_is_busy(self):
+        import fcntl
+        offs = []
+        self.cfg = self.on()
+        lock = open(self.m.LOCK, "w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            code = ("import fcntl,os,sys\nf=open(sys.argv[1],'w')\n"
+                    "try:\n fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('frei')\nexcept OSError:\n print('belegt')\n")
+            r = subprocess.run([sys.executable, "-c", code, self.m.LOCK], capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), "belegt")                          # Sperre wirkt über Prozesse hinweg
+        finally:
+            lock.close()
+
+    def test_mode_list_has_both_funnel_words(self):
+        self.assertIn("funnel_on", self.m.MODES)
+        self.assertIn("funnel_off", self.m.MODES)
+        self.assertEqual(self.m.FUNNEL_HOURS, 8)
+
+
+class FunnelRequests(unittest.TestCase):
+    """Server: funnel_on nur mit ausdrücklicher Bestätigung, Absenderadresse hinter dem Tailscale-Proxy."""
+
+    def remote(self, **fake):
+        d = tempfile.mkdtemp()
+        r = server.Remote(d, demo=True)
+        r.fake = fake
+        return r
+
+    def test_funnel_needs_the_explicit_public_flag(self):
+        r = self.remote(serve=True)
+        with self.assertRaises(ValueError):
+            r.request("funnel_on", True)
+        with self.assertRaises(ValueError):
+            r.request("funnel_on", True, public=False)
+        with self.assertRaises(ValueError):
+            r.request("funnel_on", False, public=True)
+        r.request("funnel_on", True, public=True)
+        st = r.status()
+        self.assertTrue(st["funnel"])
+        self.assertGreater(st["funnel_until"], time.time() + 7 * 3600)
+
+    def test_funnel_off_only_when_it_is_on(self):
+        r = self.remote(serve=True)
+        with self.assertRaises(ValueError):
+            r.request("funnel_off", True)
+        r.request("funnel_on", True, public=True)
+        r.request("funnel_off", True)
+        self.assertFalse(r.status()["funnel"])
+        self.assertTrue(r.status()["serve"])
+
+    def test_actions_list_is_fixed(self):
+        self.assertEqual(server.Remote.ACTIONS, ("install", "login", "down", "serve_on", "serve_off", "funnel_on", "funnel_off", "logout"))
+
+    def handler(self, peer, xff=None):
+        h = server.Handler.__new__(server.Handler)
+        h.client_address = (peer, 12345)
+        h.headers = {"X-Forwarded-For": xff} if xff is not None else {}
+        return h
+
+    def test_address_behind_the_local_proxy_is_the_last_forwarded_one(self):
+        self.assertEqual(self.handler("127.0.0.1", "203.0.113.9").ip(), "203.0.113.9")
+        self.assertEqual(self.handler("127.0.0.1", "1.2.3.4, 203.0.113.9").ip(), "203.0.113.9")     # eine vom Absender mitgeschickte Adresse zählt nicht
+        self.assertEqual(self.handler("::1", "2001:db8::1").ip(), "2001:db8::1")
+        self.assertEqual(self.handler("127.0.0.1").ip(), "127.0.0.1")
+        self.assertEqual(self.handler("127.0.0.1", "kein-ip").ip(), "127.0.0.1")
+
+    def test_address_from_other_peers_ignores_the_header(self):
+        self.assertEqual(self.handler("192.168.1.20", "203.0.113.9").ip(), "192.168.1.20")
+
+
 if __name__ == "__main__":
     unittest.main()

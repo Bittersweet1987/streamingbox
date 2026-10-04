@@ -7,8 +7,12 @@ Liest aus der Auslösedatei ausschließlich ein Stichwort aus fester Liste:
   down       Verbindung trennen (Konto bleibt verbunden)
   serve_on   Oberfläche im PRIVATEN Tailscale-Netz freigeben (HTTPS, nur Tailnet)
   serve_off  Freigabe beenden
+  funnel_on  Oberfläche ÖFFENTLICH im Internet freigeben (Funnel), nur auf ausdrückliche Anforderung; endet nach FUNNEL_HOURS Stunden
+  funnel_off öffentliche Freigabe beenden (die Freigabe im privaten Netz bleibt)
   logout     Gerät aus dem Tailscale-Konto abmelden
-Nimmt keine Adressen, Pfade oder Befehle von der Weboberfläche an. Funnel (öffentliches Internet) wird nie eingeschaltet.
+Mit dem Argument "guard" (Zeitgeber alle 5 Minuten) beendet der Helfer eine abgelaufene oder zeitlich nicht begrenzte öffentliche
+Freigabe der Oberfläche; nach einem Neustart ist sie damit spätestens nach ein paar Minuten aus.
+Nimmt keine Adressen, Pfade oder Befehle von der Weboberfläche an. Funnel wird nie von selbst eingeschaltet.
 """
 import fcntl
 import json
@@ -28,7 +32,9 @@ LOG = "/var/log/pipbox-remote.log"
 LOCK = "/run/pipbox-remote.lock"
 PORT = 8780
 HOSTNAME = "irl4you-box"
-MODES = ("install", "login", "down", "serve_on", "serve_off", "logout")
+MODES = ("install", "login", "down", "serve_on", "serve_off", "funnel_on", "funnel_off", "logout")
+FUNNEL_HOURS = 8                                 # so lange bleibt die öffentliche Freigabe an, dann beendet sie der Wächter
+FUNNEL_UNTIL = f"{RUN}/funnel-until"             # Ende als Unix-Zeit, im RAM: nach einem Neustart fehlt die Datei, dann gilt die Freigabe als abgelaufen
 CODENAMES = ("jammy", "noble", "focal")
 KEY_URL = "https://pkgs.tailscale.com/stable/ubuntu/{}.noarmor.gpg"
 LIST_URL = "https://pkgs.tailscale.com/stable/ubuntu/{}.tailscale-keyring.list"
@@ -170,7 +176,109 @@ def do_serve_on():
 
 def do_serve_off():
     ts("serve", "reset", timeout=30)
-    status(state="idle", step="", hint_url="", message="Freigabe beendet.")
+    set_funnel_until(0)
+    status(state="idle", step="", hint_url="", funnel_until=0, message="Freigabe beendet.")
+
+
+def serve_config():
+    try:
+        r = ts("serve", "status", "--json", timeout=15)
+        return json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    except (ValueError, subprocess.TimeoutExpired, OSError):
+        return {}
+
+
+def funnel_active(cfg=None):
+    """Ist Funnel für die Oberfläche (Ziel 127.0.0.1:PORT) eingeschaltet? Fremde Funnel-Freigaben für andere Ziele zählen nicht."""
+    cfg = serve_config() if cfg is None else cfg
+    web = cfg.get("Web") or {}
+    for hostport, on in (cfg.get("AllowFunnel") or {}).items():
+        if not on:
+            continue
+        for h in ((web.get(hostport) or {}).get("Handlers") or {}).values():
+            if f"127.0.0.1:{PORT}" in str(h.get("Proxy", "")) or f"localhost:{PORT}" in str(h.get("Proxy", "")):
+                return True
+    return False
+
+
+def funnel_until():
+    try:
+        with open(FUNNEL_UNTIL) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def set_funnel_until(t):
+    try:
+        os.makedirs(RUN, exist_ok=True)
+        if not t:
+            os.remove(FUNNEL_UNTIL)
+            return
+        tmp = FUNNEL_UNTIL + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(str(int(t)) + "\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, FUNNEL_UNTIL)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log("Zeitgrenze für Funnel konnte nicht geschrieben werden")
+
+
+def do_funnel_on():
+    status(state="working", step="Gebe die Oberfläche öffentlich im Internet frei (Funnel)", message="", hint_url="")
+    r = subprocess.run(["tailscale", "funnel", "--bg", "--yes", str(PORT)], capture_output=True, text=True, timeout=40)
+    out = r.stdout + r.stderr
+    if r.returncode != 0 or not funnel_active():
+        low = out.lower()
+        if "funnel" in low and ("not enabled" in low or "not available" in low or "enable" in low or "policy" in low or "visit" in low):
+            m = URL_RE.search(out)
+            status(state="needs_funnel", step="", hint_url=m.group(0) if m else "",
+                   message="Tailscale muss „Funnel“ (und HTTPS) für dein Netz einmal erlauben. Öffne den Link, erlaube es und versuche es dann erneut.")
+            return
+        raise RuntimeError("Funnel fehlgeschlagen: " + out[-150:].replace("\n", " "))
+    until = int(time.time()) + FUNNEL_HOURS * 3600
+    set_funnel_until(until)
+    log(f"Funnel an, Ende {time.strftime('%F %T', time.localtime(until))}")
+    status(state="idle", step="", hint_url="", funnel_until=until,
+           message=f"Die Oberfläche ist öffentlich im Internet erreichbar. Die Freigabe endet automatisch nach {FUNNEL_HOURS} Stunden.")
+
+
+def do_funnel_off(message="Die öffentliche Freigabe ist beendet. Die Oberfläche bleibt im privaten Tailscale-Netz erreichbar."):
+    status(state="working", step="Beende die öffentliche Freigabe", message="")
+    ts("funnel", "reset", timeout=30)                        # setzt die Freigaben zurück; danach nur die der Oberfläche wieder im PRIVATEN Netz
+    set_funnel_until(0)
+    subprocess.run(["tailscale", "serve", "--bg", "--https=443", f"http://127.0.0.1:{PORT}"], capture_output=True, text=True, timeout=40)
+    if funnel_active():
+        raise RuntimeError("Die öffentliche Freigabe ließ sich nicht beenden. Bitte in einer Konsole auf der Box: sudo tailscale funnel reset")
+    log("Funnel aus")
+    status(state="idle", step="", hint_url="", funnel_until=0, message=message)
+
+
+def guard():
+    """Zeitgeber: eine abgelaufene oder zeitlich nicht begrenzte öffentliche Freigabe der Oberfläche beenden."""
+    if not installed():
+        return 0
+    os.makedirs(RUN, exist_ok=True)
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0                                             # der Helfer arbeitet gerade, beim nächsten Mal wieder
+    if not funnel_active():
+        set_funnel_until(0)
+        return 0
+    until = funnel_until()
+    if until and time.time() < until:
+        return 0
+    log("Funnel ist abgelaufen (oder hatte keine Zeitgrenze): wird beendet")
+    try:
+        do_funnel_off("Die öffentliche Freigabe wurde automatisch beendet. Die Oberfläche bleibt im privaten Tailscale-Netz erreichbar.")
+    except Exception as e:
+        log(f"guard: Fehler {e!r}")
+        status(state="failed", step="", message=str(e)[:200])
+    return 0
 
 
 def read_req(path, limit=4096):
@@ -185,6 +293,8 @@ def read_req(path, limit=4096):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "guard":
+        return guard()
     os.makedirs(RUN, exist_ok=True)
     lock = open(LOCK, "w")
     try:
@@ -216,8 +326,13 @@ def main():
             do_serve_on()
         elif mode == "serve_off":
             do_serve_off()
+        elif mode == "funnel_on":
+            do_funnel_on()
+        elif mode == "funnel_off":
+            do_funnel_off()
         elif mode == "logout":
             ts("serve", "reset", timeout=30)
+            set_funnel_until(0)
             ts("logout", timeout=40)
             status(state="idle", step="", login_url="", message="Vom Tailscale-Konto abgemeldet.")
         log(f"{mode}: fertig")

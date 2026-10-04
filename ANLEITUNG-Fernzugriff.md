@@ -40,13 +40,31 @@ Geräte, die in Ihrem Tailscale-Konto angemeldet sind, kommen an die Box. Die An
 
 ## Sicherheit
 
-- **Nie „Funnel“ einschalten.** Funnel macht die Oberfläche **öffentlich im Internet** erreichbar. Diese Software schaltet
-  es nie ein; die Karte warnt rot, falls es in Ihrem Tailscale-Konto doch aktiv ist („Freigabe beenden“ schaltet es ab).
+- **Funnel (öffentlich im Internet) ist standardmäßig aus und wird nie von selbst eingeschaltet.** Er macht die Oberfläche für **jeden**
+  im Internet erreichbar, der die Adresse kennt, auch ohne Tailscale. Nur wer ihn ausdrücklich braucht, schaltet ihn ein (siehe unten);
+  die Karte warnt rot, solange er an ist.
 - **HTTPS-Zertifikate:** Damit steht der **Gerätename** der Box (z. B. `irl4you-box.xxxx.ts.net`) in einem öffentlichen
   Zertifikatsverzeichnis. Nur der Name, keine Inhalte, kein Zugriff. Er lässt sich dort nicht löschen.
 - Schützen Sie Ihr **Tailscale-Konto** (Zwei-Faktor beim GitHub/Google-Konto), denn wer sich dort anmelden kann, kann Geräte
   hinzufügen. Nicht mehr benötigte Geräte in der Tailscale-Verwaltung (login.tailscale.com/admin) löschen.
 - Nutzen Sie ein **starkes BELABOX-Passwort**.
+
+## Öffentlich im Internet erreichbar machen (Funnel, optional)
+
+Normalerweise reicht der private Zugriff: Jedes Gerät mit der Tailscale-App in Ihrem Konto (Handy, Rechner) erreicht die Box von überall.
+Nur wenn jemand **ohne Tailscale-App** zugreifen soll, gibt es **„Öffentlich im Internet freigeben (Funnel) …“** in der Karte (sichtbar,
+wenn die Box mit Tailscale verbunden ist).
+
+- Nach einer Warnung und Ihrer Bestätigung ist die Oberfläche unter der Adresse der Box (`https://<Gerätename>.<netz>.ts.net/`) für **jeden**
+  im Internet erreichbar. Geschützt ist sie dann **nur durch das BELABOX-Passwort**. Verwenden Sie dafür ein **langes, starkes Passwort**.
+- Der Gerätename steht in öffentlichen Zertifikatslisten; Suchprogramme finden die Seite und probieren die Anmeldung aus. Wiederholte
+  falsche Anmeldungen sperren den jeweiligen Absender für 5 Minuten.
+- Die Freigabe **endet nach 8 Stunden von selbst** (ein Zeitgeber auf der Box prüft alle 5 Minuten, auch nach einem Neustart). Die Karte
+  zeigt die Uhrzeit. **„Öffentliche Freigabe beenden“** schaltet sie sofort ab; die Freigabe im privaten Netz bleibt.
+- Tailscale muss Funnel für Ihr Netz **einmal erlauben**: Verlangt es das, zeigt die Karte einen Link zur Tailscale-Verwaltung.
+  Danach erneut auf den Knopf klicken.
+- Beim Beenden setzt Tailscale **alle** Freigaben der Box zurück (`tailscale funnel reset`) und die Box stellt nur die der Oberfläche
+  im privaten Netz wieder her. Eigene, andere Freigaben auf der Box gingen dabei verloren.
 
 ## Abschalten und entfernen
 

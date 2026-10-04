@@ -251,6 +251,19 @@ class InstallScript(unittest.TestCase):
             self.assertEqual(r.returncode, 0)                                         # kaputte Datei: Hinweis, kein Abbruch
             self.assertIn("nicht bereinigt", r.stdout)
 
+    def test_funnel_guard_units_are_installed_and_removed(self):
+        s = rd(os.path.join(ROOT, "install", "install.sh"))
+        self.assertIn('"$HERE/install/pipbox-funnel-guard.timer" /etc/systemd/system/pipbox-funnel-guard.timer', s)
+        self.assertIn('"$HERE/install/pipbox-funnel-guard.service" /etc/systemd/system/pipbox-funnel-guard.service', s)
+        self.assertIn("pipbox-logmode.path pipbox-funnel-guard.timer", s)                      # eingeschaltet
+        self.assertIn("systemctl disable --now pipbox-funnel-guard.timer", s)                  # bei der Deinstallation ausgeschaltet
+        self.assertIn("/etc/systemd/system/pipbox-funnel-guard.timer", s.split("uninstall)")[1])
+        timer = rd(os.path.join(ROOT, "install", "pipbox-funnel-guard.timer"))
+        self.assertIn("OnBootSec=", timer)
+        self.assertIn("OnUnitActiveSec=5min", timer)
+        service = rd(os.path.join(ROOT, "install", "pipbox-funnel-guard.service"))
+        self.assertIn("pipbox-remote.py guard", service)
+
     def test_apt_hook_is_harmless_without_the_script(self):
         hook = rd(os.path.join(ROOT, "install", "99pipbox-nginx"))
         self.assertIn("DPkg::Post-Invoke", hook)

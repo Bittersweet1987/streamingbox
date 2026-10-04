@@ -73,6 +73,8 @@ PY
     install -m 755 "$HERE/install/pipbox-remote.py" /opt/pipbox/pipbox-remote.py
     install -m 644 "$HERE/install/pipbox-remote.service" /etc/systemd/system/pipbox-remote.service
     install -m 644 "$HERE/install/pipbox-remote.path" /etc/systemd/system/pipbox-remote.path
+    install -m 644 "$HERE/install/pipbox-funnel-guard.service" /etc/systemd/system/pipbox-funnel-guard.service
+    install -m 644 "$HERE/install/pipbox-funnel-guard.timer" /etc/systemd/system/pipbox-funnel-guard.timer
     install -m 755 "$HERE/install/pipbox-wifi.py" /opt/pipbox/pipbox-wifi.py
     install -m 644 "$HERE/install/pipbox-wifi.service" /etc/systemd/system/pipbox-wifi.service
     install -m 644 "$HERE/install/pipbox-wifi.path" /etc/systemd/system/pipbox-wifi.path
@@ -156,13 +158,13 @@ PY
     systemctl enable pipbox.service pipbox-dji.service
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-funnel-guard.timer
     systemctl restart pipbox.service
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
   uninstall)
-    systemctl disable --now pipbox-send.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-health.service pipbox.service pipbox-dji.service || true
-    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path
+    systemctl disable --now pipbox-funnel-guard.timer pipbox-send.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-health.service pipbox.service pipbox-dji.service || true
+    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer
     rm -f /etc/apt/apt.conf.d/99pipbox-nginx
     NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
     if [ -f "$NGX.vor-pipbox" ]; then

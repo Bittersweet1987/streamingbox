@@ -502,7 +502,10 @@ function renderUpdate(u){
   else if(u.available>0) {badge=u.available+" Updates verfügbar"; cls="attn";}
   else if(u.last_check||u.state==="done") {badge="aktuell"; cls="ok";}
   $("updbadge").textContent=badge; $("updbadge").className="badge "+cls;
-  if(window._updAttn!==attention){ $("updcard").open=attention; window._updAttn=attention; }
+  // Die Karte öffnet sich von selbst, wenn etwas ansteht (Updates da, Fehler, Neustart nötig). Zuklappen tut sie nie von selbst:
+  // wer sie offen lässt, soll sie auch offen vorfinden, wenn nichts mehr zu tun ist.
+  if(attention && window._updAttn!==true) $("updcard").open=true;
+  window._updAttn=attention;
 }
 async function updPost(mode,confirm){
   const r=await fetch("/api/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,confirm})});
@@ -969,10 +972,13 @@ async function rLoad(){
   const ur=$("r_url_row"); ur.hidden=!(d.connected&&d.serve&&d.url); if(!ur.hidden){ $("r_url").textContent=d.url; $("r_url").href=d.url; }
   const others=(d.peers||[]).filter(p=>p.name);
   $("r_peers").textContent=d.connected?(others.length?"Weitere Geräte in Ihrem Netz: "+others.map(p=>p.name+" ("+(p.os||"?")+(p.online?", online":", offline")+")").join(", ")+".":"Noch kein weiteres Gerät in Ihrem Netz. Installieren Sie Tailscale auf Handy oder Rechner und melden Sie sich mit demselben Konto an."):"";
-  $("r_warn").hidden=!d.funnel;
+  { const w=$("r_warn"); w.hidden=!d.funnel;
+    if(d.funnel){ const t=d.funnel_until?new Date(d.funnel_until*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"";
+      w.textContent="Achtung: Die Oberfläche ist gerade öffentlich im Internet erreichbar (Funnel)."+(t?" Die Freigabe endet automatisch um "+t+" Uhr.":" Es gibt keine Zeitgrenze, die Box beendet sie in wenigen Minuten von selbst.")+" Mit „Öffentliche Freigabe beenden“ abschalten."; } }
   const acts=$("r_actions"); acts.innerHTML="";
-  const add=(txt,act,cls,ask)=>{ const b=document.createElement("button"); b.type="button"; if(cls) b.className=cls; b.textContent=txt; b.disabled=rBusy||!d.helper_installed;
-    b.addEventListener("click",async()=>{ if(ask&&!confirm(ask)) return; try{ await srtlaCall("POST","/api/remote",{action:act,confirm:true}); $("r_msg").textContent="Wird ausgeführt …"; }catch(x){ $("r_msg").textContent=x.message; } setTimeout(rLoad,1200); }); acts.append(b); };
+  const FUNNEL_ASK="Die Oberfläche öffentlich im Internet freigeben (Funnel)?\n\nDanach kann JEDER im Internet, der die Adresse der Box kennt, die Anmeldeseite öffnen, auch ohne Tailscale. Geschützt ist die Box dann nur durch das BELABOX-Passwort.\n\n• Nur mit einem starken, langen Passwort verwenden.\n• Die Freigabe endet nach 8 Stunden von selbst.\n• Der Gerätename steht in öffentlichen Zertifikatslisten und wird von Suchprogrammen gefunden, die Anmeldeseite wird dann ausprobiert.\n\nWenn Sie nur von eigenen Geräten zugreifen wollen, reicht die Freigabe im privaten Netz (Tailscale-App auf dem Gerät).\n\nWirklich öffentlich freigeben?";
+  const add=(txt,act,cls,ask,extra)=>{ const b=document.createElement("button"); b.type="button"; if(cls) b.className=cls; b.textContent=txt; b.disabled=rBusy||!d.helper_installed;
+    b.addEventListener("click",async()=>{ if(ask&&!confirm(ask)) return; try{ await srtlaCall("POST","/api/remote",Object.assign({action:act,confirm:true},extra||{})); $("r_msg").textContent="Wird ausgeführt …"; }catch(x){ $("r_msg").textContent=x.message; } setTimeout(rLoad,1200); }); acts.append(b); };
   if(!d.installed){
     let declined=rDeclinedMem; try{ declined=declined||localStorage.getItem("rDeclined")==="1"; }catch(e){}
     const choice=(txt,cls,fn)=>{ const b=document.createElement("button"); b.type="button"; if(cls) b.className=cls; b.textContent=txt; b.disabled=rBusy||!d.helper_installed; b.addEventListener("click",fn); acts.append(b); };
@@ -990,6 +996,8 @@ async function rLoad(){
   else{
     if(!d.serve) add("Oberfläche im privaten Netz freigeben","serve_on","");
     else add("Freigabe beenden","serve_off","sec");
+    if(d.funnel) add("Öffentliche Freigabe beenden","funnel_off","");
+    else add("Öffentlich im Internet freigeben (Funnel) …","funnel_on","sec",FUNNEL_ASK,{public:true});
     add("Verbindung trennen","down","sec","Verbindung zu Tailscale trennen? Der Fernzugriff geht dann nicht mehr.");
     add("Vom Konto abmelden","logout","sec","Diese Box aus Ihrem Tailscale-Konto abmelden? Danach müssen Sie sich neu anmelden.");
   }

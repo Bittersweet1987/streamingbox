@@ -1,0 +1,8 @@
+[Unit]
+Description=IRL4YOU BOX Funnel-Wächter (beendet eine abgelaufene öffentliche Freigabe der Oberfläche)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/pipbox/pipbox-remote.py guard
+TimeoutStartSec=2min
