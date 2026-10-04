@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.84 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.85 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -111,6 +111,8 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   **mit echtem Stick und Kamera noch nicht geprüft**.
 - **Einstellungen sichern und einspielen** (Karte "Einstellungen sichern"): Kameras, Bildaufbau, SRTLA-Server, DJI-Kameras, Hotspots, WLAN-Netze u. a. in einer Datei.
   Mit Passwörtern immer **mit Passwort verschlüsselt** (AES-256). Einspielen nur ohne Sendung, der Stand davor wird gesichert. WLAN-Netze und DJI-Kameras **noch nicht mit einer echten Box geprüft**.
+- **HDMI-Kamera** (Karte "Kameras", Abschnitt "HDMI- und USB-Kameras"): Der HDMI-Eingang der Box (z. B. eine DJI Action 5 per USB-C-HDMI-Kabel) wird als Kamera "HDMI" in die Box eingespeist (Hardware-Kodierung, H.264) und ist wie jede Kamera wählbar: Hauptbild, kleines Bild, Notbetrieb. Schalter "Als Kamera senden", Bitrate, Bildrate und Ton (HDMI-Ton oder ohne) einstellbar. Eigener Dienst `pipbox-hdmi` (root), startet bei Signal und nach Ausfall von selbst. **Mit einer echten Action 5 nur als Probelauf geprüft** (Befehlskette und der Dienst aus einem Temp-Ordner: etwa 40 % eines Kerns bei 1080p60 auf 30 fps, 30 fps am Ausgang), nicht als eingerichteter Dienst und nicht über die Oberfläche; Verzögerung ungemessen. USB-Kameras fehlen noch.
+- **Akku-Warnung im Twitch-Chat** (Karte "Kameras", Bereich "DJI-Kameras"): Fällt der Akku einer per Bluetooth verbundenen DJI-Kamera unter die Schwelle (Standard 10 %), schreibt ein Bot eine Nachricht in den Chat (Twitch-IRC wie NOALBS, Token mit dem Recht "chat:edit"). Kanal und Bot-Konto sind getrennt (das Bot-Konto kann ein zweites Konto sein), die Nachricht ist einstellbar ({Kamera}, {Prozent}), mit Test-Knopf. Der Token liegt nur auf der Box (`twitch.json`, Rechte 0600) und nicht in der Einstellungssicherung. **Nicht mit echtem Twitch geprüft** (nur gegen einen lokalen Testserver). Eine Kamera nur am HDMI-Kabel meldet keinen Akku.
 - **Sprachen** (beim ersten Öffnen, im Kopf und in der Karte "Language"): Englisch (Standard), Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Texte, Datum und Uhrzeit folgen der Sprache. **Außer Deutsch maschinell übersetzt, nicht von Muttersprachlern geprüft.** Verbessern oder neue Sprache: `web/i18n/README.md`.
 - **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
   oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
@@ -165,7 +167,7 @@ Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB
   schwächerer Weg neben einem guten, etwa Starlink neben 5G, ist nicht geprüft. Gleiches gilt für unterwegs über Stunden.
 - Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).
 - Geplant, nicht gebaut: Überblendung beim Wechsel zwischen Hauptbild und kleinem Bild (heute ein harter Schnitt, ohne den Tausch ohne Unterbrechung kostet er etwa 5 Sekunden Bild), eigene
-  Empfangsprozesse je Kamera, damit ein Kameraausfall den Encoder nicht anhält, und HDMI- oder USB-Kameras als Quelle.
+  Empfangsprozesse je Kamera, damit ein Kameraausfall den Encoder nicht anhält, und USB-Kameras als Quelle.
 
 Siehe [KONZEPT.md](KONZEPT.md) und [CHANGELOG.md](CHANGELOG.md).
 

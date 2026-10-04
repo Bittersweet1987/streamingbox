@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.85 (Beta)
+- Neu: **HDMI-Kamera**. Der HDMI-Eingang der Box (z. B. eine Action 5 per USB-C-HDMI) wird als Kamera "HDMI" eingespeist und ist wie jede Kamera wählbar (Bildaufbau, Fußleiste, Notbetrieb). Neuer Abschnitt "HDMI- und USB-Kameras" unten in der Karte "Kameras": Schalter "Als Kamera senden", Bitrate, Bildrate, Ton (HDMI-Ton oder ohne).
+  - Eigener Dienst `pipbox-hdmi` (root): startet bei Signal, bei Ausfall oder neuem Bildformat neu. Hardware-Kodierung (H.264), gemessen etwa 40 % eines Kerns (1080p60 auf 30 fps).
+  - **Mit echter Action 5 nur als Probelauf geprüft (Befehlskette und der Dienst aus einem Temp-Ordner), nicht als eingerichteter Dienst und nicht über die Oberfläche.** Verzögerung nicht gemessen. USB-Kameras fehlen noch.
+- Neu: **Akku-Warnung im Twitch-Chat** (Karte "Kameras", Bereich "DJI-Kameras"). Fällt der Akku einer DJI-Kamera unter die Schwelle (Standard 10 %), schreibt ein Bot in den Chat (Twitch-IRC wie NOALBS, Token mit "chat:edit"). Kanal und Bot-Konto getrennt, Nachricht mit {Kamera} und {Prozent}, "Nur während der Sendung", Test-Knopf. Der Token bleibt auf der Box (nicht in der Einstellungssicherung).
+  - **Nicht gegen echtes Twitch geprüft** (nur lokaler Testserver). Nur Kameras mit Bluetooth melden den Akku.
+- Geändert: Die Überschrift des Kastens im Status heißt jetzt kurz "Up- und Download" (kein Zeilenumbruch mehr am Handy).
+- Tests: `tools/test_hdmi.py` (39), `tools/test_hdmi_service.py` (29), `tools/test_twitch.py` (110).
+
 ## 0.9.84 (Beta)
 - Neu (Issue #24): **Sprachen**. Standard ist Englisch. Beim ersten Öffnen erscheint die Auswahl, später steht sie im Kopf und unten in der Karte "Language". Auch die Anmeldeseite.
   - 14 Sprachen: Englisch, Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Datum und Uhrzeit folgen der Sprache.
