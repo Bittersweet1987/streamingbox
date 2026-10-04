@@ -6,6 +6,7 @@ Moblin, MIT-Lizenz, Copyright (c) 2023 Erik Moqvist) steht in dji_daemon.py. Lie
 import json
 import os
 import re
+import subprocess
 
 # ---------------------------------------------------------------- Bluetooth-Sticks
 
@@ -41,15 +42,53 @@ def clean_devname(text, limit=60):
     return re.sub(r"\s+", " ", s).strip()[:limit]
 
 
-def device_label(name, vendor=""):
-    """Standardname für die Anzeige: der gemeldete Produktname. Ist er nur eine Standardbezeichnung (z. B. "802.11ac NIC" oder "Bluetooth
-    Radio"), steht der Hersteller davor ("Realtek 802.11ac NIC"). Den Handelsnamen des Sticks (z. B. Logilink) kennt der Stick selbst oft nicht:
-    dafür kann man in der Oberfläche einen eigenen Namen vergeben."""
+_HWDB = {}                                    # USB-Kennung -> (Hersteller, Modell) aus der Hardware-Datenbank, damit nicht bei jeder Anzeige nachgefragt wird
+_VENDOR_SUFFIX = re.compile(r"[,\s]+(semiconductor\s+)?(corp(oration)?\.?|inc\.?|co\.?,?\s*ltd\.?|ltd\.?|gmbh)$", re.I)
+
+
+def hwdb_names(usb_id):
+    """Hersteller und Modell eines USB-Geräts aus der Hardware-Datenbank des Systems (systemd-hwdb, wie sie auch die Original-Oberfläche der BELABOX
+    anzeigt): zum Beispiel ("TP-Link", "Archer T2U Nano") für 2357:011e. Steht das Modell in eckigen Klammern, gilt der Teil darin (die Datenbank nennt dort
+    den Handelsnamen). ("", "") bei unbekannter Kennung oder ohne Datenbank."""
+    if usb_id in _HWDB:
+        return _HWDB[usb_id]
+    vendor = model = ""
+    m = re.match(r"^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$", str(usb_id or ""))
+    if m:
+        try:
+            out = subprocess.run(["systemd-hwdb", "query", "usb:v%sp%s" % (m.group(1).upper(), m.group(2).upper())],
+                                 capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            if line.startswith("ID_VENDOR_FROM_DATABASE="):
+                vendor = _VENDOR_SUFFIX.sub("", clean_devname(line.split("=", 1)[1], 40))
+            elif line.startswith("ID_MODEL_FROM_DATABASE="):
+                model = clean_devname(line.split("=", 1)[1], 80)
+        b = re.search(r"\[([^\]]+)\]", model)
+        if b:
+            model = b.group(1).strip()
+    _HWDB[usb_id] = (vendor, model)
+    return _HWDB[usb_id]
+
+
+def device_label(name, vendor="", usb_id=""):
+    """Anzeigename für die Oberfläche. Der gemeldete Produktname des Sticks, außer er ist nur eine Standardbezeichnung (z. B. "802.11ac NIC" oder
+    "Bluetooth Radio"): Dann gilt der Name aus der Hardware-Datenbank des Systems (z. B. "TP-Link Archer T2U Nano"), und gibt es den nicht, steht der
+    Hersteller vor der Bezeichnung ("Realtek 802.11ac NIC"). Den Handelsnamen, den auch die Datenbank nicht kennt (z. B. Logilink), kann man in der
+    Oberfläche selbst vergeben."""
     name, vendor = clean_devname(name), clean_devname(vendor, 40)
     if not name:
         return vendor
-    if vendor and vendor.lower() not in name.lower() and (_GENERIC_NAME.match(name) or len(name) < 8):
-        return f"{vendor} {name}"
+    if _GENERIC_NAME.match(name) or len(name) < 8:
+        db_vendor = db_model = ""
+        if usb_id:
+            db_vendor, db_model = hwdb_names(usb_id)
+            if db_model and not _GENERIC_NAME.match(db_model):
+                return db_model if db_vendor.lower() in db_model.lower() else f"{db_vendor} {db_model}".strip()
+        brand = db_vendor or vendor        # der Hersteller zur USB-Kennung (Handelsmarke) geht dem Hersteller aus den Daten des Sticks (oft der Chiphersteller) vor
+        if brand and brand.lower() not in name.lower():
+            return f"{brand} {name}"
     return name
 
 

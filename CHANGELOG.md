@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.63 (Beta)
+- Behoben (Issue #11): **Der Name des WLAN-Sticks kommt jetzt aus der Hardware-Datenbank des Systems, wie in der Original-Oberfläche der BELABOX.** Viele Sticks melden selbst nur ihre Funknorm ("802.11ac NIC"). Ist der gemeldete Name so eine Standardbezeichnung, fragt die Box die Datenbank des Systems (`systemd-hwdb`) nach der USB-Kennung und zeigt deren Namen: für einen TP-Link Archer T2U Nano (USB 2357:011e) "**TP-Link Archer T2U Nano**" statt "802.11ac NIC". Auf der Box mit der echten Datenbank geprüft. Kennt die Datenbank nur den Hersteller (zum Beispiel Realtek 0bda:c811), steht der Hersteller zur USB-Kennung vor der Bezeichnung (die Marke geht dem Chiphersteller aus den Stickdaten vor). Ein echter gemeldeter Name (zum Beispiel "ASUS USB-BT500") bleibt unverändert. Das gilt für WLAN-Sticks und Bluetooth-Sticks; ein eigener Name ("umbenennen") geht weiter vor.
+- Tests: Name aus der Datenbank für Standardbezeichnungen (mit eckigen Klammern, nur Hersteller, ohne Datenbank), nur einmal gefragt je Kennung.
+
 ## 0.9.62 (Beta)
 Rückmeldungen zu den GitHub-Issues #7 und #8.
 - Geändert (Issue #7): **Der Deckkraft-Regler pro kleinem Bild entfällt.** Ein Bild ist sichtbar ("Bild einblenden") oder ausgeblendet. Der Rahmen behält seine eigene Deckkraft (10 bis 100 %). Eine in 0.9.59/0.9.60 gespeicherte Deckkraft wird nicht mehr angewendet (das Bild ist voll sichtbar).

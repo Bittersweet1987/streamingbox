@@ -1805,6 +1805,49 @@ class DeviceNaming(unittest.TestCase):
         self.assertEqual(dji.device_label("", "Realtek"), "Realtek")
         self.assertEqual(dji.device_label("", ""), "")
 
+    HWDB_TPLINK = ("ID_VENDOR_FROM_DATABASE=TP-Link\nID_MODEL_FROM_DATABASE=AC600 wireless Realtek RTL8811AU [Archer T2U Nano]\n")
+
+    def hwdb(self, outputs):
+        """systemd-hwdb nachgebaut: outputs = {"usb:v2357p011E": Ausgabe}; gibt die Aufrufe zurück."""
+        import dji
+        dji._HWDB.clear()
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[0] != "systemd-hwdb":
+                raise FileNotFoundError(cmd[0])
+            return mock.Mock(stdout=outputs.get(cmd[2], ""))
+        return calls, mock.patch.object(dji.subprocess, "run", run)
+
+    def test_generic_names_use_the_name_from_the_system_hardware_database(self):
+        """Issue #11: Die Original-Oberfläche der BELABOX zeigt "TP-Link Archer T2U Nano", die Box zeigte "802.11ac NIC": Jetzt gilt der Name aus der Datenbank."""
+        import dji
+        calls, patch = self.hwdb({"usb:v2357p011E": self.HWDB_TPLINK})
+        with patch:
+            self.assertEqual(dji.hwdb_names("2357:011e"), ("TP-Link", "Archer T2U Nano"))            # Handelsname aus den eckigen Klammern
+            self.assertEqual(dji.device_label("802.11ac NIC", "Realtek", "2357:011e"), "TP-Link Archer T2U Nano")
+            self.assertEqual(dji.device_label("802.11ac NIC", "Realtek", "2357:011e"), "TP-Link Archer T2U Nano")
+            self.assertEqual(calls, [["systemd-hwdb", "query", "usb:v2357p011E"]])                      # Kennung groß geschrieben, nur einmal gefragt
+        self.assertEqual(server.DeviceNames.key("2357:011e"), "usb:2357:011e")
+
+    def test_database_name_only_replaces_generic_names_and_falls_back_cleanly(self):
+        import dji
+        calls, patch = self.hwdb({"usb:v2357p0604": "ID_VENDOR_FROM_DATABASE=TP-Link\nID_MODEL_FROM_DATABASE=UB500 Adapter\n",
+                                   "usb:v0BDApC811": "ID_VENDOR_FROM_DATABASE=Realtek Semiconductor Corp.\n"})        # Datenbank kennt nur den Hersteller
+        with patch:
+            self.assertEqual(dji.device_label("TP-Link UB500 Adapter", "Realtek", "2357:0604"), "TP-Link UB500 Adapter")   # echter Name bleibt
+            self.assertEqual(dji.device_label("Bluetooth Radio", "Realtek", "2357:0604"), "TP-Link UB500 Adapter")        # Standardname: Datenbank
+            self.assertEqual(dji.device_label("WLAN", "Ralink", "0bda:c811"), "Realtek WLAN")                              # Marke zur USB-Kennung vor dem Chiphersteller
+            self.assertEqual(dji.device_label("802.11ac NIC", "Realtek", "0bda:c811"), "Realtek 802.11ac NIC")             # kein Modell in der Datenbank
+            self.assertEqual(dji.hwdb_names("0bda:c811"), ("Realtek", ""))                                                  # Firmenzusatz abgeschnitten
+            self.assertEqual(dji.device_label("802.11ac NIC", "Realtek", ""), "Realtek 802.11ac NIC")                       # ohne Kennung (eingebaute Karte)
+            self.assertEqual(dji.hwdb_names("kaputt"), ("", ""))
+        dji._HWDB.clear()
+        with mock.patch.object(dji.subprocess, "run", side_effect=FileNotFoundError("systemd-hwdb")):                        # ohne Datenbank
+            self.assertEqual(dji.device_label("802.11ac NIC", "Realtek", "2357:011e"), "Realtek 802.11ac NIC")
+        dji._HWDB.clear()
+
     def test_typographic_dashes_and_control_characters_are_cleaned(self):
         import dji
         for dash in "\u2010\u2011\u2012\u2013\u2014\u2212\uff0d":

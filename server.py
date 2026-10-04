@@ -1914,12 +1914,12 @@ def label_bluetooth(st, names):
     Standardname aus der Meldung des Sticks (Hersteller davor, wenn der Name nur eine Standardbezeichnung ist)."""
     for a in st.get("adapters") or []:
         a["key"] = DeviceNames.key(a.get("usb_id", ""), "", a.get("address", ""))
-        default = dji.device_label(a.get("name", ""), a.get("vendor", "")) or ("Eingebauter Bluetooth-Adapter" if not a.get("usb_id") else "Bluetooth-Stick")
+        default = dji.device_label(a.get("name", ""), a.get("vendor", ""), a.get("usb_id", "")) or ("Eingebauter Bluetooth-Adapter" if not a.get("usb_id") else "Bluetooth-Stick")
         a["label"] = names.label(a["key"], default) if names and a["key"] else default
         a["custom"] = a["label"] != default
     for x in st.get("adapter_problems") or []:
         x["key"] = DeviceNames.key(x.get("id", ""))
-        default = dji.device_label(x.get("name", ""), "")
+        default = dji.device_label(x.get("name", ""), "", x.get("id", ""))
         x["label"] = names.label(x["key"], default) if names and x["key"] else default
     return st
 
@@ -1972,7 +1972,7 @@ class Wifi:
     def _name(self, card):
         """Schlüssel und Anzeigename der Karte: eigener Name, sonst der Standardname aus der Meldung des Sticks."""
         card["key"] = DeviceNames.key(card.get("usb_id", ""), card["iface"])
-        default = dji.device_label(card.get("name", ""), card.get("vendor", ""))
+        default = dji.device_label(card.get("name", ""), card.get("vendor", ""), card.get("usb_id", ""))
         card["label"] = self.names.label(card["key"], default) if self.names else default
         card["custom"] = bool(self.names and card["label"] != default)
 
