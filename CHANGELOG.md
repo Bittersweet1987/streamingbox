@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.54 (Beta)
+- Neu (Issue #3, Rest): **Ladesymbol 🔌 für die Osmo Action 4.** Die Statusnachricht der Kamera zeigt es: Byte 2 steht auf 0x11, solange das Ladekabel steckt, und auf 0x10, sobald es abgezogen ist. Das wurde auf einer echten Box gesehen: Beim Abziehen sprang das Byte, beim Wackeln am Kabel wechselte es mehrfach hin und her, und der Akkustand fiel danach von 100 auf 99 %. **Nur für die Action 4**, an der es beobachtet wurde; bei allen anderen Modellen bleibt "lädt" unbekannt (kein Symbol), nie geraten.
+  Wer eine andere Kamera hat und das Laden zeigen möchte: Ladekabel abziehen und wieder anstecken und die Zeilen "Statusnachricht" aus dem Journal des DJI-Dienstes schicken.
+- Geändert: **Akku im Status als eigene Spalte mit Überschrift.** In "Status, Kameras" steht der Akku jetzt in einer Spalte mit der kleinen Überschrift "Akku", mittig; Überschrift und Werte liegen übereinander. Die Spaltenbreiten richten sich nach dem Inhalt (ein gemeinsames Raster für Name, Akku und Datenrate): Ein langer Kameraname wird mit Auslassungspunkten gekürzt, statt Akku und Datenrate zu verschieben. Hat keine Kamera einen Akkustand (zum Beispiel nur Handys), gibt es die Spalte nicht.
+- Geändert: **Das Journal des DJI-Dienstes ist übersichtlicher.** Statusnachrichten stehen nur noch drin, wenn sich ein Byte ändert, das nicht ständig schwankt (die Kamera schickt alle paar Sekunden eine neue Nachricht, in der einzelne Bytes dauernd wechseln). Vorher waren es einige hundert Zeilen pro halbe Stunde.
+- Geändert: **Klarere Meldung nach dem Streamstart.** Meldet Bluetooth "getrennt", kommen aber weiter Statusnachrichten (Akku) von der Kamera, steht dort: "Der Stream läuft; die Steuerung per Bluetooth ist beendet, Statusmeldungen (Akku) kommen weiter" (so ist es bei der Action 4: BlueZ stellt die Verbindung selbst wieder her, bleak bemerkt das nicht). Der Akkustand bleibt dabei aktuell.
+- Hinweis: Diese Version ändert den DJI-Dienst: Beim Einspielen werden die Kameras einmal getrennt und bauen ihren Stream neu auf. Nicht während einer Übertragung einspielen.
+- Tests: Laden bei der Action 4 (Kabel an, ab, wieder an), unbekannt bei anderen Modellen, Journal ohne Dauerschwankungen (73 Tests für den DJI-Dienst).
+
 ## 0.9.53 (Beta)
 Drei Wünsche aus den Issues auf GitHub (#1, #2, #3) und der Live-Knopf in der Kopfleiste.
 - Neu (#1): **Updates werden nach dem Start der Box gesucht und angezeigt.** Die Box sucht nach dem Start von selbst (die GitHub-Abfrage nach 30 Sekunden, die Systemupdates nach 2 Minuten statt vorher 10) und **immer einmal nach jedem Start**, auch wenn die letzte Suche noch keine 6 Stunden her war. Öffnet jemand die Oberfläche (Anmeldung), wird gleich gesucht, ohne die zwei Minuten abzuwarten (einmal je Start, still).

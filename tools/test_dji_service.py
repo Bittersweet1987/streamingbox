@@ -458,8 +458,9 @@ class FakeChar:
 class CameraSim:
     """Verhält sich wie eine DJI-Kamera: antwortet auf jede Nachricht des Dienstes."""
 
-    def __init__(self, wifi_ok=True, battery=77, connect_delay=0.0):
+    def __init__(self, wifi_ok=True, battery=77, connect_delay=0.0, byte2=0x10):
         self.wifi_ok, self.battery, self.connect_delay = wifi_ok, battery, connect_delay
+        self.byte2 = byte2
         self.sent = []
         self.connecting = 0
         self.max_connecting = 0
@@ -467,6 +468,14 @@ class CameraSim:
         self.client = None
         self.scan_on_during_connect = None
         self.found = True
+
+    def status_message(self, byte2=None, battery=None, extra=None):
+        pl = bytearray(34)
+        pl[2] = self.byte2 if byte2 is None else byte2
+        pl[20] = self.battery if battery is None else battery
+        for i, v in (extra or {}).items():
+            pl[i] = v
+        return dd.Message(0, 0, dd.TY_STATUS, bytes(pl)).encode()
 
     def drop_bluetooth(self):
         """Die Kamera (oder der Funkchip) beendet die Bluetooth-Verbindung."""
@@ -506,8 +515,7 @@ class FakeClient:
     async def start_notify(self, ch, cb):
         if ch.uuid.startswith("0000fff4"):
             self.cb = cb
-            data = dd.Message(0, 0, dd.TY_STATUS, bytes(20) + bytes([self.sim.battery])).encode()
-            asyncio.get_event_loop().call_soon(cb, ch, data)
+            asyncio.get_event_loop().call_soon(cb, ch, self.sim.status_message())
 
     async def write_gatt_char(self, ch, data, response=False):
         msg = dd.Message.decode(data)
@@ -628,6 +636,62 @@ class Session(unittest.TestCase):
             self.assertTrue(await self.wait_state(dm.cameras[ADDR], ("streaming",)))
             self.assertTrue(sim.scan_on_during_connect)                           # sonst: "device not found"
             self.assertEqual(SHARED["scans_on"], 0)                               # nach dem Verbindungsaufbau ist die Suche aus
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_charging_is_read_from_byte_2_of_the_status_message_on_an_action_4(self):
+        """Beobachtet an einer Osmo Action 4: Byte 2 = 0x11 mit Kabel, 0x10 ohne. Andere Modelle: unbekannt, nie geraten."""
+        async def go():
+            sim = CameraSim(battery=100, byte2=0x11)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, kind="action4", model="Osmo Action 4")
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            self.assertIs(cam.public()["charging"], True)                         # Kabel steckt
+            sim.client.cb(None, sim.status_message(byte2=0x10, battery=99))       # Kabel abgezogen
+            await asyncio.sleep(0.1)
+            self.assertIs(cam.public()["charging"], False)
+            self.assertEqual(cam.public()["battery"], 99)
+            sim.client.cb(None, sim.status_message(byte2=0x11, battery=99))       # und wieder angesteckt
+            await asyncio.sleep(0.1)
+            self.assertIs(cam.public()["charging"], True)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_charging_stays_unknown_for_models_where_it_was_not_observed(self):
+        async def go():
+            sim = CameraSim(battery=80, byte2=0x11)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)                                              # Osmo Action 5 Pro
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            self.assertIsNone(cam.public()["charging"])
+            self.assertEqual(cam.public()["battery"], 80)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_status_journal_only_lists_bytes_that_rarely_change(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            with self.assertLogs("pipbox-dji", level="INFO") as cm:
+                for i in range(12):                                               # Byte 1 schwankt ständig (Temperatur o. ä.)
+                    sim.client.cb(None, sim.status_message(extra={1: 47 + i % 2}))
+                    await asyncio.sleep(0.01)
+                sim.client.cb(None, sim.status_message(byte2=0x11, extra={1: 47}))   # ein Byte, das selten wechselt
+                await asyncio.sleep(0.05)
+            lines = [l for l in cm.output if "Statusnachricht" in l]
+            self.assertLessEqual(len(lines), 6)                                   # nicht jede Schwankung
+            self.assertIn("11", lines[-1])
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 

@@ -1072,6 +1072,13 @@ class HeaderControls(unittest.TestCase):
             self.assertNotIn('id="%s"' % i, self.header[:self.header.index('class="hdr"')])
         self.assertNotIn("updlink", self.html)
 
+    def test_status_cameras_show_the_battery_in_its_own_centered_column_with_a_heading(self):
+        self.assertIn('<div class="hrow"><span></span><span>Akku</span><span></span></div>', self.html)
+        self.assertIn("grid-template-columns:minmax(0,1fr) auto auto", self.html)          # Breiten nach dem Inhalt, der Name bekommt den Rest
+        self.assertIn("#camlights .battcell{text-align:center", self.html)
+        self.assertIn("text-overflow:ellipsis", self.html[self.html.index("#camlights .row .nm"):][:200])    # langer Name wird gekürzt
+        self.assertIn("const any=list.some(c=>c.battery!=null)", self.html)               # ohne Akkustand keine Spalte
+
     def test_data_badge_no_longer_says_live(self):
         self.assertNotIn('mode.textContent=m.demo?"Demo-Werte":"live"', self.html)
         self.assertIn('"Demo-Werte":"verbunden"', self.html)

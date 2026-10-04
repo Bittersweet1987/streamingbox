@@ -173,6 +173,10 @@ MODELS = {
 NEW_PROTOCOL = ("action5", "action6", "pocket4")  # brauchen nach dem Start die Bestätigungsnachricht
 CONFIGURE_KINDS = {"action4": 0x08, "action6": 0x08, "action5": 0x1A}
 ACTION2_NAME = "Osmo Action 2"                     # Fernsteuerung klappt laut Moblin nicht
+# Wo steht "lädt" in der Statusnachricht (Typ 0x020D00)? Beobachtet an einer Osmo Action 4 (4. Okt 2026): Byte 2 ist 0x11, solange das
+# Ladekabel steckt, und 0x10, sobald es abgezogen ist (beim Wackeln am Kabel wechselte es mit); der Akkustand fiel danach von 100 auf 99 %.
+# Für andere Modelle ist es nicht bekannt: dort bleibt "lädt" unbekannt (None), nie geraten.
+CHARGING_BYTE = {"action4": (2, 0x01)}
 
 RESOLUTIONS = {"480p": 0x47, "720p": 0x04, "1080p": 0x0A}
 FPS = {25: 2, 30: 3}
@@ -304,6 +308,10 @@ async def bluez_cleanup(addr):
             pass
 
 
+def cfg_kind(cfg):
+    return cfg.get("kind", "unknown")
+
+
 def friendly_error(e):
     """Verständlicher Text für die bekannten Fehler beim Verbinden (None: unbekannt, dann mit Ablaufverfolgung ins Journal)."""
     text = str(e).lower()
@@ -352,8 +360,9 @@ class Camera:
         self.detail = ""
         self.battery = None          # zuletzt gemeldeter Akkustand in Prozent; bleibt nach dem Verlust von Bluetooth stehen (mit Alter)
         self.battery_at = 0.0        # wann er gemeldet wurde
-        self.charging = None         # lädt die Kamera? None = unbekannt (siehe status_details)
-        self._status_hex = ''
+        self.charging = None         # lädt die Kamera? None = unbekannt (nur für Modelle in CHARGING_BYTE bekannt)
+        self._status_prev = None      # letzte Statusnachricht (zum Erkennen geänderter Bytes)
+        self._status_flips = {}       # Byte -> wie oft es sich geändert hat
         self.task = None
         self.stop_requested = False
         self.manual_off = False      # "Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden"
@@ -505,12 +514,21 @@ class Camera:
             if msg.type == TY_STATUS and len(msg.payload) >= 21:
                 self.battery = msg.payload[20]
                 self.battery_at = time.time()
-                # Zur Klärung, ob die Statusnachricht auch "lädt" enthält: ändert sich ein anderes Byte als der Akkustand, ins Journal
-                rest = bytes(msg.payload[:20]) + bytes(msg.payload[21:])
-                if rest.hex() != self._status_hex:
-                    if self._status_hex:
-                        log.info("%s: Statusnachricht (%d Byte, Akku %d %%): %s", self.addr, len(msg.payload), self.battery, msg.payload.hex())
-                    self._status_hex = rest.hex()
+                spec = CHARGING_BYTE.get(cfg_kind(self.cfg))
+                if spec and len(msg.payload) > spec[0]:
+                    self.charging = bool(msg.payload[spec[0]] & spec[1])
+                # Zur Klärung bei anderen Modellen: Ändert sich ein Byte der Statusnachricht (außer dem Akkustand), das nicht ständig schwankt,
+                # steht die Nachricht im Journal. Bytes, die schon oft gewechselt haben, gelten als schwankend (Temperatur o. ä.) und zählen nicht.
+                cur = bytes(msg.payload)
+                if self._status_prev is None:
+                    log.info("%s: Statusnachricht (%d Byte, Akku %d %%): %s", self.addr, len(cur), self.battery, cur.hex())
+                else:
+                    changed = [i for i in range(min(len(cur), len(self._status_prev))) if i != 20 and cur[i] != self._status_prev[i]]
+                    for i in changed:
+                        self._status_flips[i] = self._status_flips.get(i, 0) + 1
+                    if any(self._status_flips[i] <= 3 for i in changed):
+                        log.info("%s: Statusnachricht (%d Byte, Akku %d %%): %s", self.addr, len(cur), self.battery, cur.hex())
+                self._status_prev = cur
                 return
             queue.put_nowait(msg)
 
@@ -626,7 +644,10 @@ class Camera:
                     if publishing is None or publishing:
                         last_ok = now
                         if bt_lost:
-                            self.set_state("streaming", "Der Stream läuft, die Bluetooth-Verbindung ist getrennt")
+                            if time.time() - self.last_rx < 20:
+                                self.set_state("streaming", "Der Stream läuft; die Steuerung per Bluetooth ist beendet, Statusmeldungen (Akku) kommen weiter")
+                            else:
+                                self.set_state("streaming", "Der Stream läuft, die Bluetooth-Verbindung ist getrennt")
                     elif now - last_ok > self.STREAM_LOST_SECONDS:
                         raise CameraError("Der Stream ist ausgefallen (Kamera außer Reichweite des WLANs?)")
                 if not bt_lost and now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):

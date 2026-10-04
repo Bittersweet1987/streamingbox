@@ -88,8 +88,16 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .camcol{display:flex;flex-direction:column;gap:8px;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
 .camcol[hidden]{display:none}
 .camcol.slotoff{display:none}
-.batt{font-size:12px;margin-left:6px;white-space:nowrap}
+.batt{font-size:13px;white-space:nowrap}
 .batt.stale{opacity:.6}
+#camlights .row .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Mit Akkustand: ein gemeinsames Raster (Name | Akku | Datenrate). Die Breite der beiden rechten Spalten richtet sich nach dem längsten Inhalt, der Name bekommt den Rest und wird bei Bedarf gekürzt; Überschrift und Werte teilen sich dieselbe Spalte und stehen mittig übereinander. */
+#camlights.hasbatt{display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:14px;align-items:baseline}
+#camlights.hasbatt .row,#camlights.hasbatt .hrow{display:contents}
+#camlights.hasbatt .row>span{padding:4px 0}
+#camlights.hasbatt .row>span:last-child{text-align:right;white-space:nowrap}
+#camlights .battcell{text-align:center;white-space:nowrap}
+#camlights .hrow span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:2px;text-align:center}
 .cam .camnet{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px}
 .cam .camnet select{padding:2px 6px;font-size:12px;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
@@ -442,10 +450,15 @@ function battHtml(c){
   if(c.battery==null) return "";
   const col=c.battery>75?"var(--ok)":(c.battery<25?"var(--crit)":""), age=c.battery_age, stale=age!=null&&age>600;
   const when=stale?` (Stand vor ${age>=3600?Math.round(age/3600)+" Std.":Math.round(age/60)+" Min."})`:"";
-  return ` <span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", lädt":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
+  return `<span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", lädt":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
 }
 function renderCamLights(list){
-  setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}${battHtml(c)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
+  // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt
+  // (Auslassungspunkte), statt die Spalten zu verschieben. Ohne Akkustand bleibt es bei Name und Datenrate.
+  const any=list.some(c=>c.battery!=null), box=$("camlights");
+  box.classList.toggle("hasbatt",any);
+  const head=any&&list.length?'<div class="hrow"><span></span><span>Akku</span><span></span></div>':"";
+  setHtml(box,list.length?head+list.map(c=>`<div class="row"><span class="nm"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span>${any?`<span class="battcell">${battHtml(c)}</span>`:""}<span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
 const netLabel=o=>`${o.label} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
