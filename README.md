@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.46 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.47 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -10,7 +10,7 @@ Voraussetzung: eine BELABOX mit dem BELABOX-Image (getestet: Radxa ROCK 5B+ und 
 Terminal auf der Box (SSH oder Tastatur). Nicht während einer Übertragung installieren.
 
 **Schritt 1: BELABOX-Passwort.** Hat die BELABOX noch kein Passwort (frisches Image), zuerst in der BELABOX-Oberfläche
-(`http://<Adresse der Box>/`) eines festlegen. Die Oberfläche dieses Pakets meldet sich mit demselben Passwort an; einen eigenen Setup-Code gibt es nicht.
+(`http://<Adresse der Box>/`) eines festlegen. Die Oberfläche dieses Pakets meldet sich mit demselben Passwort an; einen eigenen Setup-Code gibt es nicht. Mit dem Haken "Angemeldet bleiben" bleibt die Anmeldung 30 Tage bestehen, auch über Updates hinweg.
 
 **Schritt 2: Installieren.** Auf der Box im Terminal:
 
@@ -88,8 +88,8 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   ausdrücklichen Knopfdruck **Funnel** einschalten (öffentlich im Internet, nur durch das BELABOX-Passwort geschützt, rote Warnung, endet nach 8 Stunden von selbst).
 - **Software-Update:** In der Oberfläche nach neuen Versionen suchen und installieren. Die letzten 5 Versionen bleiben
   gesichert; man kann gezielt auf eine Version wechseln, auch auf eine ältere (gesichert oder als Release `vX.Y.Z` auf
-  GitHub). Nicht während einer Übertragung. Ein **gelber Punkt in der Kopfleiste** zeigt, wenn eine neuere Version da ist.
-- **System-Updates** der BELABOX über einen getrennten Root-Helfer mit festen Aktionen.
+  GitHub). Nicht während einer Übertragung. Ein **gelber Punkt in der Kopfleiste** zeigt, wenn eine neuere Version da ist. Ein zweiter Punkt zeigt, wenn **Systemupdates** der BELABOX bereitliegen; dafür sucht die Box höchstens einmal am Tag still nach (nie während einer Übertragung). Ohne Updates sind beide Punkte aus.
+- **System-Updates** der BELABOX über einen getrennten Root-Helfer mit festen Aktionen. Die Box sucht höchstens einmal am Tag von selbst nach Updates (nur die Paketliste, nie während einer Übertragung); der gelbe Punkt "System" in der Kopfleiste zeigt, wenn welche bereitliegen.
 - **Automatisch live gehen** nach dem Start der Box (Schalter in der Live-Karte, standardmäßig aus): einmal pro Start, sobald eine Kamera sendet.
 - **Streammodus** (Knopf im Kopf der Seite und in der Live-Karte): blendet Adressen, Namen und Protokolle aus, wenn der Bildschirm mitgefilmt wird. Die Einstellung merkt sich nur der Browser.
 - **Mindestanteil je Sendeweg** (bei "Alle Leitungen gleichzeitig nutzen"): Jeder geeignete Weg bekommt mindestens 10 Prozent der Pakete, damit auch ein schwächerer Weg (Mobilfunk neben DSL, Starlink neben 5G) warm bleibt und bei einem Ausfall des besten nicht erst anlaufen muss. Siehe `srtla/README.md`.
@@ -158,7 +158,7 @@ Siehe [KONZEPT.md](KONZEPT.md) und [CHANGELOG.md](CHANGELOG.md).
 python3 server.py --demo
 ```
 
-Dann `http://127.0.0.1:8780/` öffnen.
+Dann `http://127.0.0.1:8780/` öffnen. In der Demo ist das Passwort schon eingetragen (einfach "Anmelden" klicken); sie läuft nur auf dem eigenen Rechner.
 
 ## Software-Update
 

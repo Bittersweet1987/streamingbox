@@ -2,7 +2,7 @@
 """Root-Helfer für Systemupdates. Wird nur durch pipbox-update.path gestartet.
 
 Liest aus der Auslösedatei ausschließlich ein Stichwort aus einer festen Liste
-(check, dry, run, reboot). Alles andere wird verworfen. Nimmt keine Befehle,
+(check, dry, run, reboot, autocheck). Alles andere wird verworfen. Nimmt keine Befehle,
 Paketnamen oder Pfade von der Weboberfläche an.
 
 Vorgehen wie bei der Update-Funktion von belaUI: apt-get update, dann
@@ -26,7 +26,7 @@ STATUS = f"{STATE}/update-status.json"
 LOG = f"{STATE}/update.log"
 SNAPSHOTS = STATE
 LOCK = "/run/pipbox-update.lock"
-MODES = ("check", "dry", "run", "reboot")
+MODES = ("check", "dry", "run", "reboot", "autocheck")
 REBOOT_PKGS = ("l4t", "belabox-linux-", "belabox-network-config")
 MIN_FREE = 1536 * 1024 * 1024
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
@@ -239,6 +239,27 @@ def do_check():
     finish_plan("check", s)
 
 
+def do_autocheck(prev):
+    """Tägliche stille Suche (löst der Server aus): wie "check", aber ohne den Zustand "läuft" und ohne Fehlermeldung. Läuft eine Übertragung oder
+    ist die Paketliste nicht erreichbar (kein Internet), bleibt der bisherige Zustand der Karte unverändert."""
+    def restore():
+        save_status(**{k: prev[k] for k in ("state", "mode", "message", "finished", "started") if k in prev})
+    if belacoder_running():
+        return
+    rc, _ = run_apt(["update", "--allow-releaseinfo-change"] + APT_LOCK)
+    if rc != 0:
+        log("Automatische Suche: Paketliste nicht ladbar (Internet?), nichts geändert.")
+        restore()
+        return
+    s = plan()
+    if s["rc"] != 0:
+        log("Automatische Suche: Planung fehlgeschlagen, nichts geändert.")
+        restore()
+        return
+    save_status(last_check=now())
+    finish_plan("check", s)
+
+
 def do_dry():
     s = plan()
     if s["rc"] != 0:
@@ -350,11 +371,12 @@ def main():
     except OSError:
         log("Es läuft bereits ein Update; Anforderung verworfen.")
         return 0
-    if mode != "reboot":
+    prev = load_status()
+    if mode not in ("reboot", "autocheck"):
         save_status(state="running", mode=mode, started=now(), message="")
     log(f"=== {time.strftime('%F %T')} Anforderung: {mode} ===")
     try:
-        {"check": do_check, "dry": do_dry, "run": do_run, "reboot": do_reboot}[mode]()
+        {"check": do_check, "dry": do_dry, "run": do_run, "reboot": do_reboot, "autocheck": lambda: do_autocheck(prev)}[mode]()
     except Exception as e:  # nie ohne Statusmeldung enden
         log(f"Fehler: {e}")
         save_status(state="failed", finished=now(), message=f"Interner Fehler: {e}")

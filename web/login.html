@@ -14,6 +14,8 @@ p{margin:0;color:var(--muted);font-size:13px}
 input,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 button{background:var(--bar);color:#0f172a;font-weight:600;border-color:transparent;cursor:pointer}
 .err{color:var(--crit);font-size:13px;min-height:18px}
+.rem{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+.rem input{width:18px;height:18px;padding:0;margin:0;accent-color:var(--bar)}
 </style>
 </head>
 <body>
@@ -23,6 +25,7 @@ button{background:var(--bar);color:#0f172a;font-weight:600;border-color:transpar
   <input id="code" placeholder="Setup-Code" autocomplete="off" hidden>
   <input id="pw" type="password" placeholder="Passwort" autocomplete="current-password" required>
   <input id="pw2" type="password" placeholder="Passwort wiederholen" autocomplete="new-password" hidden>
+  <label class="rem"><input id="rem" type="checkbox"> Angemeldet bleiben</label>
   <button type="submit" id="btn">Anmelden</button>
   <div class="err" id="err"></div>
 </form>
@@ -42,6 +45,7 @@ function check(){
     if(waiting&&a.configured){ location.reload(); return; }          // Passwort ist inzwischen gesetzt: Anmeldung zeigen
     setup=!a.configured;
     if(a.mode==="belabox") $("hint").textContent="Anmelden mit dem BELABOX-Passwort";
+    if(a.mode==="demo"){ $("hint").textContent="Vorschau: Das Passwort ist schon eingetragen, einfach anmelden."; $("pw").value=a.demo_password||""; }
     if(setup){
       $("hint").textContent="Ersteinrichtung: Den Setup-Code finden Sie auf der Box in der Datei /var/lib/pipbox/setup-code. Dann Passwort festlegen (mindestens 10 Zeichen).";
       $("code").hidden=false; $("pw2").hidden=false; $("btn").textContent="Passwort festlegen";
@@ -53,7 +57,7 @@ check();
 $("f").addEventListener("submit",async e=>{
   e.preventDefault(); $("err").textContent="";
   if(setup && $("pw").value!==$("pw2").value){ $("err").textContent="Die Passwörter stimmen nicht überein"; return; }
-  const body=setup?{code:$("code").value.trim(),password:$("pw").value}:{password:$("pw").value};
+  const body=setup?{code:$("code").value.trim(),password:$("pw").value,remember:$("rem").checked}:{password:$("pw").value,remember:$("rem").checked};
   const r=await fetch(setup?"/api/setup":"/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok) location.reload(); else $("err").textContent=(await r.json()).error;
 });

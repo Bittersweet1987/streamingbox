@@ -878,6 +878,98 @@ class AuthModes(unittest.TestCase):
         server.Auth(os.path.join(d, "state"), cfg)
         self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
 
+    def test_demo_has_the_password_from_the_start_and_no_setup_code(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "state"))
+        with open(os.path.join(d, "state", "setup-code"), "w") as f:
+            f.write("alt\n")
+        a = server.Auth(os.path.join(d, "state"), None, demo=True)
+        self.assertEqual((a.mode, a.configured, a.setup_code), ("demo", True, None))
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
+        self.assertFalse(os.path.exists(os.path.join(d, "state", "auth.json")))      # nichts auf der Platte
+        self.assertTrue(a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1"))
+        with self.assertRaises(ValueError):
+            a.login("falsch", "127.0.0.1")
+        with self.assertRaises(ValueError):
+            a.set_password("x", "ein-langes-passwort", "127.0.0.1")
+
+    def test_demo_never_replaces_the_belabox_password(self):
+        d, cfg = self.bela({"password_hash": "$2b$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234"})
+        a = server.Auth(os.path.join(d, "state"), cfg, demo=True)
+        self.assertEqual(a.mode, "belabox")
+        with mock.patch.object(a, "bela_ok", lambda pw, h: pw == "richtig"):
+            with self.assertRaises(ValueError):
+                a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1")
+
+    def test_without_demo_there_is_no_preset_password(self):
+        d = tempfile.mkdtemp()
+        a = server.Auth(os.path.join(d, "state"), None)
+        self.assertEqual(a.mode, "own")
+        with self.assertRaises(ValueError):
+            a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1")
+
+    def test_remembered_session_survives_a_restart_but_a_normal_one_does_not(self):
+        d = tempfile.mkdtemp()
+        st = os.path.join(d, "state")
+        a = server.Auth(st, None, demo=True)
+        t_rem = a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1", True)
+        t_norm = a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1")
+        self.assertTrue(a.valid(t_rem) and a.valid(t_norm))
+        b = server.Auth(st, None, demo=True)                       # Neustart der Oberfläche (z. B. nach einem Update)
+        self.assertTrue(b.valid(t_rem))
+        self.assertFalse(b.valid(t_norm))
+        self.assertFalse(b.valid("") or b.valid("irgendwas"))
+
+    def test_remembered_sessions_are_stored_hashed_and_private(self):
+        d = tempfile.mkdtemp()
+        st = os.path.join(d, "state")
+        a = server.Auth(st, None, demo=True)
+        tok = a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1", True)
+        path = os.path.join(st, "sessions.json")
+        with open(path) as f:
+            raw = f.read()
+        self.assertNotIn(tok, raw)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1")
+        self.assertFalse(os.path.exists(path + ".tmp"))
+
+    def test_logout_ends_a_remembered_session(self):
+        d = tempfile.mkdtemp()
+        st = os.path.join(d, "state")
+        a = server.Auth(st, None, demo=True)
+        tok = a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1", True)
+        a.logout(tok)
+        self.assertFalse(a.valid(tok))
+        self.assertFalse(server.Auth(st, None, demo=True).valid(tok))
+
+    def test_remembered_session_expires_after_30_days(self):
+        d = tempfile.mkdtemp()
+        st = os.path.join(d, "state")
+        a = server.Auth(st, None, demo=True)
+        now = time.time()
+        with mock.patch.object(server.time, "time", lambda: now):
+            tok = a.login(server.Auth.DEMO_PASSWORD, "127.0.0.1", True)
+        b = server.Auth(st, None, demo=True)
+        with mock.patch.object(server.time, "time", lambda: now + server.REMEMBER_SECONDS - 60):
+            self.assertTrue(b.valid(tok))
+        with mock.patch.object(server.time, "time", lambda: now + server.REMEMBER_SECONDS + 60):
+            self.assertFalse(b.valid(tok))
+
+    def test_remembered_sessions_end_when_the_belabox_password_changes(self):
+        d, cfg = self.bela({"password_hash": "$2b$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234"})
+        a = server.Auth(os.path.join(d, "state"), cfg)
+        with mock.patch.object(a, "bela_ok", lambda pw, h: True):
+            tok = a.login("egal", "127.0.0.1", True)
+        self.assertTrue(server.Auth(os.path.join(d, "state"), cfg).valid(tok))
+        with open(cfg, "w") as f:
+            json.dump({"password_hash": "$2b$10$zzzzzzzzzzzzzzzzzzzzzzabcdefghijklmnopqrstuvwxyz01234"}, f)
+        self.assertFalse(server.Auth(os.path.join(d, "state"), cfg).valid(tok))
+
+    def test_remember_flag_must_be_exactly_true_in_the_request(self):
+        import inspect
+        src = inspect.getsource(server.Handler.do_POST)
+        self.assertIn('d.get("remember") is True', src)
+
 
 class UpdateHelperRepair(unittest.TestCase):
     """System-Updates: ein unterbrochener Paketlauf (dpkg was interrupted) wird erkannt und vor dem Update abgeschlossen."""
@@ -1158,6 +1250,98 @@ class FunnelRequests(unittest.TestCase):
 
     def test_address_from_other_peers_ignores_the_header(self):
         self.assertEqual(self.handler("192.168.1.20", "203.0.113.9").ip(), "192.168.1.20")
+
+
+class AutoSystemCheck(unittest.TestCase):
+    """Tägliche stille Suche nach Systemupdates: wann sie fällig ist, was der Helfer dabei tut (und nicht tut)."""
+    U = server.Updates
+    DAY = 24 * 3600
+
+    def due(self, st=None, now=10 * 24 * 3600, uptime=3600, streaming=False, pending=False, last_try=0, helper=True):
+        return self.U.auto_check_due(st if st is not None else {"state": "done", "last_check": now - self.DAY - 5}, now, uptime, streaming, pending, last_try, helper)
+
+    def test_due_after_a_day_and_never_checked(self):
+        self.assertTrue(self.due())
+        self.assertTrue(self.due(st={"state": "never"}))
+        self.assertTrue(self.due(st={}))
+
+    def test_not_due_when_checked_recently(self):
+        now = 10 * self.DAY
+        self.assertFalse(self.due(st={"state": "done", "last_check": now - 3600}, now=now))
+        self.assertFalse(self.due(st={"state": "done", "last_check": now - self.DAY + 60}, now=now))
+
+    def test_never_while_sending_or_busy_or_pending(self):
+        self.assertFalse(self.due(streaming=True))
+        self.assertFalse(self.due(pending=True))
+        self.assertFalse(self.due(st={"state": "running", "last_check": 0}))
+        self.assertFalse(self.due(st={"state": "rebooting"}))
+        self.assertFalse(self.due(helper=False))
+
+    def test_not_right_after_boot_and_with_retry_pause(self):
+        self.assertFalse(self.due(uptime=120))
+        now = 10 * self.DAY
+        self.assertFalse(self.due(now=now, last_try=now - 3600))                     # vor kurzem versucht (z. B. kein Internet)
+        self.assertTrue(self.due(now=now, last_try=now - 7 * 3600))
+
+    def make(self):
+        d = tempfile.mkdtemp()
+        u = server.Updates(d, demo=False)
+        return d, u
+
+    def test_request_file_gets_only_the_fixed_word(self):
+        d, u = self.make()
+        with mock.patch.object(u, "status", lambda: {"state": "done", "last_check": 0, "streaming": False, "helper_installed": True}), \
+                mock.patch.object(server, "read", lambda p, d=None: "9999\n" if "uptime" in p else (d or "")):
+            self.assertTrue(u.auto_check())
+            self.assertEqual(open(os.path.join(d, "update-request")).read(), "autocheck\n")
+            self.assertFalse(u.auto_check())                                          # Anforderung liegt noch: nicht noch einmal
+
+    def test_demo_and_api_do_not_trigger_it(self):
+        d, u = self.make()
+        u.demo = True
+        self.assertFalse(u.auto_check())
+        u.demo = False
+        with self.assertRaises(ValueError):
+            u.request("autocheck", True)                                              # über die Schnittstelle nicht erreichbar
+
+    def helper(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pbupdate_auto", os.path.join(os.path.dirname(HERE), "install", "pipbox-update.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def test_helper_knows_the_word(self):
+        self.assertIn("autocheck", self.helper().MODES)
+
+    def test_helper_failure_leaves_the_old_state_untouched(self):
+        m = self.helper()
+        saved = {}
+        prev = {"state": "failed", "mode": "run", "message": "Update fehlgeschlagen: x", "finished": 5, "started": 4}
+        with mock.patch.object(m, "belacoder_running", lambda: False), mock.patch.object(m, "log", lambda l: None), \
+                mock.patch.object(m, "run_apt", lambda a, p=None: (100, "kein Internet")), \
+                mock.patch.object(m, "save_status", lambda **kw: saved.update(kw)):
+            m.do_autocheck(prev)
+        self.assertEqual(saved, prev)                                                 # nichts Neues, alter Zustand zurückgesetzt
+
+    def test_helper_does_nothing_while_sending(self):
+        m = self.helper()
+        calls = []
+        with mock.patch.object(m, "belacoder_running", lambda: True), mock.patch.object(m, "run_apt", lambda a, p=None: calls.append(a) or (0, "")), \
+                mock.patch.object(m, "save_status", lambda **kw: calls.append(kw)):
+            m.do_autocheck({})
+        self.assertEqual(calls, [])
+
+    def test_helper_success_records_the_result_like_a_check(self):
+        m = self.helper()
+        saved = {}
+        plan = {"rc": 0, "count": 7, "download": "40 MB", "packages": ["belaui"], "belabox": ["belaui"], "held": [], "install_held": None}
+        with mock.patch.object(m, "belacoder_running", lambda: False), mock.patch.object(m, "log", lambda l: None), \
+                mock.patch.object(m, "run_apt", lambda a, p=None: (0, "")), mock.patch.object(m, "plan", lambda: plan), \
+                mock.patch.object(m, "save_status", lambda **kw: saved.update(kw)):
+            m.do_autocheck({"state": "never"})
+        self.assertEqual((saved["state"], saved["available"], saved["mode"]), ("done", 7, "check"))
+        self.assertIn("last_check", saved)
 
 
 if __name__ == "__main__":

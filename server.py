@@ -1293,6 +1293,7 @@ class CameraStore:
 
 
 SESSION_SECONDS = 12 * 3600
+REMEMBER_SECONDS = 30 * 24 * 3600     # "Angemeldet bleiben": überlebt Updates und Neustarts
 MAX_FAILS, FAIL_WINDOW = 5, 300
 
 
@@ -1305,18 +1306,27 @@ class Auth:
     Nur ohne belaUI (Entwicklung, Demo): eigenes Passwort. Erster Start: Der Server schreibt einen Setup-Code in
     <state>/setup-code (Rechte 0600, Besitzer pipbox). Wer den Code kennt, legt im Browser das Passwort fest; danach wird die
     Codedatei gelöscht. Passwort nur als PBKDF2-HMAC-SHA256-Hash. Ein eigenes Passwort aus einer früheren Version bleibt gültig.
+    Demo (--demo auf dem eigenen Rechner): Das Passwort ist von Anfang an gesetzt (DEMO_PASSWORD, nur im Speicher), ohne Setup-Code;
+    die Anmeldeseite füllt es vor. Nie auf einer Box: dort gilt immer das BELABOX-Passwort.
+    "Angemeldet bleiben": Eine solche Sitzung gilt 30 Tage und übersteht Neustarts der Oberfläche (z. B. nach einem Update). Auf der Platte
+    liegt nur ein SHA-256 des Sitzungsschlüssels (<state>/sessions.json, Rechte 0600) mit der Kennung des Passworts: Ändert sich das
+    Passwort (BELABOX oder eigenes), sind diese Sitzungen ungültig. Ohne Haken bleibt die Sitzung nur im Speicher (12 Stunden).
     """
 
     BELA_JS = ("const b=require(process.argv[1]);let d='';"
                "process.stdin.on('data',c=>d+=c).on('end',()=>"
                "process.exit(b.compareSync(d,process.argv[2])?0:1))")
 
-    def __init__(self, state_dir, bela_config=None):
+    DEMO_PASSWORD = "demo"
+
+    def __init__(self, state_dir, bela_config=None, demo=False):
         self.bela_config = bela_config  # belaUI config.json: BELABOX-Passwort mitbenutzen
+        self.demo = bool(demo)
         self.dir = state_dir
         self.path = os.path.join(state_dir, "auth.json")
         self.code_path = os.path.join(state_dir, "setup-code")
         self.sessions = {}
+        self.store_path = os.path.join(state_dir, "sessions.json")
         self.fails = {}
         self.lock = threading.Lock()
         os.makedirs(state_dir, exist_ok=True)
@@ -1327,7 +1337,14 @@ class Auth:
         except (OSError, ValueError):
             pass
         self.setup_code = None
-        if not self.cfg and not self.bela_hash() and not self.bela_pending():
+        if self.demo and not self.bela_hash():
+            salt = secrets.token_bytes(16)       # Vorschau: Passwort von Anfang an gesetzt, nichts auf der Platte
+            self.cfg = {"salt": salt.hex(), "hash": self._hash(self.DEMO_PASSWORD, salt).hex()}
+            try:
+                os.remove(self.code_path)
+            except OSError:
+                pass
+        elif not self.cfg and not self.bela_hash() and not self.bela_pending():
             self.setup_code = secrets.token_urlsafe(6)
             fd = os.open(self.code_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
@@ -1337,6 +1354,30 @@ class Auth:
                 os.remove(self.code_path)     # ein Code von früher ist nicht mehr nötig
             except OSError:
                 pass
+
+    def _cred(self):
+        """Kennung des gültigen Passworts: ändert es sich, werden gemerkte Sitzungen ungültig."""
+        h = self.bela_hash() or ("demo" if self.demo else (self.cfg or {}).get("hash")) or ""   # Demo: Salt ist bei jedem Start neu
+        return hashlib.sha256(("pbcred:" + h).encode()).hexdigest()
+
+    @staticmethod
+    def _tok_id(tok):
+        return hashlib.sha256(tok.encode()).hexdigest()
+
+    def _remembered(self):
+        try:
+            with open(self.store_path) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _save_remembered(self, d):
+        tmp = self.store_path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, self.store_path)
 
     def bela_hash(self):
         """bcrypt-Hash des BELABOX-Passworts (nur gelesen) oder None."""
@@ -1372,6 +1413,8 @@ class Auth:
     def mode(self):
         if self.bela_hash():
             return "belabox"
+        if self.demo and self.cfg:
+            return "demo"
         if self.cfg:
             return "own"                      # eigenes Passwort aus einer früheren Version bleibt gültig
         return "belabox-wartet" if self.bela_pending() else "own"
@@ -1422,7 +1465,7 @@ class Auth:
         except OSError:
             pass
 
-    def login(self, pw, ip):
+    def login(self, pw, ip, remember=False):
         if not self.configured:
             raise ValueError(self.WAITING_MSG if self.mode == "belabox-wartet" else "Noch kein Passwort gesetzt")
         if self.throttled(ip):
@@ -1441,15 +1484,34 @@ class Auth:
             now = time.time()
             self.sessions = {t: e for t, e in self.sessions.items() if e > now}
             self.sessions[tok] = now + SESSION_SECONDS
+            if remember:
+                keep = {k: v for k, v in self._remembered().items()
+                        if isinstance(v, list) and len(v) == 2 and v[0] > now and v[1] == self._cred()}
+                keep[self._tok_id(tok)] = [now + REMEMBER_SECONDS, self._cred()]
+                try:
+                    self._save_remembered(keep)
+                except OSError:
+                    pass          # dann gilt die Sitzung wie ohne Haken
         return tok
 
     def valid(self, tok):
+        if not tok:
+            return False
         with self.lock:
-            return bool(tok) and self.sessions.get(tok, 0) > time.time()
+            if self.sessions.get(tok, 0) > time.time():
+                return True
+            e = self._remembered().get(self._tok_id(tok))
+            return bool(isinstance(e, list) and len(e) == 2 and e[0] > time.time() and e[1] == self._cred())
 
     def logout(self, tok):
         with self.lock:
-            self.sessions.pop(tok, None)
+            self.sessions.pop(tok or "", None)
+            r = self._remembered()
+            if r.pop(self._tok_id(tok or ""), None) is not None:
+                try:
+                    self._save_remembered(r)
+                except OSError:
+                    pass
 
 
 KEY_PACKAGES = ("belabox-linux-rk3588", "belaui", "belacoder", "belabox-rk3588")
@@ -2130,6 +2192,51 @@ class Updates:
         with os.fdopen(fd, "w") as f:
             f.write(mode + "\n")
 
+    AUTO_EVERY = 24 * 3600        # so selten sucht die Box von selbst nach Systemupdates (und nie während einer Übertragung)
+    AUTO_RETRY = 6 * 3600         # nach einer Suche ohne Ergebnis (kein Internet) erst später wieder
+    AUTO_AFTER_BOOT = 10 * 60     # nach dem Start der Box nicht sofort suchen
+
+    @classmethod
+    def auto_check_due(cls, st, now, uptime, streaming, request_pending, last_try, helper=True):
+        """Ist es Zeit für die tägliche stille Suche nach Systemupdates? Reine Rechnung (testbar)."""
+        if not helper or streaming or request_pending or uptime < cls.AUTO_AFTER_BOOT:
+            return False
+        if st.get("state") in ("running", "rebooting"):
+            return False
+        if last_try and now - last_try < cls.AUTO_RETRY:
+            return False
+        last = st.get("last_check") or 0
+        return now - last >= cls.AUTO_EVERY
+
+    def auto_check(self, now=None, last_try=None):
+        """Legt, wenn es Zeit ist, die Anforderung "autocheck" ab. True, wenn angefordert wurde. Der Helfer sucht still: ohne Zustand
+        "läuft", ohne Fehlermeldung bei fehlendem Internet; das Ergebnis erscheint wie bei der Suche per Knopf (gelber Punkt in der Kopfleiste)."""
+        if self.demo:
+            return False
+        try:
+            uptime = float((read("/proc/uptime", "") or "0").split()[0])
+        except (ValueError, IndexError):
+            uptime = 0.0
+        st = self.status()
+        if not self.auto_check_due(st, now or time.time(), uptime, st.get("streaming", False), os.path.exists(self.req), last_try,
+                                   helper=st.get("helper_installed", False)):
+            return False
+        fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("autocheck\n")
+        return True
+
+    def auto_loop(self):
+        last_try = 0.0
+        time.sleep(60)
+        while True:
+            try:
+                if self.auto_check(last_try=last_try):
+                    last_try = time.time()
+            except Exception as e:                # nie den Dienst beenden
+                print("auto_check:", e)
+            time.sleep(15 * 60)
+
     def _fake(self, mode):
         f = self.fake
         f.update(state="running", mode=mode, message="")
@@ -2437,8 +2544,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             return self.page("index.html" if self.authed() else "login.html")
         if path == "/api/auth":
-            return self.reply(200, {"configured": self.auth.configured,
-                                    "mode": self.auth.mode, "authed": self.authed()})
+            out = {"configured": self.auth.configured, "mode": self.auth.mode, "authed": self.authed()}
+            if self.auth.mode == "demo":
+                out["demo_password"] = Auth.DEMO_PASSWORD     # nur in der Vorschau: die Anmeldeseite füllt es vor
+            return self.reply(200, out)
         if not self.authed():
             return self.reply(401, {"error": "nicht angemeldet"})
         if path == "/api/metrics":
@@ -2489,11 +2598,13 @@ class Handler(BaseHTTPRequestHandler):
             d = self.read_json()
             if path == "/api/setup":
                 self.auth.set_password(d.get("code"), d.get("password"), self.ip())
-                tok = self.auth.login(d.get("password"), self.ip())
-                return self.reply(200, {"ok": True}, self.cookie(tok, SESSION_SECONDS))
+                rem = d.get("remember") is True
+                tok = self.auth.login(d.get("password"), self.ip(), rem)
+                return self.reply(200, {"ok": True}, self.cookie(tok, REMEMBER_SECONDS if rem else SESSION_SECONDS))
             if path == "/api/login":
-                tok = self.auth.login(d.get("password"), self.ip())
-                return self.reply(200, {"ok": True}, self.cookie(tok, SESSION_SECONDS))
+                rem = d.get("remember") is True
+                tok = self.auth.login(d.get("password"), self.ip(), rem)
+                return self.reply(200, {"ok": True}, self.cookie(tok, REMEMBER_SECONDS if rem else SESSION_SECONDS))
             if path == "/api/logout":
                 self.auth.logout(self.token())
                 return self.reply(200, {"ok": True}, self.cookie("", 0))
@@ -2627,8 +2738,11 @@ def main():
     ap.add_argument("--rtmp-stat-url", default="", help="nginx-rtmp-Statistik (XML), z. B. http://127.0.0.1/stat")
     args = ap.parse_args()
     Handler.updates = Updates(args.state, args.demo)
+    if not args.demo:
+        threading.Thread(target=Handler.updates.auto_loop, daemon=True).start()
     Handler.djisvc = None  # unten gesetzt, sobald Kameraliste existiert
-    Handler.auth = Auth(args.state, args.bela_config or None)
+    Handler.auth = Auth(args.state, args.bela_config or None,
+                        demo=args.demo and args.host in ("127.0.0.1", "::1", "localhost"))   # Demo-Passwort nur auf dem eigenen Rechner
     Handler.cams = CameraStore(os.path.join(args.state, "cameras.json"), args.rtmp_app, args.rtmp_stat_url, args.demo)
     Handler.sampler = Sampler(args.demo)
     Handler.sampler.sample()  # Startwerte für Ratenberechnung
