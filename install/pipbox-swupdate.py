@@ -53,7 +53,7 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_FILES = 300
 MAX_FILE = 2 * 1024 * 1024
 MAX_TOTAL = 20 * 1024 * 1024
-REQUIRED = ("VERSION", "server.py", "dji.py", "dji_daemon.py", "pipbox_send.py", "pipbox_send_ctl.py",
+REQUIRED = ("VERSION", "server.py", "dji.py", "dji_daemon.py", "hdmi_daemon.py", "install/pipbox-hdmi.service", "pipbox_send.py", "pipbox_send_ctl.py",
             "web/index.html", "web/login.html", "web/i18n.js", "web/i18n/languages.json", "install/install.sh", "gst/gstpbpip.c", "gst/build.sh")
 VERSION_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}(-[a-z0-9.]{1,16})?$")
 
@@ -290,6 +290,7 @@ def restore(ver, reason="", note="Zurück auf"):
     status(state="installing", step=f"Stelle Version {ver} wieder her", message="", frm=local, to=ver)
     dji_names = ("dji.py", "dji_daemon.py")
     dji_changed = files_differ(f"{src}/opt-pipbox", INSTALL, dji_names)
+    hdmi_changed = files_differ(f"{src}/opt-pipbox", INSTALL, ("hdmi_daemon.py",))
     if local != ver and VERSION_RE.match(local):
         backup(local, do_prune=False)            # erst sichern, dann (unten) aufräumen: das Ziel darf nicht verschwinden
     for name in os.listdir(INSTALL):             # gebautes Plugin bleibt, Programme werden ersetzt
@@ -309,6 +310,16 @@ def restore(ver, reason="", note="Zurück auf"):
     subprocess.run(["systemctl", "restart", "pipbox.service"])
     if dji_changed:
         subprocess.run(["systemctl", "restart", "pipbox-dji.service"])
+    if hdmi_changed:
+        if os.path.exists(os.path.join(INSTALL, "hdmi_daemon.py")):
+            subprocess.run(["systemctl", "restart", "pipbox-hdmi.service"])
+        else:                                    # eine Version ohne HDMI-Dienst: Dienst und Eintrag entfernen, sonst startet er ins Leere
+            subprocess.run(["systemctl", "disable", "--now", "pipbox-hdmi.service"])
+            try:
+                os.remove(os.path.join(UNIT_DIR, "pipbox-hdmi.service"))
+            except OSError:
+                pass
+            subprocess.run(["systemctl", "daemon-reload"])
     ok = wait_active("pipbox.service")
     prune()
     log(f"Wechsel auf {ver}: {'ok' if ok else 'Oberfläche läuft nicht'}")

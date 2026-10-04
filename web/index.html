@@ -258,6 +258,20 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .dcam .chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
 .dcam .dsec{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
 .dcam .dsec>summary{cursor:pointer;font-size:13px;padding:4px 0}
+/* Akku-Warnung im Twitch-Chat (Unterabschnitt der DJI-Kameras): der Titel sieht aus wie die Überschriften .sech (z. B. "DJI-Kameras (Bluetooth)"), davor das übliche Aufklappdreieck */
+#tw_sec>summary{display:block;cursor:pointer;list-style:none;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:4px 0 6px}
+#tw_sec>summary::-webkit-details-marker{display:none}
+#tw_sec>summary::before{content:"\25B8  "}
+#tw_sec[open]>summary::before{content:"\25BE  "}
+#tw_sum{white-space:nowrap}
+#tw_sec label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px;min-width:0}
+#tw_sec label.f input{width:100%}
+#tw_sec .chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
+#tw_sec .twgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:0 10px}
+#tw_sec .twrow{display:flex;flex-wrap:wrap;gap:0 10px}
+#tw_sec .twrow label.f{flex:0 0 120px}
+#tw_sec .twrow label.f.grow{flex:1 1 240px}
+#tw_status:empty{display:none}
 .dcam .dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:8px}
 .dscan{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px}
 button.sec{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400}
@@ -301,7 +315,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   <details class="card wide" id="c_status" open><summary><span class="sumh">Status</span></summary>
     <div id="alerts"></div>
     <div class="statgrid">
-      <div class="statbox"><div class="sech">Upload (Verbindungen zum Senden)</div><div id="net"></div></div>
+      <div class="statbox"><div class="sech">Up- und Download</div><div id="net"></div></div>
       <div class="statbox"><div id="camlights"><div class="sech">Kameras</div></div></div>
       <div class="statbox"><div class="sech">System</div>
     <div class="row" style="padding-bottom:0"><span class="muted">CPU</span><span class="muted"><span id="cpumax"></span> · <span id="temp">–</span> °C</span></div>
@@ -337,6 +351,42 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="djiscan"></div>
     <div class="ph" data-hlp>Kamera einschalten und wach halten, Kopplung an der Kamera bestätigen. Sie tritt dem gewählten WLAN bei und streamt zu dieser Box. Unterstützt: Osmo Action 3, 4, 5 Pro, 6, Osmo 360, Osmo Pocket 3 und 4. Welche Kamera Hauptbild oder Bild-in-Bild ist, wählen Sie in der Karte „Bildaufbau“.</div>
     <div id="djierr" class="err"></div>
+    <details class="dsec" id="tw_sec"><summary>Akku-Warnung im Twitch-Chat <span class="muted" id="tw_sum"></span></summary>
+      <label class="chk"><input type="checkbox" id="tw_on"> Einschalten</label>
+      <div class="twgrid">
+        <label class="f sens">Kanal (Konto, auf dem gestreamt wird)<input id="tw_channel" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="f sens">Bot-Konto (Name)<input id="tw_login" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="f">Token des Bot-Kontos<input id="tw_token" type="password" maxlength="120" autocomplete="new-password"></label>
+      </div>
+      <div class="ph" data-hlp>Token mit dem Recht „chat:edit“, wie bei NOALBS. Er muss zum Bot-Konto gehören.</div>
+      <div class="twrow">
+        <label class="f">Warnen bei (%)<input id="tw_thr" type="number" min="1" max="50" step="1"></label>
+        <label class="f grow">Nachricht ({Kamera} und {Prozent} werden ersetzt)<input id="tw_msg" maxlength="300" autocomplete="off"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="tw_live"> Nur während der Sendung</label>
+      <div class="actions"><button id="tw_save" type="button">Speichern</button><button id="tw_test" type="button" class="sec" disabled>Testnachricht senden</button></div>
+      <div id="tw_status" class="ph" role="status"></div>
+      <div id="tw_err" class="err"></div>
+    </details>
+  </div>
+  <div class="sech">HDMI- und USB-Kameras</div><div id="hdmicard">
+    <details class="dcam" id="hdmi_cam" open>
+      <summary><span class="dname">HDMI-Eingang</span><span class="dright"><span class="dstate" id="hdmi_state"></span></span></summary>
+      <div class="dbody">
+        <div class="dsub muted" id="hdmi_signal"></div>
+        <label class="chk"><input type="checkbox" id="hdmi_on"> Als Kamera senden</label>
+        <details class="dsec" id="hdmi_vsec"><summary>Bild und Ton <span class="muted" id="hdmi_vsum"></span></summary>
+          <div class="dgrid">
+            <label class="f">Bildrate<select id="hdmi_fps"><option value="30">30 fps</option><option value="25">25 fps</option></select></label>
+            <label class="f">Bitrate (Mbit/s)<input id="hdmi_br" type="number" min="1" max="20" step="0.5"></label>
+            <label class="f">Ton<select id="hdmi_audio"><option value="hdmi">HDMI-Ton</option><option value="none">ohne Ton</option></select></label>
+          </div>
+          <div class="actions"><button id="hdmi_save" type="button">Speichern</button></div>
+        </details>
+        <div id="hdmi_err" class="err"></div>
+      </div>
+    </details>
+    <div class="ph" data-hlp>Das Bild wird in der Box zu einer normalen Kamera „HDMI“ und steht dann in „Bildaufbau“ wie alle anderen.</div>
   </div>
   </details>
 
@@ -601,6 +651,7 @@ function renderCamLights(list){
 let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
 const netLabel=o=>`${o.label} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
 function camNetHtml(c){
+  if(c.via_src==="hdmi") return `<span class="camnet muted" title="Das Bild kommt vom HDMI-Eingang der Box">HDMI-Eingang</span>`;
   // Die Adresse oben gilt für die Verbindung der Kamera: DJI-Kameras wählen sie in ihrer Karte, andere Kameras (z. B. ein Handy) hier.
   if((c.key||"").startsWith("dji-")){
     const o=netOpts.find(x=>x.iface===c.via);
@@ -625,7 +676,7 @@ function renderCams(list){
     box.innerHTML=list.length?list.map(c=>
       `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
-      <span class="muted cr"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code></div>`).join("")
+      <span class="muted cr"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div>${c.url?`<code>${esc(c.url)}</code>`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -901,6 +952,103 @@ $("djicams").addEventListener("click",async e=>{
 $("djiscan").addEventListener("click",async e=>{ const b=e.target.closest&&e.target.closest(".d-add"); if(!b) return;
   if(await djiCmd({cmd:"add",addr:b.dataset.addr,name:b.dataset.name,model:b.dataset.model,kind:b.dataset.kind})){ djiStruct=""; tick(); } djiLoad(); });
 $("d_scan").onclick=async()=>{ await djiCmd({cmd:"scan"}); djiLoad(); };
+
+// ---- Akku-Warnung im Twitch-Chat: Unterabschnitt bei den DJI-Kameras (Server: TwitchStore, TwitchChat, TwitchNotifier).
+// Der Token kommt nie von der Box zurück: das Feld bleibt leer, "gespeichert" steht als Platzhalter, ein leeres Feld beim Speichern behält den Token.
+let twData=null, twDirty=false, twBusy=false;
+const twTime=t=>new Date(t*1000).toLocaleTimeString(LOC(),{hour:"2-digit",minute:"2-digit"});
+function twStatusHtml(d){                                       // letzte Meldung mit Uhrzeit oder der Fehler; was der Nutzer als Nachricht eingestellt hat, wird nicht übersetzt
+  const s=d.status||{};
+  if(s.ok==null) return d.enabled?"<span>Noch nichts gesendet</span>":"";
+  const t=twTime(s.time);
+  if(s.ok) return `<span>Letzte Meldung um ${t} Uhr:</span> <span translate="no">${esc(s.text)}</span>`;
+  return `<span>Fehler um ${t} Uhr:</span> <span>${esc(s.text)}</span>`+(s.retry_at?` <span>Neuer Versuch um ${twTime(s.retry_at)} Uhr.</span>`:"");
+}
+function twButtons(){
+  const ok=!!(twData&&twData.token_set&&twData.channel&&twData.login);
+  $("tw_save").disabled=twBusy; $("tw_test").disabled=twBusy||twDirty||!ok;
+  $("tw_test").title=twDirty?"Zuerst speichern":"";
+}
+function twFill(d){
+  twData=d;
+  $("tw_sum").textContent=d.enabled?"· an":"· aus";
+  setHtml($("tw_status"),twStatusHtml(d)); $("tw_status").style.color=d.status&&d.status.ok===false?"var(--crit)":"";      // ein Fehler steht in Rot
+  if(!twDirty){                                                   // ungespeicherte Eingaben nicht überschreiben
+    $("tw_on").checked=!!d.enabled; $("tw_channel").value=d.channel||""; $("tw_login").value=d.login||"";
+    $("tw_token").value=""; $("tw_token").placeholder=d.token_set?"gespeichert":"";
+    $("tw_thr").value=d.threshold; $("tw_msg").value=d.message||""; $("tw_live").checked=d.only_live!==false;
+  }
+  twButtons();
+}
+async function twLoad(){
+  let d; try{ d=await srtlaCall("GET","/api/twitch"); }catch(e){ return; }
+  twFill(d);
+}
+function twForm(){
+  return {enabled:$("tw_on").checked, channel:$("tw_channel").value, login:$("tw_login").value, token:$("tw_token").value,
+          threshold:parseInt($("tw_thr").value,10), message:$("tw_msg").value, only_live:$("tw_live").checked};
+}
+async function twSave(){
+  const err=$("tw_err"); err.textContent=""; err.style.color=""; twBusy=true; twButtons();
+  try{ const d=await srtlaCall("POST","/api/twitch",twForm()); twDirty=false; twFill(d); err.textContent="Gespeichert."; err.style.color="var(--ok)"; }
+  catch(x){ err.textContent=x.message; }
+  twBusy=false; twButtons();
+}
+async function twTest(){
+  const err=$("tw_err"); err.textContent="Wird gesendet …"; err.style.color=""; twBusy=true; twButtons();
+  try{ const r=await srtlaCall("POST","/api/twitch/test",{}); err.textContent=r.message; err.style.color=r.ok?"var(--ok)":""; }
+  catch(x){ err.textContent=x.message; err.style.color=""; }
+  twBusy=false; twButtons(); twLoad();
+}
+$("tw_save").addEventListener("click",twSave);
+$("tw_test").addEventListener("click",twTest);
+["input","change"].forEach(ev=>$("tw_sec").addEventListener(ev,()=>{ twDirty=true; twButtons(); }));
+$("tw_sec").addEventListener("toggle",()=>{ if($("tw_sec").open) twLoad(); });
+twLoad(); setInterval(()=>{ if(due("tw","c_cams",60000)) twLoad(); },10000);
+
+// ---- HDMI-Kamera (Karte "Kameras", Abschnitt "HDMI- und USB-Kameras"): der HDMI-Dienst der Box speist den HDMI-Eingang als Kamera "HDMI" ein
+let hdmiData=null, hdmiDirty=false, hdmiBusy=false;
+function hdmiSignalText(d){
+  if(!d.service) return d.message||"";
+  if(d.available===false) return "Diese Box hat keinen HDMI-Eingang";
+  if(d.signal_known===false) return "";
+  const s=d.signal||{};
+  return s.locked?`Signal ${s.width}×${s.height} · ${Math.round(s.fps)} Hz`:"Kein HDMI-Signal";
+}
+function hdmiStateText(d){
+  if(!d.service) return "Dienst fehlt";
+  if(d.available===false) return "kein HDMI-Eingang";
+  return ({off:"aus",waiting:"wartet auf Signal",starting:"startet …",streaming:"sendet",error:"Fehler"})[d.state]||"";
+}
+function hdmiButtons(){
+  const usable=!!(hdmiData&&hdmiData.service&&hdmiData.available!==false)&&!hdmiBusy;
+  ["hdmi_on","hdmi_fps","hdmi_br","hdmi_audio","hdmi_save"].forEach(id=>{ $(id).disabled=!usable; });
+}
+function hdmiFill(d){
+  hdmiData=d; const st=hdmiStateText(d), e=$("hdmi_state");
+  e.textContent=st; e.style.color=d.state==="streaming"?"var(--ok)":(d.state==="error"||!d.service?"var(--crit)":"");
+  $("hdmi_signal").textContent=hdmiSignalText(d);
+  const s=d.settings||{};
+  $("hdmi_vsum").textContent=`${s.fps} fps · ${(s.bitrate/1000).toFixed(1).replace(/\.0$/,"")} Mbit/s · ${s.audio==="none"?"ohne Ton":"HDMI-Ton"}`;
+  if(!hdmiDirty){ $("hdmi_on").checked=!!s.enabled; $("hdmi_fps").value=String(s.fps); $("hdmi_br").value=String(s.bitrate/1000); $("hdmi_audio").value=s.audio; }
+  const err=$("hdmi_err"); if(d.state==="error"&&d.message){ err.textContent=d.message; err.style.color=""; } else if(err.dataset.keep!=="1") err.textContent="";
+  hdmiButtons();
+}
+async function hdmiLoad(){
+  let d; try{ d=await srtlaCall("GET","/api/hdmi"); }catch(e){ return; }
+  hdmiFill(d);
+}
+async function hdmiPost(body,done){
+  const err=$("hdmi_err"); err.dataset.keep=""; err.textContent=""; hdmiBusy=true; hdmiButtons();
+  try{ const d=await srtlaCall("POST","/api/hdmi",body); hdmiDirty=false; hdmiFill(d); if(done){ err.textContent=done; err.style.color="var(--ok)"; err.dataset.keep="1"; } tick(); }
+  catch(x){ err.textContent=x.message; err.style.color=""; err.dataset.keep="1"; }
+  hdmiBusy=false; hdmiButtons();
+}
+$("hdmi_on").addEventListener("change",()=>hdmiPost({enabled:$("hdmi_on").checked}));
+$("hdmi_save").addEventListener("click",()=>hdmiPost({bitrate:Math.round(parseFloat($("hdmi_br").value)*1000),fps:parseInt($("hdmi_fps").value,10),audio:$("hdmi_audio").value},"Gespeichert."));
+["input","change"].forEach(ev=>$("hdmi_vsec").addEventListener(ev,()=>{ hdmiDirty=true; }));
+$("hdmi_cam").addEventListener("toggle",()=>{ if($("hdmi_cam").open) hdmiLoad(); });
+hdmiLoad(); setInterval(()=>{ if(due("hdmi","c_cams",20000)) hdmiLoad(); },3000);
 
 let netBusy=false;
 async function netRender(){

@@ -21,6 +21,7 @@ import re
 import secrets
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import threading
@@ -32,6 +33,7 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import dji                         # Namen von USB-Sticks (WLAN, Bluetooth) aus /sys, liegt neben dieser Datei
+import hdmi_daemon                 # Prüfung der HDMI-Einstellungen (dieselbe wie im HDMI-Dienst), liegt neben dieser Datei
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 # Echte Netzwerkkarten für die Upload-Anzeige (Ethernet, WLAN, USB-/Mobilfunk-Modems). Virtuelles (Tailscale, Docker,
@@ -1751,12 +1753,14 @@ class CameraStore:
             st = None if live is None else live.get(c["key"])
             via, src, host = None, "main", main
             over = addr_for(c["key"]) if addr_for else None
-            if over and over[0]:
+            if c["key"] == HDMI_KEY:
+                src = "hdmi"                       # das Bild kommt vom HDMI-Eingang der Box: keine Adresse, keine Verbindung zu wählen
+            elif over and over[0]:
                 host, via, src = over[0], over[1], "dji"
             elif c.get("iface") and self.host_for_iface(c["iface"]):
                 host, via, src = self.host_for_iface(c["iface"]), c["iface"], "own"
             out.append({**c, "via": via, "via_src": src,
-                        "url": f"rtmp://{host}:1935/{self.app}/{c['key']}",
+                        "url": "" if src == "hdmi" else f"rtmp://{host}:1935/{self.app}/{c['key']}",
                         "state": "unknown" if live is None else
                                  ("live" if st else "offline"),
                         "fps": st and st["fps"], "mbit": st and st["mbit"]})
@@ -3558,6 +3562,639 @@ class DjiService:
         return {"ok": True}
 
 
+HDMI_KEY = "hdmi"           # Schlüssel der HDMI-Kamera: der HDMI-Dienst speist das Bild des HDMI-Eingangs unter diesem Namen in den RTMP-Eingang der Box ein
+
+
+class HdmiService:
+    """Dünne Schicht zum HDMI-Dienst (pipbox-hdmi, hdmi_daemon.py): leitet die Befehle der Oberfläche als JSON-Zeilen an 127.0.0.1:9102
+    weiter (mit dem Token, das nur der Benutzer pipbox lesen kann), trägt die Kamera "HDMI" in die Kameraliste ein und liefert den Zustand.
+    Der Dienst selbst läuft als root (Hardware-Kodierer, HDMI-Eingang) und nimmt nur geprüfte Zahlen und feste Auswahlen entgegen.
+    Im Demo-Modus gibt es keinen Dienst: ein Eingang mit Signal, der sich ein- und ausschalten lässt."""
+    HOST, PORT = "127.0.0.1", 9102
+    CAMERA_NAMES = ("HDMI", "HDMI-Eingang", "HDMI 2")
+    ALLOWED = ("enabled", "bitrate", "fps", "audio")        # was die Oberfläche ändern darf (der Schlüssel ist fest)
+    TTL = 1.5
+    DOWN = "Der HDMI-Dienst läuft nicht (Software-Update oder install.sh ausführen)"
+
+    def __init__(self, state_dir, cams, demo=False):
+        self.token_path = os.path.join(state_dir, "hdmi-token")
+        self.cams, self.demo = cams, demo
+        self.lock = threading.Lock()
+        self._next_id = 0
+        self._hit = (0.0, None)
+        self.fake = dict(hdmi_daemon.DEFAULTS) if demo else None
+
+    def _call(self, req, timeout=4):
+        """Eine Anfrage an den HDMI-Dienst (eine JSON-Zeile hin, die Antwort mit passender Nummer zurück)."""
+        try:
+            with open(self.token_path) as f:
+                tok = f.read().strip()
+        except OSError:
+            raise RuntimeError(self.DOWN)
+        with self.lock:
+            rid = self._next_id = self._next_id + 1
+        line = (json.dumps(dict(req, token=tok, id=rid)) + "\n").encode()
+        try:
+            with socket.create_connection((self.HOST, self.PORT), timeout=timeout) as sk:
+                sk.settimeout(timeout)
+                sk.sendall(line)
+                buf = b""
+                while True:
+                    while b"\n" in buf:
+                        one, buf = buf.split(b"\n", 1)
+                        try:
+                            resp = json.loads(one)
+                        except ValueError:
+                            continue
+                        if isinstance(resp, dict) and resp.get("reply_to") == rid:
+                            if resp.get("error"):
+                                if resp["error"] == "kein Zugriff":
+                                    raise RuntimeError(self.DOWN)
+                                raise ValueError(str(resp["error"])[:120])
+                            return resp
+                    chunk = sk.recv(65536)
+                    if not chunk:
+                        raise RuntimeError(self.DOWN)
+                    buf += chunk
+                    if len(buf) > 1 << 20:
+                        raise RuntimeError(self.DOWN)
+        except OSError:
+            raise RuntimeError(self.DOWN)
+
+    def _fake_status(self):
+        f = self.fake
+        return {"ok": True, "available": True, "state": "streaming" if f["enabled"] else "off", "message": "", "settings": dict(f),
+                "signal": {"plugged": True, "locked": True, "width": 1920, "height": 1080, "fps": 60.0, "interlaced": False, "format": "RGB", "depth": 8},
+                "signal_known": True, "publishing": bool(f["enabled"]), "restarts": 0}
+
+    def _listed(self):
+        return bool(self.cams) and any(c["key"] == HDMI_KEY for c in self.cams.cams)
+
+    def ensure_listed(self):
+        """Die Kamera "HDMI" steht in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
+        if not self.cams or self._listed():
+            return
+        roles = {c["role"] for c in self.cams.cams}
+        role = "main" if "main" not in roles else "pip" if "pip" not in roles else "extra"
+        taken = {c["name"].casefold() for c in self.cams.cams}
+        name = next((n for n in self.CAMERA_NAMES if n.casefold() not in taken), "HDMI-Kamera")
+        try:
+            self.cams.add(name, HDMI_KEY, role)
+        except ValueError:
+            pass                                           # z. B. der Schlüssel ist schon vergeben: dann steht die Kamera schon in der Liste
+
+    def status(self):
+        """Zustand für die Oberfläche (1,5 Sekunden zwischengespeichert, die Seite fragt oft). Ohne Dienst: service false mit Meldung."""
+        now = time.monotonic()
+        with self.lock:
+            if self._hit[1] is not None and now - self._hit[0] < self.TTL:
+                return dict(self._hit[1])
+        out = {"service": False, "available": None, "state": "down", "message": self.DOWN, "settings": {k: hdmi_daemon.DEFAULTS[k] for k in self.ALLOWED}, "signal": {},
+               "signal_known": False, "publishing": None, "restarts": 0}
+        try:
+            resp = self._fake_status() if self.demo else self._call({"cmd": "status"})
+            for k in ("available", "state", "message", "signal", "signal_known", "publishing", "restarts"):
+                if k in resp:
+                    out[k] = resp[k]
+            st = resp.get("settings") if isinstance(resp.get("settings"), dict) else {}
+            out["settings"] = {k: st.get(k, hdmi_daemon.DEFAULTS[k]) for k in self.ALLOWED}
+            out["service"] = True
+            if out["settings"]["enabled"]:
+                self.ensure_listed()
+        except (RuntimeError, ValueError) as e:
+            out["message"] = str(e) or self.DOWN
+        out["listed"] = self._listed()
+        with self.lock:
+            self._hit = (now, out)
+        return dict(out)
+
+    def set(self, req):
+        """Einstellungen übernehmen (enabled, bitrate in kbit/s, fps, audio). Wirft ValueError (kurze Meldung) oder RuntimeError (Dienst fehlt)."""
+        if not isinstance(req, dict):
+            raise ValueError("Ungültige Anfrage")
+        settings = {k: req[k] for k in self.ALLOWED if k in req}
+        hdmi_daemon.clean_settings(settings, self.fake if self.demo else None)       # dieselbe Prüfung wie im Dienst, vorab
+        if self.demo:
+            self.fake = hdmi_daemon.clean_settings(settings, self.fake)
+        elif settings:
+            self._call({"cmd": "set", "settings": settings})
+        if settings.get("enabled") is True:
+            self.ensure_listed()
+        with self.lock:
+            self._hit = (0.0, None)
+        return self.status()
+
+    def on_camera_removed(self):
+        """Die Kamera "HDMI" wurde aus der Liste entfernt: die Einspeisung dazu ausschalten (sonst käme die Kamera von selbst wieder)."""
+        try:
+            self.set({"enabled": False})
+        except (RuntimeError, ValueError):
+            pass
+
+
+class TwitchStore:
+    """Einstellungen der Akku-Warnung im Twitch-Chat: <state>/twitch.json (Rechte 0600, atomar geschrieben).
+
+    Zwei Angaben: der Kanal (das Twitch-Konto, auf dem gestreamt wird; der Bot tritt ihm bei) und das Bot-Konto (Name und OAuth-Token des Kontos,
+    das die Nachricht schreibt: ein zweites Konto oder dasselbe wie der Kanal). Name und Kanal werden klein geschrieben gespeichert (so kennt sie IRC),
+    der Token ohne das Vorsatzwort "oauth:". Der Token bleibt auf der Box: Er steht nie in einer Antwort der Oberfläche (public() kennt nur token_set),
+    in Meldungen oder Protokollen und nicht in der Einstellungssicherung (SettingsTransfer). Alles wird streng geprüft, denn die Werte landen in
+    IRC-Zeilen: keine Steuerzeichen, kein CR/LF. Intern merkt sich die Datei auch, für welche Kamera schon gewarnt wurde ("warned": Schlüssel -> Zeitstempel)."""
+    NAME_RE = re.compile(r"[A-Za-z0-9_]{3,25}")
+    TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,100}")
+    DEFAULT_MESSAGE = "Akkustand niedrig, bitte Akku wechseln: {Kamera} ({Prozent} %)"
+    DEFAULTS = {"enabled": False, "login": "", "token": "", "channel": "", "threshold": 10, "message": DEFAULT_MESSAGE, "only_live": True}
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.data = dict(self.DEFAULTS)
+        self.warned = {}
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            saved = None
+        if isinstance(saved, dict):
+            self._adopt(saved)
+
+    # ---- Prüfung der einzelnen Angaben (leer ist bei Name, Kanal und Token erlaubt: dann fehlt die Angabe)
+    @classmethod
+    def _name(cls, v, error):
+        if not isinstance(v, str):
+            raise ValueError(error)
+        v = v.strip()
+        if v and not cls.NAME_RE.fullmatch(v):
+            raise ValueError(error)
+        return v.lower()
+
+    @classmethod
+    def _token(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("Token: 20 bis 100 Zeichen, nur Buchstaben, Ziffern, _ und -")
+        v = v.strip()
+        if not v:
+            return ""
+        if v[:6].lower() == "oauth:":
+            v = v[6:]
+        if not cls.TOKEN_RE.fullmatch(v):
+            raise ValueError("Token: 20 bis 100 Zeichen, nur Buchstaben, Ziffern, _ und -")
+        return v
+
+    @staticmethod
+    def _threshold(v):
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 50:
+            raise ValueError("Warnen bei: Zahl von 1 bis 50")
+        return v
+
+    @staticmethod
+    def _message(v):
+        if not isinstance(v, str) or not 1 <= len(v.strip()) <= 300:
+            raise ValueError("Nachricht: 1 bis 300 Zeichen")
+        v = v.strip()
+        if any(not ch.isprintable() for ch in v):
+            raise ValueError("Nachricht: keine Sonderzeichen oder Zeilenumbrüche")
+        if v[0] in "/.":
+            raise ValueError("Nachricht: darf nicht mit / oder . beginnen")      # "/…" und ".…" wären Chat-Befehle
+        return v
+
+    ERR_CHANNEL = "Kanal: 3 bis 25 Zeichen, nur Buchstaben, Ziffern und _"
+    ERR_LOGIN = "Bot-Konto: 3 bis 25 Zeichen, nur Buchstaben, Ziffern und _"
+    ERR_MISSING = "Bitte Kanal, Bot-Konto und Token eintragen"
+
+    def _adopt(self, saved):
+        """Gespeicherte Werte übernehmen; was nicht (mehr) zur Prüfung passt, bleibt beim Standard (die Datei kann von Hand verändert sein)."""
+        for key, check in (("login", lambda v: self._name(v, self.ERR_LOGIN)), ("channel", lambda v: self._name(v, self.ERR_CHANNEL)), ("token", self._token),
+                           ("threshold", self._threshold), ("message", self._message)):
+            if key in saved:
+                try:
+                    self.data[key] = check(saved[key])
+                except ValueError:
+                    pass
+        if isinstance(saved.get("only_live"), bool):
+            self.data["only_live"] = saved["only_live"]
+        d = self.data
+        d["enabled"] = saved.get("enabled") is True and bool(d["channel"] and d["login"] and d["token"])
+        w = saved.get("warned")
+        if isinstance(w, dict):
+            self.warned = {k: float(t) for k, t in w.items() if isinstance(k, str) and KEY_RE.match(k) and isinstance(t, (int, float)) and not isinstance(t, bool)
+                           and math.isfinite(t) and t > 0}
+
+    def _write(self, data, warned):
+        """Atomar schreiben; die Rechte 0600 gelten schon, bevor der Token in die Datei kommt."""
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                os.fchmod(f.fileno(), 0o600)
+                json.dump(dict(data, warned=warned), f, indent=1)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+    def set(self, req):
+        """Einstellungen übernehmen. Fehlende Felder behalten ihren Wert, ein leeres Token-Feld behält den gespeicherten Token. Wirft ValueError (kurze Meldung)."""
+        if not isinstance(req, dict):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            new = dict(self.data)
+            for key in ("enabled", "only_live"):
+                if key in req:
+                    if not isinstance(req[key], bool):
+                        raise ValueError("ja oder nein")
+                    new[key] = req[key]
+            if "channel" in req:
+                new["channel"] = self._name(req["channel"], self.ERR_CHANNEL)
+            if "login" in req:
+                new["login"] = self._name(req["login"], self.ERR_LOGIN)
+            if "token" in req:
+                new["token"] = self._token(req["token"]) or new["token"]
+            if "threshold" in req:
+                new["threshold"] = self._threshold(req["threshold"])
+            if "message" in req:
+                new["message"] = self._message(req["message"])
+            if new["enabled"] and not (new["channel"] and new["login"] and new["token"]):
+                raise ValueError(self.ERR_MISSING)
+            try:
+                self._write(new, self.warned)
+            except OSError:
+                raise RuntimeError("Die Einstellungen konnten nicht gespeichert werden")
+            self.data = new
+
+    def public(self):
+        """Was die Oberfläche sieht: alles außer dem Token (nur, ob einer gespeichert ist)."""
+        with self.lock:
+            d = self.data
+            return {"enabled": d["enabled"], "channel": d["channel"], "login": d["login"], "token_set": bool(d["token"]), "threshold": d["threshold"],
+                    "message": d["message"], "only_live": d["only_live"]}
+
+    def settings(self):
+        """Alle Einstellungen samt Token, nur für den Chat-Client und den Hintergrunddienst. Nie nach außen geben."""
+        with self.lock:
+            return dict(self.data)
+
+    # ---- für welche Kamera schon gewarnt wurde
+    def warned_keys(self):
+        with self.lock:
+            return list(self.warned)
+
+    def is_warned(self, key):
+        with self.lock:
+            return key in self.warned
+
+    def _flush(self):
+        try:
+            self._write(self.data, self.warned)
+        except OSError:
+            pass                       # der Speicher gilt bis zum Neustart des Dienstes; beim nächsten erfolgreichen Schreiben ist es nachgeholt
+
+    def mark_warned(self, key, when):
+        with self.lock:
+            self.warned[key] = float(when)
+            self._flush()
+
+    def unwarn(self, key):
+        with self.lock:
+            if self.warned.pop(key, None) is not None:
+                self._flush()
+
+
+class _IrcLines:
+    """Zeilen aus einem Socket lesen, mit Frist."""
+    MAX = 16384
+
+    def __init__(self, sock, clock):
+        self.sock, self.clock, self.buf = sock, clock, b""
+
+    def get(self, until):
+        """Nächste Zeile ohne Zeilenende; None, wenn die Frist abläuft; EOFError, wenn die Gegenseite schließt (oder keine Zeile zu sehen ist: kein IRC)."""
+        while True:
+            i = self.buf.find(b"\n")
+            if i >= 0:
+                line, self.buf = self.buf[:i], self.buf[i + 1:]
+                return line.rstrip(b"\r").decode("utf-8", "replace")
+            if len(self.buf) > self.MAX:
+                raise EOFError
+            left = until - self.clock()
+            if left <= 0:
+                return None
+            self.sock.settimeout(left)
+            try:
+                chunk = self.sock.recv(4096)
+            except socket.timeout:
+                return None
+            if not chunk:
+                raise EOFError
+            self.buf += chunk
+
+
+class TwitchChat:
+    """Schreibt eine Nachricht in den Twitch-Chat (IRC über TLS, nur Standardbibliothek). Nur Schreiben: Befehle aus dem Chat werden nicht gelesen.
+
+    Ablauf je Nachricht (eine eigene Verbindung): verbinden (höchstens 10 s) -> PASS und NICK -> auf die Begrüßung (001) oder eine Absage warten -> die Fähigkeit
+    "twitch.tv/commands" anfordern (nur dann meldet Twitch eine Ablehnung als NOTICE) -> JOIN -> PRIVMSG -> bis zu 2 s auf NOTICE-Antworten warten -> QUIT.
+    PING wird mit PONG beantwortet. Alles zusammen dauert höchstens 15 s (die Namensauflösung zählt nicht mit). Host, Port und TLS sind für Tests einstellbar.
+    Die PASS-Zeile mit dem Token wird nirgends ausgegeben. Text, den Twitch schickt, wird vor dem Anzeigen gekürzt und von Steuerzeichen und dem Token befreit.
+    Twitch bestätigt eine angenommene Nachricht nicht: Kommt innerhalb der Wartezeit kein NOTICE, gilt sie als gesendet."""
+    HOST, PORT = "irc.chat.twitch.tv", 6697
+    MAX_BYTES = 450                  # Twitch erlaubt 500 Zeichen, eine IRC-Zeile höchstens 512 Byte
+    OK = "Gesendet"
+    NO_CONNECT = "Keine Verbindung zu Twitch"
+    NO_TLS = "Sichere Verbindung zu Twitch nicht möglich (Zertifikat oder Uhrzeit der Box prüfen)"
+    LOGIN_FAILED = "Anmeldung fehlgeschlagen (Token ungültig oder ohne Recht zum Schreiben)"
+    NO_ANSWER = "Keine Antwort von Twitch (Zeitüberschreitung)"
+    CLOSED = "Twitch hat die Verbindung beendet"
+    NOT_ALLOWED = "Der Bot darf im Kanal nicht schreiben (z. B. nur Follower)"
+    LOGIN_NOTICE_RE = re.compile(r"authentication failed|login unsuccessful|improperly formatted", re.I)      # so meldet Twitch eine Absage vor der Begrüßung
+
+    def __init__(self, host=None, port=None, tls=True, context=None, connect_timeout=10.0, total=15.0, notice_wait=2.0, clock=time.monotonic):
+        self.host, self.port, self.tls, self.context = host or self.HOST, port or self.PORT, tls, context
+        self.connect_timeout, self.total, self.notice_wait, self.clock = connect_timeout, total, notice_wait, clock
+
+    @staticmethod
+    def clean_text(text):
+        """Der Text für PRIVMSG oder None: nur druckbare Zeichen (kein CR, LF, NUL), nicht mit / oder . am Anfang, höchstens MAX_BYTES Byte."""
+        t = text.strip()
+        if not t or any(not ch.isprintable() for ch in t) or t[0] in "/.":
+            return None
+        raw = t.encode("utf-8")
+        return t if len(raw) <= TwitchChat.MAX_BYTES else raw[:TwitchChat.MAX_BYTES].decode("utf-8", "ignore").rstrip()
+
+    @staticmethod
+    def _parse(line):
+        """(Befehl, Rest) einer Zeile vom Server; Tags (@…) und Absender (:…) davor werden übersprungen."""
+        if line.startswith("@"):
+            line = line.partition(" ")[2]
+        if line.startswith(":"):
+            line = line.partition(" ")[2]
+        cmd, _, rest = line.partition(" ")
+        return cmd.upper(), rest
+
+    @staticmethod
+    def _notice_text(rest):
+        return rest[1:] if rest.startswith(":") else rest.partition(" :")[2]
+
+    @staticmethod
+    def _scrub(text, token):
+        """Text von Twitch zum Anzeigen: ohne den Token, ohne Steuerzeichen, höchstens 120 Zeichen."""
+        text = text.replace(token, "…")
+        text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+        return text[:120] + ("…" if len(text) > 120 else "")
+
+    @staticmethod
+    def _pong(sock, rest):
+        arg = "".join(ch for ch in rest if ch.isprintable())[:100]
+        sock.sendall(b"PONG " + arg.encode("utf-8") + b"\r\n")
+
+    def send(self, login, token, channel, text):
+        """Als `login` (mit dem Token des Kontos) `text` in den Chat von `channel` schreiben. Gibt (ok, kurze Meldung auf Deutsch) zurück und wirft nichts;
+        der Text einer Ausnahme wird nie übernommen (er könnte Angaben enthalten)."""
+        try:
+            return self._send(login, token, channel, text)
+        except Exception:
+            return False, "unbekannter Fehler"
+
+    def _send(self, login, token, channel, text):
+        if not all(isinstance(v, str) for v in (login, token, channel, text)):
+            return False, "Ungültige Anfrage"
+        login, channel, body = login.lower(), channel.lower(), self.clean_text(text)
+        if body is None or not (TwitchStore.NAME_RE.fullmatch(login) and TwitchStore.NAME_RE.fullmatch(channel) and TwitchStore.TOKEN_RE.fullmatch(token)):
+            return False, "Ungültige Anfrage"                       # nichts, was eine Zeile umbrechen oder einen Befehl einschleusen könnte, geht auf die Leitung
+        until = self.clock() + self.total
+        try:
+            sock = socket.create_connection((self.host, self.port), timeout=max(0.1, min(self.connect_timeout, until - self.clock())))
+        except OSError:
+            return False, self.NO_CONNECT
+        try:
+            if self.tls:
+                try:
+                    sock = (self.context or ssl.create_default_context()).wrap_socket(sock, server_hostname=self.host)
+                except ssl.SSLError:
+                    return False, self.NO_TLS
+                except OSError:
+                    return False, self.NO_CONNECT
+            return self._talk(sock, login, token, channel, body, until)
+        except (EOFError, OSError):
+            return False, self.CLOSED
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def _talk(self, sock, login, token, channel, body, until):
+        rd = _IrcLines(sock, self.clock)
+        sock.settimeout(max(0.1, until - self.clock()))
+        sock.sendall(b"PASS oauth:" + token.encode("ascii") + b"\r\nNICK " + login.encode("ascii") + b"\r\n")
+        while True:                                                 # auf die Begrüßung warten
+            line = rd.get(until)
+            if line is None:
+                return False, self.NO_ANSWER
+            cmd, rest = self._parse(line)
+            if cmd == "001":
+                break
+            if cmd == "PING":
+                self._pong(sock, rest)
+            elif cmd in ("464", "465") or (cmd == "NOTICE" and self.LOGIN_NOTICE_RE.search(self._notice_text(rest))):
+                return False, self.LOGIN_FAILED
+        chan = channel.encode("ascii")
+        sock.settimeout(max(0.1, until - self.clock()))
+        sock.sendall(b"CAP REQ :twitch.tv/commands\r\nJOIN #" + chan + b"\r\nPRIVMSG #" + chan + b" :" + body.encode("utf-8") + b"\r\n")
+        notice, end = None, min(self.clock() + self.notice_wait, until)
+        try:
+            while notice is None:                                   # eine Ablehnung meldet Twitch als NOTICE
+                line = rd.get(end)
+                if line is None:
+                    break
+                cmd, rest = self._parse(line)
+                if cmd == "PING":
+                    self._pong(sock, rest)
+                elif cmd == "NOTICE":
+                    notice = self._scrub(self._notice_text(rest), token)
+        except EOFError:
+            pass                                                    # Twitch schließt nach einer Absage manchmal gleich
+        try:
+            sock.sendall(b"QUIT\r\n")
+        except OSError:
+            pass
+        if notice is None:
+            return True, self.OK
+        return False, self.NOT_ALLOWED + (": " + notice if notice else "")
+
+
+class TwitchNotifier:
+    """Hintergrunddienst: schreibt eine Warnung in den Twitch-Chat, wenn der Akku einer DJI-Kamera die Schwelle erreicht (Auftrag des Nutzers).
+
+    Alle 10 s wird je Kamera geprüft: Warnung, wenn der Akkustand bekannt ist, höchstens die Schwelle beträgt, die Kamera nicht lädt, der Messwert höchstens
+    5 Minuten alt ist, für sie noch nicht gewarnt wurde und (bei "Nur während der Sendung") gesendet wird. Danach merkt sich der Speicher die Warnung, auch über einen
+    Neustart des Dienstes hinweg. Wieder scharf wird eine Kamera, wenn sie lädt oder ihr Akku mindestens 10 Prozentpunkte über der Schwelle liegt (Akku gewechselt).
+    Höchstens eine Nachricht je 3 s insgesamt. Schlägt das Senden fehl, folgen Wiederholungen nach 30, 60 und 120 s (dann weiter alle 120 s), höchstens 5 Versuche je
+    Warnung; der letzte Fehler steht im Status. Neue Einstellungen starten die Versuche neu. Im Demo-Modus läuft der Dienst nicht und der Test sendet nichts."""
+    POLL_S = 10
+    GAP_S = 3
+    FRESH_S = 300
+    BACKOFF_S = (30, 60, 120, 120)         # Wartezeit nach dem 1., 2., 3. und 4. Fehlversuch; nach dem 5. wird aufgegeben
+    TEST_EVERY_S = 10
+    TEST_TEXT = "Test: IRL4YOU BOX"
+
+    def __init__(self, store, djisvc, cams, send, chat=None, demo=False, mono=time.monotonic, wall=time.time, sleep=time.sleep):
+        self.store, self.djisvc, self.cams, self.send = store, djisvc, cams, send
+        self.chat, self.demo = chat or TwitchChat(), demo
+        self.mono, self.wall, self.sleep = mono, wall, sleep
+        self.lock = threading.Lock()           # Zustand (Versuche, letzte Meldung)
+        self.net_lock = threading.Lock()       # immer nur eine Verbindung zu Twitch
+        self.tries = {}                        # Schlüssel -> {"n": Versuche, "at": nächster Versuch (monotone Zeit) oder None = aufgegeben}
+        self.last = None                       # {"ok", "time", "text"}: Ergebnis des letzten Sendens
+        self.last_send = None                  # monotone Zeit der letzten Nachricht
+        self.test_at = None
+        self.stop_ev = threading.Event()
+
+    # ---- Bausteine
+    @staticmethod
+    def camera_text(name):
+        """Kameraname für die Nachricht: ohne Steuerzeichen und Zeilenumbrüche, höchstens 40 Zeichen, nicht mit / oder . am Anfang (ein Chat-Befehl)."""
+        t = " ".join(str(name or "").split())
+        t = "".join(ch for ch in t if ch.isprintable()).lstrip("/. ")
+        return t[:40].strip()
+
+    @staticmethod
+    def render(template, name, percent):
+        """{Kamera} und {Prozent} in der Nachricht ersetzen (in einem Durchgang: ein Kameraname wird nicht noch einmal durchsucht)."""
+        return re.sub(r"\{(Kamera|Prozent)\}", lambda m: name if m.group(1) == "Kamera" else str(percent), template)
+
+    @staticmethod
+    def _percent(e):
+        v = e.get("battery") if isinstance(e, dict) else None
+        return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100 else None
+
+    def _fresh(self, e):
+        age = e.get("battery_age")
+        return isinstance(age, (int, float)) and not isinstance(age, bool) and 0 <= age <= self.FRESH_S
+
+    def _live(self):
+        """Wird gerade gesendet (eigene Sendekette oder ein belacoder der BELABOX-Oberfläche)?"""
+        return bool(self.send._active() or belacoder_running())
+
+    def _camera_name(self, key):
+        cam = next((c for c in list(self.cams.cams) if c.get("key") == key), None)
+        return self.camera_text(cam.get("name") if cam else "") or key
+
+    def _deliver(self, cfg, text, wait=False):
+        """Eine Nachricht senden (nie zwei Verbindungen zugleich). wait: den Abstand zur letzten Nachricht abwarten."""
+        with self.net_lock:
+            if wait and self.last_send is not None:
+                left = self.GAP_S - (self.mono() - self.last_send)
+                if left > 0:
+                    self.sleep(left)
+            ok, msg = self.chat.send(cfg["login"], cfg["token"], cfg["channel"], text)
+            self.last_send = self.mono()
+        return ok, msg
+
+    # ---- Dienst
+    def tick(self):
+        """Ein Durchlauf: Kameras wieder scharf stellen, deren Akku gewechselt wurde oder die laden, und fällige Warnungen senden."""
+        cfg = self.store.settings()
+        if not (cfg["enabled"] and cfg["login"] and cfg["channel"] and cfg["token"]):
+            with self.lock:
+                self.tries.clear()
+            return
+        extras = self.djisvc.camera_extras() or {}
+        thr = cfg["threshold"]
+        for key in self.store.warned_keys():
+            e = extras.get(key)
+            pct = self._percent(e)
+            if e and (e.get("charging") is True or (pct is not None and pct >= thr + 10)):
+                self.store.unwarn(key)
+        live, due = None, []
+        for key in sorted(extras):
+            e = extras[key]
+            pct = self._percent(e)
+            if pct is None or pct > thr or e.get("charging") is True or not self._fresh(e) or self.store.is_warned(key):
+                continue
+            if cfg["only_live"]:
+                live = self._live() if live is None else live
+                if not live:
+                    continue
+            due.append((key, pct))
+        keys = {d[0] for d in due}
+        with self.lock:
+            self.tries = {k: v for k, v in self.tries.items() if k in keys}      # was nicht mehr fällig ist, wird nicht wiederholt
+        for key, pct in due:
+            now = self.mono()
+            t = self.tries.get(key)
+            if t is not None and (t["at"] is None or now < t["at"]):
+                continue                                                  # wartet auf den nächsten Versuch oder ist aufgegeben
+            if self.last_send is not None and now - self.last_send < self.GAP_S:
+                break                                                     # höchstens eine Nachricht je 3 s: der Rest folgt beim nächsten Durchlauf
+            self._warn(cfg, key, pct)
+
+    def _warn(self, cfg, key, pct):
+        text = self.render(cfg["message"], self._camera_name(key), pct)
+        ok, msg = self._deliver(cfg, text)
+        with self.lock:
+            if ok:
+                self.tries.pop(key, None)
+                self.last = {"ok": True, "time": int(self.wall()), "text": text}
+            else:
+                n = self.tries.get(key, {}).get("n", 0) + 1
+                self.tries[key] = {"n": n, "at": self.mono() + self.BACKOFF_S[n - 1] if n <= len(self.BACKOFF_S) else None}
+                self.last = {"ok": False, "time": int(self.wall()), "text": msg}
+        if ok:
+            self.store.mark_warned(key, self.wall())
+
+    def run(self):
+        """Läuft im Hintergrund, solange die Oberfläche läuft."""
+        while not self.stop_ev.is_set():
+            try:
+                self.tick()
+            except Exception as e:                  # nie den Dienst beenden; vom Text der Ausnahme nur den Typ ausgeben (er könnte Angaben enthalten)
+                print("twitch:", type(e).__name__)
+            self.stop_ev.wait(self.POLL_S)
+
+    # ---- für die Oberfläche
+    def status(self):
+        out = self.store.public()
+        with self.lock:
+            last = dict(self.last) if self.last else None
+            waits = [t["at"] for t in self.tries.values() if t["at"] is not None]
+            gave_up = any(t["at"] is None for t in self.tries.values())
+        st = {"ok": None, "time": None, "text": "", "retry_at": None, "gave_up": gave_up}
+        if last:
+            st.update(ok=last["ok"], time=last["time"], text=last["text"])
+            if not last["ok"] and waits:
+                st["retry_at"] = int(self.wall() + max(0.0, min(waits) - self.mono()))
+        out["status"] = st
+        return out
+
+    def save(self, req):
+        self.store.set(req)
+        with self.lock:
+            self.tries.clear()                       # neue Angaben: neue Versuche
+        return self.status()
+
+    def test(self):
+        """Eine Testnachricht mit den gespeicherten Angaben senden: {"ok": bool, "message": Meldung auf Deutsch}."""
+        cfg = self.store.settings()
+        if not (cfg["channel"] and cfg["login"] and cfg["token"]):
+            raise ValueError(TwitchStore.ERR_MISSING)
+        with self.lock:
+            now = self.mono()
+            if self.test_at is not None and now - self.test_at < self.TEST_EVERY_S:
+                raise PermissionError("Bitte kurz warten")
+            self.test_at = now
+        ok, msg = (True, "Demo: gesendet.") if self.demo else self._deliver(cfg, self.TEST_TEXT, wait=True)
+        with self.lock:
+            self.last = {"ok": ok, "time": int(self.wall()), "text": self.TEST_TEXT if ok else msg}
+        return {"ok": ok, "message": msg}
+
+
 class Vault:
     """Einstellungen mit einem Passwort verschlüsseln und prüfen (Issue #20). Nur die Standardbibliothek:
       * Schlüssel aus dem Passwort: PBKDF2-HMAC-SHA256, 600000 Runden, 16 Byte Salz, 64 Byte Ergebnis (32 für AES, 32 für die Prüfsumme).
@@ -4172,6 +4809,8 @@ class Handler(BaseHTTPRequestHandler):
     srtla = None
     pipeline = None
     send = None
+    twitch = None
+    hdmi = None
 
     def log_message(self, *a):
         pass
@@ -4331,6 +4970,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/dji":
             st = label_bluetooth(self.djisvc.status(), self.names)
             return self.reply(200, st)
+        if path == "/api/twitch":
+            return self.reply(200, self.twitch.status())
+        if path == "/api/hdmi":
+            return self.reply(200, self.hdmi.status())
         if path == "/api/network":
             return self.reply(200, self.netchoice.status())
         if path == "/api/srtla":
@@ -4481,6 +5124,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(404, {"error": "nicht gefunden"})
             if path == "/api/dji/cmd":
                 return self.reply(200, self.djisvc.command(d))
+            if path == "/api/twitch":
+                return self.reply(200, self.twitch.save(d))
+            if path == "/api/twitch/test":
+                return self.reply(200, self.twitch.test())
+            if path == "/api/hdmi":
+                return self.reply(200, self.hdmi.set(d))
             if path == "/api/update":
                 self.updates.request(d.get("mode"), d.get("confirm") is True)
                 return self.reply(200, {"ok": True})
@@ -4516,8 +5165,11 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:
                 return self.reply(404, {"error": "nicht gefunden"})
         m = re.match(r"^/api/cameras/([0-9a-f]{8})$", self.path.split("?")[0])
+        cam = next((c for c in self.cams.cams if c["id"] == m.group(1)), None) if m else None
         if not m or not self.cams.remove(m.group(1)):
             return self.reply(404, {"error": "nicht gefunden"})
+        if cam and cam.get("key") == HDMI_KEY and self.hdmi:
+            self.hdmi.on_camera_removed()                    # die Kamera "HDMI" ist weg: die Einspeisung ausschalten
         self.reply(200, {"ok": True})
 
 
@@ -4564,6 +5216,10 @@ def main():
     Handler.djisvc.pipeline = Handler.pipeline
     Handler.transfer = SettingsTransfer(args.state, Handler.cams, Handler.pipeline, Handler.srtla, Handler.autostart, Handler.names, Handler.djisvc,
                                         Handler.wifi, Handler.send, args.demo)
+    Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, demo=args.demo)
+    Handler.hdmi = HdmiService(args.state, Handler.cams, args.demo)
+    if not args.demo:
+        threading.Thread(target=Handler.twitch.run, daemon=True).start()
 
     def watcher():
         while True:
