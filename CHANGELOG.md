@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.87 (Beta)
+- Korrektur: In 0.9.86 lagen `web/index.html`, `web/i18n/en.json` und `tools/test_dji_service.py` kurzzeitig am falschen Ort auf GitHub. Wer 0.9.86 in dieser Zeit eingespielt hat, hat die Oberfläche ohne den Schalter "Nur Akkustand lesen". Dieses Update bringt die richtigen Dateien. Sonst keine Änderung.
+
 ## 0.9.86 (Beta)
 - Neu: **Nur Akkustand lesen** (Karte "Kameras", DJI-Kamera, Schalter "Nur Akkustand lesen (Kamera sendet per HDMI)"). Für eine Kamera, die per HDMI sendet: Die Box koppelt sich nur per Bluetooth, liest den Akkustand und lässt WLAN und Stream in Ruhe. Der Akku erscheint dann bei der HDMI-Kamera im Status und in der Twitch-Warnung. Standard: aus.
   - **Nur mit nachgestellter Kamera geprüft (Tests), nicht mit einer echten Action 5.** Offen: ob sie ihren Akkustand per Bluetooth auch dann sendet, wenn sie per HDMI sendet.
