@@ -7,6 +7,7 @@
 <style>
 :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4}
 *{box-sizing:border-box}
+[hidden]{display:none!important}   /* Klassen mit display (z. B. .row, .updlink) dürfen das Attribut hidden nicht überstimmen */
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,system-ui,sans-serif}
 header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;margin:12px auto 0;max-width:calc(980px - 0px);width:calc(100% - 32px);border:1px solid var(--line);border-radius:14px;background:var(--card);position:sticky;top:8px;z-index:50;box-shadow:0 0 0 8px var(--bg),0 10px 20px 6px rgba(2,6,23,.5)}   /* Kopfleiste bleibt beim Scrollen oben stehen */
 .card{scroll-margin-top:calc(var(--hdrh,64px) + 20px)}   /* Sprung zu einer Karte (z. B. gelber Punkt) landet unter der festen Kopfleiste, nicht dahinter */

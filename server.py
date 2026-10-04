@@ -1935,6 +1935,7 @@ class SwUpdate:
     getrennte Root-Helfer pipbox-swupdate.py.
     """
     CHECK_EVERY = 6 * 3600     # Sekunden zwischen zwei Abfragen bei GitHub
+    RETRY_AFTER_ERROR = 30 * 60   # ein Fehlversuch (kein Internet) wird früher wiederholt
     RAW = "https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/"
     API = "https://api.github.com/repos/IRL4YOU/irl4you-pip/releases?per_page=30"
     STATUS = "/run/pipbox-swupdate/status.json"
@@ -1973,7 +1974,8 @@ class SwUpdate:
     def check(self, force=False):
         """Fragt die neueste Version auf GitHub ab (höchstens alle 6 Stunden und nie während einer Übertragung, außer force)."""
         with self.lock:
-            if not force and self.cache and (time.time() - self.cache_t < self.CHECK_EVERY or self.send._active()):
+            wait = self.RETRY_AFTER_ERROR if self.cache and self.cache.get("error") else self.CHECK_EVERY
+            if not force and self.cache and (time.time() - self.cache_t < wait or self.send._active()):
                 return self.cache
             if not force and not self.cache and not self.demo and self.send._active():
                 return {"checked_at": None}          # während der Übertragung nicht über das Mobilfunknetz nachfragen
@@ -1995,6 +1997,17 @@ class SwUpdate:
         with self.lock:
             self.cache, self.cache_t = res, time.time()
         return res
+
+    def auto_loop(self):
+        """Fragt von selbst nach (alle 6 Stunden, check() hält das ein und fragt nie während einer Übertragung), damit der Punkt
+        "Oberfläche" in der Kopfleiste auch dann stimmt, wenn gerade niemand die Seite offen hat."""
+        time.sleep(90)
+        while True:
+            try:
+                self.check()
+            except Exception as e:                # nie den Dienst beenden
+                print("swupdate auto_check:", e)
+            time.sleep(15 * 60)
 
     def releases(self, force=False):
         """Veröffentlichte Versionen (Releases) auf GitHub: [{version, date, notes}], höchstens alle 6 Stunden, nie während einer Übertragung."""
@@ -2192,13 +2205,13 @@ class Updates:
         with os.fdopen(fd, "w") as f:
             f.write(mode + "\n")
 
-    AUTO_EVERY = 24 * 3600        # so selten sucht die Box von selbst nach Systemupdates (und nie während einer Übertragung)
-    AUTO_RETRY = 6 * 3600         # nach einer Suche ohne Ergebnis (kein Internet) erst später wieder
+    AUTO_EVERY = 6 * 3600         # so oft sucht die Box von selbst nach Systemupdates (nie während einer Übertragung)
+    AUTO_RETRY = 3600             # nach einer Suche ohne Ergebnis (kein Internet) erst nach einer Stunde wieder
     AUTO_AFTER_BOOT = 10 * 60     # nach dem Start der Box nicht sofort suchen
 
     @classmethod
     def auto_check_due(cls, st, now, uptime, streaming, request_pending, last_try, helper=True):
-        """Ist es Zeit für die tägliche stille Suche nach Systemupdates? Reine Rechnung (testbar)."""
+        """Ist es Zeit für die stille Suche nach Systemupdates (alle 6 Stunden)? Reine Rechnung (testbar)."""
         if not helper or streaming or request_pending or uptime < cls.AUTO_AFTER_BOOT:
             return False
         if st.get("state") in ("running", "rebooting"):
@@ -2750,6 +2763,8 @@ def main():
     Handler.pipeline = PipelineStore(os.path.join(args.state, "pipeline.json"))
     Handler.send = SendControl(args.state, Handler.srtla, Handler.pipeline, Handler.cams, args.demo)
     Handler.swupdate = SwUpdate(args.state, args.demo, Handler.send)
+    if not args.demo:
+        threading.Thread(target=Handler.swupdate.auto_loop, daemon=True).start()
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
     Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice)

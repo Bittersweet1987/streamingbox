@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.48 (Beta)
+- Behoben: **Die gelben Punkte in der Kopfleiste ("Oberfläche" und "System") blieben dauerhaft sichtbar**, auch wenn es keine Updates gab. Ursache: Die Darstellung der Punkte (`display`) überstimmte das Attribut `hidden`, mit dem sie ausgeblendet werden. Jetzt gilt für die ganze Seite eine feste Regel `[hidden]{display:none}`.
+  Dadurch verschwindet auch die Zeile "Adresse im privaten Netz" mit dem leeren Link in der Karte Fernzugriff, solange Tailscale keine Adresse bereitstellt (sie wurde bisher ebenfalls immer gezeigt).
+- Geändert: **Beide Abfragen laufen alle 6 Stunden von selbst.** Die Suche nach Systemupdates (bisher einmal am Tag) und die Abfrage der neuen Oberflächen-Version bei GitHub: Beide Punkte stimmen so auch, wenn gerade niemand die Seite offen hat. Der Server fragt jetzt auch ohne geöffnete Seite bei GitHub nach.
+  Ein Fehlversuch (kein Internet) wird früher wiederholt: die Systemsuche nach 1 Stunde, die GitHub-Abfrage nach 30 Minuten (vorher erst nach 6 Stunden). **Nie während einer Übertragung** (kein Mobilfunkverkehr dafür); nach dem Start der Box frühestens nach 10 Minuten (Systemsuche) beziehungsweise 90 Sekunden (GitHub). Die Suche lädt nur Paketlisten, installiert nichts.
+- Test: Die Seite muss die feste Regel enthalten, die Punkte sind im Quelltext ausgeblendet. Geprüft im Browser mit der tatsächlichen Sichtbarkeit (nicht nur dem Attribut): ohne Updates beide weg, mit Updates sichtbar, bei Fehler weg.
+
 ## 0.9.47 (Beta)
 - Neu: **Zweiter gelber Punkt in der Kopfleiste für die BELABOX-Systemupdates** (Ubuntu- und BELABOX-Pakete). Die Kopfleiste zeigt jetzt bis zu zwei Punkte hinter dem Titel: "Oberfläche" (neue Version von IRL4YOU BOX, seit 0.9.46) und "System" (Systemupdates liegen bereit).
   Beide sind **nur sichtbar, wenn etwas ansteht**, sonst aus. Beim Darüberfahren steht, was ansteht (bei den Systemupdates Zahl der Pakete, Stand der Suche, ob danach ein Neustart nötig ist, und dass das Einspielen während einer Übertragung nicht geht); ein Klick öffnet die zugehörige Karte. Auf schmalen Bildschirmen steht nur der Punkt, ohne Text.

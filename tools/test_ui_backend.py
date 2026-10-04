@@ -971,6 +971,20 @@ class AuthModes(unittest.TestCase):
         self.assertIn('d.get("remember") is True', src)
 
 
+class HiddenAttribute(unittest.TestCase):
+    """Ein Element mit hidden muss auch wirklich verschwinden: eine Klasse mit display (z. B. .row, .updlink) überstimmt sonst das Attribut.
+    Fehler 0.9.47: die gelben Punkte in der Kopfleiste blieben trotz hidden dauerhaft sichtbar."""
+
+    def test_page_has_a_global_hidden_rule(self):
+        html = open(os.path.join(server.WEB_DIR, "index.html"), encoding="utf-8").read()
+        self.assertRegex(html, r"\[hidden\]\s*\{\s*display\s*:\s*none\s*!important")
+
+    def test_header_dots_are_hidden_in_the_markup(self):
+        html = open(os.path.join(server.WEB_DIR, "index.html"), encoding="utf-8").read()
+        for i in ("hdr_upd", "hdr_sys"):
+            self.assertRegex(html, r'id="%s"[^>]*\shidden[\s>]' % i)
+
+
 class UpdateHelperRepair(unittest.TestCase):
     """System-Updates: ein unterbrochener Paketlauf (dpkg was interrupted) wird erkannt und vor dem Update abgeschlossen."""
 
@@ -1253,14 +1267,18 @@ class FunnelRequests(unittest.TestCase):
 
 
 class AutoSystemCheck(unittest.TestCase):
-    """Tägliche stille Suche nach Systemupdates: wann sie fällig ist, was der Helfer dabei tut (und nicht tut)."""
+    """Stille Suche nach Systemupdates alle 6 Stunden: wann sie fällig ist, was der Helfer dabei tut (und nicht tut)."""
     U = server.Updates
-    DAY = 24 * 3600
+    DAY = 6 * 3600
 
     def due(self, st=None, now=10 * 24 * 3600, uptime=3600, streaming=False, pending=False, last_try=0, helper=True):
         return self.U.auto_check_due(st if st is not None else {"state": "done", "last_check": now - self.DAY - 5}, now, uptime, streaming, pending, last_try, helper)
 
-    def test_due_after_a_day_and_never_checked(self):
+    def test_interval_is_six_hours_and_retry_one_hour(self):
+        self.assertEqual((self.U.AUTO_EVERY, self.U.AUTO_RETRY), (6 * 3600, 3600))
+        self.assertEqual((server.SwUpdate.CHECK_EVERY, server.SwUpdate.RETRY_AFTER_ERROR), (6 * 3600, 1800))
+
+    def test_due_after_the_interval_and_never_checked(self):
         self.assertTrue(self.due())
         self.assertTrue(self.due(st={"state": "never"}))
         self.assertTrue(self.due(st={}))
@@ -1280,13 +1298,52 @@ class AutoSystemCheck(unittest.TestCase):
     def test_not_right_after_boot_and_with_retry_pause(self):
         self.assertFalse(self.due(uptime=120))
         now = 10 * self.DAY
-        self.assertFalse(self.due(now=now, last_try=now - 3600))                     # vor kurzem versucht (z. B. kein Internet)
-        self.assertTrue(self.due(now=now, last_try=now - 7 * 3600))
+        self.assertFalse(self.due(now=now, last_try=now - 1800))                     # vor kurzem versucht (z. B. kein Internet)
+        self.assertTrue(self.due(now=now, last_try=now - 2 * 3600))
 
     def make(self):
         d = tempfile.mkdtemp()
         u = server.Updates(d, demo=False)
         return d, u
+
+    def test_github_check_runs_every_six_hours_and_retries_sooner_after_an_error(self):
+        class Idle:
+            def _active(self):
+                return False
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, Idle())
+        calls = []
+
+        def fake_get(name, limit):
+            calls.append(name)
+            if fail[0]:
+                raise OSError("kein Netz")
+            return "9.9.9" if name == "VERSION" else "## 9.9.9\n- x"
+        fail = [True]
+        t = [1000.0]
+        with mock.patch.object(sw, "_get", fake_get), mock.patch.object(server.time, "time", lambda: t[0]):
+            self.assertIn("error", sw.check())
+            n = len(calls)
+            t[0] += 600
+            sw.check()
+            self.assertEqual(len(calls), n)                       # nach 10 Minuten noch nicht wieder
+            t[0] += 1500                                          # 35 Minuten nach dem Fehlversuch
+            fail[0] = False
+            self.assertEqual(sw.check().get("latest"), "9.9.9")
+            n = len(calls)
+            t[0] += 5 * 3600
+            sw.check()
+            self.assertEqual(len(calls), n)                       # nach 5 Stunden noch aus dem Zwischenspeicher
+            t[0] += 2 * 3600
+            sw.check()
+            self.assertGreater(len(calls), n)                     # nach über 6 Stunden neu
+
+    def test_github_auto_check_does_not_ask_while_sending(self):
+        class Busy:
+            def _active(self):
+                return True
+        sw = server.SwUpdate(tempfile.mkdtemp(), False, Busy())
+        with mock.patch.object(sw, "_get", lambda n, l: (_ for _ in ()).throw(AssertionError("gefragt"))):
+            self.assertEqual(sw.check(), {"checked_at": None})
 
     def test_request_file_gets_only_the_fixed_word(self):
         d, u = self.make()
