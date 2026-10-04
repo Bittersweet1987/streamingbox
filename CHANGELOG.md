@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.71 (Beta)
+- Neu (Issue #19, erster Teil): **Mobile Ansicht (Handybreite bis 620 Pixel).**
+  - **Feste Fußleiste mit einem großen Knopf "Live" / "Stop"** (grün, rot beim Senden, gelb "…" beim Verbinden). Der Knopf "Live gehen" / "● LIVE" ist auf dem Handy aus der Kopfleiste in die Fußleiste gewandert; auf dem Desktop bleibt alles wie es war. Die Fußleiste hat dieselben Bedingungen wie bisher (nur wenn die Sendung starten kann) und lässt unten Platz für die Navigationsleiste des Handys.
+  - **Kopfleiste in einer Zeile** statt zwei (Name, Karten auf-/zuklappen, Streammodus, Verbindungsanzeige; die gelben Update-Hinweise sind auf dem Handy nur noch der Punkt, der Text steht im Tooltip).
+  - **Keine Rückfrage mehr beim Start der Sendung** (mobile und normale Ansicht): "Jetzt LIVE senden? Ziel: …" entfällt. **Beim Beenden bleibt die Rückfrage**, damit ein versehentlicher Druck auf den großen Knopf die Sendung nicht abbricht; sag Bescheid, wenn sie auch dort weg soll.
+  - **Noch nicht umgesetzt aus #19:** Ton-Knopf in der Fußleiste (Klick = nächste Tonspur, langer Klick = stumm), Kamera-Knöpfe ("Haupt", "Klein 1" bis "Klein 3") mit blauem Rahmen für das Hauptbild, langem Klick zum Tauschen und Ein-/Ausblenden. Das braucht Erweiterungen am Bild-Baustein, damit Ton und Sichtbarkeit **während der Sendung ohne Neustart** umgeschaltet werden können (heute geht das nur über einen Neustart der Sendung, ausgenommen der Tausch des Hauptbildes), und ein paar Rückfragen zur Bedeutung der Knöpfe (siehe Kommentar im Issue).
+- Tests: neue Datei `tools/test_mobile.py` (5 Tests): Fußleiste nur auf dem Handy, Kopfleiste einzeilig, Beschriftung "Live"/"Stop" folgt dem Zustand, gleicher Schalter für beide Knöpfe, keine Rückfrage beim Start, aber beim Beenden.
+
 ## 0.9.70 (Beta)
 - Neu: **Ein Klick auf ein angezeigtes Passwort kopiert es in die Zwischenablage** (SSH-Passwort in der Karte "Entwickler" und Passwort des Hotspots). Als Rückmeldung steht kurz "✓ kopiert" hinter dem Passwort. Auch ohne HTTPS (Adresse im lokalen Netz, dort gibt es die Zwischenablage-Schnittstelle des Browsers nicht) geht es über den Ersatzweg mit Markieren und `execCommand`. Klappt das im Browser nicht, bleibt das Passwort markiert und es steht "markiert: bitte Strg/Cmd+C" dahinter. Der Hinweis über dem Passwort heißt jetzt "(ein Klick kopiert es)".
 - Tests: Seite enthält Kopierfunktion, Klick-Behandlung und den Hinweis.

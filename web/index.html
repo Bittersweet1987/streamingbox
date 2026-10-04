@@ -166,6 +166,23 @@ details.card[open]>summary{margin-bottom:10px}
 button.small{padding:4px 10px;font-size:13px}
 button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 @media(max-width:620px){.smtx{display:none}.smic{display:inline}#sm_btn{padding:3px 10px}.foldd{display:none}.foldm{display:inline-block}header{gap:8px}}
+/* Handy: Kopfleiste in einer Zeile, "Live"/"Stop" steht in der festen Fußleiste (Issue #19) */
+#mfoot{display:none}
+.mf-live{flex:1 1 auto;min-height:48px;border-radius:12px;border:1px solid var(--ok);background:var(--ok);color:#06210f;font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
+.mf-live.on{background:var(--crit);border-color:var(--crit);color:#fff}
+.mf-live.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
+.mf-live:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:620px){
+  header{flex-wrap:nowrap;padding:6px 10px;gap:6px;width:calc(100% - 20px)}
+  header h1{font-size:15px;white-space:nowrap}
+  header .hdr{flex-wrap:nowrap;gap:6px;min-width:0}
+  header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
+  header .hdr .updbtn{font-size:0;padding:3px 9px}header .hdr .updbtn .dot{margin:0;font-size:13px}    /* nur der gelbe Punkt, Text steht im Tooltip */
+  #hdr_live{display:none!important}
+  #mfoot{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(2,6,23,.5)}
+  body{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+  .toast{bottom:92px}
+}
 #rcard a.btnlink{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--bar);color:#0f172a;font-weight:600;text-decoration:none}
 #r_apps a.btnlink{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400}
 #r_url{word-break:break-all}
@@ -487,6 +504,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="pwmsg" class="ph"></div>
   </details>
 </main>
+<nav id="mfoot" aria-label="Schnellzugriff"><button type="button" id="mf_live" class="mf-live" disabled aria-label="Sendung starten oder beenden">Live</button></nav>
 <dialog id="rdlg"><form method="dialog"><b>Noch nicht übernommen</b>
   <p id="rdlg_t"></p><p class="muted">Die Sendung läuft noch mit den alten Werten. Ein Neustart unterbricht das Bild für einige Sekunden.</p>
   <div class="actions"><button type="button" id="rdlg_go" class="warnbtn">Stream neu starten</button><button type="submit" class="sec">Später</button></div></form></dialog>
@@ -1357,8 +1375,7 @@ $("live_restart").addEventListener("click",async()=>{
   sendLoad();
 });
 async function doLiveStart(){
-  const s=sendData&&sendData.server; if(!s) return;
-  if(!confirm(`Jetzt LIVE senden?\n\nZiel: ${s.name}\n\nDas Bild wird sofort zum Server übertragen.`)) return;
+  const s=sendData&&sendData.server; if(!s) return;                      // keine Rückfrage beim Start (Issue #19); beim Beenden bleibt sie
   try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; alert(x.message); }
   setTimeout(sendLoad,800);
 }
@@ -1384,11 +1401,16 @@ function updHdrLive(d){
   b.textContent=busy?(LIVE_LABEL[d.state]==="Wird beendet…"?"Wird beendet…":"Verbinde …"):(live?"● LIVE":"Live gehen");
   b.disabled=busy||(!live&&!d.can_start);
   b.title=busy?(LIVE_LABEL[d.state]||""):(live?"Es wird gesendet. Klicken beendet die Sendung (mit Rückfrage).":(d.can_start?"Nicht live. Klicken startet die Sendung (mit Rückfrage).":"Kann nicht starten: "+((d.reasons||[]).join(" · ")||"Bedingungen nicht erfüllt")));
+  const f=$("mf_live");                                                      // Fußleiste (nur auf dem Handy sichtbar): "Live" oder "Stop"
+  f.className="mf-live"+(live&&!busy?" on":"")+(busy?" busy":"");
+  f.textContent=busy?"…":(live?"Stop":"Live"); f.disabled=b.disabled; f.title=b.title;
 }
-$("hdr_live").addEventListener("click",async()=>{
+async function liveToggle(){
   if(sendData&&sendData.active){ if(confirm("Die Sendung jetzt beenden?\n\nDas Bild geht zum Server nicht mehr weiter.")) await doLiveStop(); }
   else await doLiveStart();
-});
+}
+$("hdr_live").addEventListener("click",liveToggle);
+$("mf_live").addEventListener("click",liveToggle);
 sendLoad(); setInterval(()=>{ if(!document.hidden) sendLoad(); },2000);
 let rBusy=false, rDeclinedMem=false;
 const R_STATE={Running:"verbunden",NeedsLogin:"Anmeldung nötig",Stopped:"getrennt",NoState:"startet …",Starting:"startet …"};
