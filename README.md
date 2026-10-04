@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.24 (Beta).** Getestet auf einer Radxa ROCK 5B+ mit BELABOX-Image und DJI Osmo Action 4, Action 5 Pro und
+**Version 0.9.25 (Beta).** Getestet auf einer Radxa ROCK 5B+ mit BELABOX-Image und DJI Osmo Action 4, Action 5 Pro und
 Action 6. Vier Kameras gleichzeitig (Hauptbild und drei kleine Bilder) liefen ohne Frame-Drops bei rund 13 Mbit/s; die
 Box war dabei zu etwa 70 % im Leerlauf. Noch kein Langzeittest über mehrere Stunden mit dem aktuellen Stand.
 Auf der Orange Pi 5 Plus (frisches BELABOX-Image) ist die Installation getestet und der Überlagerungs-Baustein mit künstlichen
