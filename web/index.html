@@ -68,6 +68,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 @media(max-width:620px){.wform{grid-template-columns:1fr}}
 .wstat{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);margin-top:8px}
 .wstat .wdot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.wstat.ok .wdot{background:var(--ok)}
+.wstat.bad .wdot{background:var(--crit)}
 .wstat .wgrow{flex:1;min-width:160px}
 .wstat label{display:flex;gap:8px;align-items:center;white-space:nowrap}
 #wificard a{color:var(--accent)}
@@ -130,6 +131,16 @@ details.card[open]>summary{margin-bottom:10px}
 .seg button .dot{margin-right:8px}
 .seg button.on .dot{box-shadow:0 0 0 2px #0f172a}
 .statbox .row{padding:2px 0}
+/* Upload im Status: ein gemeinsames Raster (Name | senden | Mbit/s ↑ | Punkt | empfangen | ↓). Die Zahlen stehen rechtsbündig in Spalten mit festen
+   Breiten und gleich breiten Ziffern, damit nichts hin und her rutscht, wenn sich Werte ändern (9,8 auf 10,2 Mbit/s); der Name bekommt den Rest. */
+#net.hasrows{display:grid;grid-template-columns:minmax(0,1fr) minmax(3em,auto) auto .9em minmax(2.5em,auto) auto;align-items:baseline}
+#net.hasrows .row{display:contents}
+#net.hasrows .row>span{padding:2px 0;white-space:nowrap}
+#net.hasrows .row>.nm{min-width:0;overflow:hidden;text-overflow:ellipsis;padding-right:8px}
+#net.hasrows .row>.num{text-align:right;font-variant-numeric:tabular-nums}
+#net.hasrows .row>.u{padding-left:4px}
+#net.hasrows .row>.sep{text-align:center}
+#net.hasrows .sum>span{box-shadow:0 -1px 0 var(--line)}
 .hdr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .foldd{display:inline-flex;gap:6px}
 .foldm{display:none}.smic{display:none;font-size:16px;line-height:1}
@@ -224,16 +235,16 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="cams"></div>
     <form id="addcam" class="add">
       <input id="f_name" placeholder="Name, z. B. Hauptkamera" maxlength="40" required>
-      <select id="f_role"><option value="extra">Weitere</option><option value="main">Hauptbild</option><option value="pip">Bild-in-Bild</option></select>
       <input id="f_key" placeholder="Schlüssel (leer = automatisch)" maxlength="32">
       <button type="submit">Kamera hinzufügen</button>
     </form>
     <div id="formerr" class="err"></div>
-    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie im Bereich „DJI-Kameras“ gewählt haben.</div>
-      <div class="sech">DJI-Kameras (Bluetooth)</div><div id="djicard">
-    <div class="ph" style="margin-top:0">Hauptverbindung: gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung. Eine andere Verbindung wählt man je Kamera in der Liste „RTMP-Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
+    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
+    <div class="sech">Hauptverbindung</div>
+    <div class="ph" style="margin-top:0">Gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung (Handy, Drohne, DJI-Kamera und so weiter). Eine andere Verbindung wählt man je Kamera in der Liste „RTMP-Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
     <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
     <div id="netinfo" class="ph"></div>
+    <div class="sech">DJI-Kameras (Bluetooth)</div><div id="djicard">
     <div id="djinote" class="muted"></div>
     <div id="djiadapt" class="ph"></div>
     <div id="djicams"></div>
@@ -338,6 +349,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="wifisaved" class="ph"></div>
     <div id="wifimsg" class="ph"></div>
   </div></div>
+    <div class="sech">Bluetooth (für DJI-Kameras)</div>
+    <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
+    <div id="btcard"><div class="ph">Wird geladen …</div></div>
 <div id="neterr" class="err"></div>
     <div id="upinfo" class="ph"></div>
   </details>
@@ -520,7 +534,7 @@ async function renameCam(id,old){
 $("addcam").addEventListener("submit",async e=>{
   e.preventDefault(); $("formerr").textContent="";
   const r=await fetch("/api/cameras",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({name:$("f_name").value,role:$("f_role").value,key:$("f_key").value})});
+    body:JSON.stringify({name:$("f_name").value,key:$("f_key").value})});
   if(!r.ok){ $("formerr").textContent=(await r.json()).error; return; }
   $("f_name").value=""; $("f_key").value=""; tick();
 });
@@ -667,19 +681,35 @@ function djiDynamic(){
     const au=card.querySelector(".d-auto"); if(au!==document.activeElement) au.checked=!!c.autoconnect;
   }
 }
+// Bluetooth-Sticks im Abschnitt "Netze zum Senden und WLAN": jeder laufende Adapter, auch Sticks, die stecken, aber keinen Adapter ergeben
+// (kein Treiber, nicht unterstützt) mit ihrem Hinweis, und eine Meldung des Treiber-Helfers, solange er arbeitet oder scheitert.
+function btRender(d){
+  const el=$("btcard"); if(!el) return;
+  const ad=d.available?(d.adapters||[]):[], pr=d.available?(d.adapter_problems||[]):[], dr=d.driver||{};
+  const drTxt=d.available&&dr.message&&["working","waiting","failed","unsupported"].includes(dr.state)?dr.message:"";
+  let h="";
+  if(!d.available) h=`<div class="wstat bad"><span class="wdot"></span><span class="wgrow">${esc(d.reason||"Der Bluetooth-Dienst ist nicht erreichbar")}</span></div>`;
+  else{
+    h=ad.map(a=>`<div class="wstat${a.powered?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(a.name||(a.usb_id?"Bluetooth-Stick":"Eingebauter Bluetooth-Adapter"))}</b>${devDet(a)} · ${a.powered?"bereit":"ausgeschaltet"}</span></div>`).join("")+
+      pr.map(x=>`<div class="wstat bad"><span class="wdot"></span><span class="wgrow"><b>${esc(x.name)}</b> <span class="muted">(${esc(x.id)})</span> · nicht nutzbar<div class="muted" style="margin-top:3px">${esc(x.hint)}</div></span></div>`).join("");
+    if(!ad.length&&!pr.length) h='<div class="wstat bad"><span class="wdot"></span><span class="wgrow">Kein Bluetooth-Adapter gefunden. Für DJI-Kameras einen USB-Bluetooth-Stick einstecken.</span></div>';
+    if(drTxt) h+=`<div class="ph"${dr.state==="failed"||dr.state==="unsupported"?' style="color:var(--crit)"':""}>${esc(drTxt)}</div>`;
+  }
+  setHtml(el,h);
+}
 function djiRender(d){
-  djiData=d; djiRecv=Date.now();
+  djiData=d; djiRecv=Date.now(); btRender(d);
   const note=$("djinote"), box=$("djicams");
   if(!d.available){ note.textContent=d.reason||"Bluetooth nicht verfügbar"; note.style.color="var(--crit)"; $("d_scan").disabled=true; box.innerHTML=""; djiStruct=""; $("djiscan").innerHTML=""; $("djiadapt").textContent=""; return; }
   note.textContent=d.bleak===false?"Die Bluetooth-Bibliothek (bleak) ist nicht installiert. install.sh erneut ausführen (braucht Internet).":(d.scan_error||"");
   note.style.color=note.textContent?"var(--crit)":"";
-  { const pr=(d.adapter_problems||[]).map(x=>x.hint), ad=d.adapters||[];       // Bluetooth-Stick, der keinen Adapter ergibt, oder welcher Adapter läuft
+  { const pr=(d.adapter_problems||[]).map(x=>x.hint), ad=d.adapters||[];       // hier nur Probleme; die Adapter selbst stehen unter "Netze zum Senden und WLAN, Bluetooth"
     const el=$("djiadapt");
-    const dr=d.driver||{}, drTxt=dr.message&&["working","waiting","failed","unsupported","ok"].includes(dr.state)?dr.message:"";   // Treiber für Realtek-Sticks (Helfer pipbox-btdriver)
-    const bad=pr.length||dr.state==="failed"||dr.state==="unsupported";
-    if(pr.length&&!(drTxt&&dr.state!=="ok")){ el.textContent=pr.join(" "); }
+    const dr=d.driver||{}, drTxt=dr.message&&["working","waiting","failed","unsupported"].includes(dr.state)?dr.message:"";   // Treiber für Realtek-Sticks (Helfer pipbox-btdriver)
+    const bad=pr.length||!ad.length||dr.state==="failed"||dr.state==="unsupported";
+    if(pr.length&&!drTxt){ el.textContent=pr.join(" "); }
     else if(pr.length){ el.textContent=drTxt; }
-    else { el.textContent=(ad.length?"Bluetooth-Adapter: "+ad.map(a=>(a.usb_id||"eingebaut")+(a.powered?"":" (aus)")).join(", ")+".":"Kein Bluetooth-Adapter gefunden.")+(drTxt?" "+drTxt:""); }
+    else { el.textContent=(ad.length?"":"Kein Bluetooth-Adapter gefunden. ")+drTxt; }
     el.style.color=bad?"var(--crit)":""; }
   $("d_scan").disabled=!!d.scanning; $("d_scan").textContent=d.scanning?"Suche läuft …":"Nach DJI-Kameras suchen";
   // Die Karten nur neu aufbauen, wenn sich die Kameras oder Verbindungen ändern (sonst wird das Tippen unterbrochen)
@@ -817,18 +847,26 @@ $("b_save").addEventListener("click",async()=>{
 srtlaLoad();
 
 // ---- WLAN ----
+// Name des Sticks hinter einer Netzwerkkarte bzw. einem Bluetooth-Adapter, so wie er sich meldet (Produktname), mit Hersteller und USB-Kennung
+// in Klammern; bei einer eingebauten Karte stattdessen der Treiber. Leer, wenn nichts bekannt ist.
+function devDet(c){ const det=[c.vendor,c.usb_id].filter(Boolean).join(", "); return det?` <span class="muted">(${esc(det)})</span>`:""; }
+function devInfo(c){
+  if(c.name) return ` · ${esc(c.name)}${devDet(c)}`;
+  if(c.usb_id) return ` · <span class="muted">USB ${esc(c.usb_id)}</span>`;
+  return c.driver?` · <span class="muted">Treiber ${esc(c.driver)}</span>`:"";
+}
 let wifiData=null, wifiTimer=null, wifiSig=null;
 async function wifiLoad(){
   let d; try{ d=await srtlaCall("GET","/api/wifi"); }catch(e){ return; }
   wifiData=d;
   const sel=$("w_if"), cur=sel.value, usable=d.cards.filter(c=>!c.camera_net);
   if(document.activeElement!==sel){
-    sel.innerHTML=usable.map(c=>`<option value="${esc(c.iface)}">${esc(c.iface)}${c.ip?" · "+esc(c.ip):""}</option>`).join("")||'<option value="">keine WLAN-Karte</option>';
+    sel.innerHTML=usable.map(c=>`<option value="${esc(c.iface)}">${esc(c.iface)}${c.name?" · "+esc(c.name):(c.ip?" · "+esc(c.ip):"")}</option>`).join("")||'<option value="">keine WLAN-Karte</option>';
     if(usable.some(c=>c.iface===cur)) sel.value=cur;
   }
   const ups=((srtlaData&&srtlaData.settings)||{}).uplinks||[];
-  $("wifidev").innerHTML=d.cards.length?d.cards.map(c=>c.camera_net?`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b> · Kameranetz (hier nicht änderbar)</span></div>`:
-    `<div class="wstat${c.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b> · ${c.ip?`verbunden${c.ssid?" mit <b>"+esc(c.ssid)+"</b>":""} · ${esc(c.ip)}${c.signal!=null?" · Signal "+c.signal+" %":""}`:"nicht verbunden"}</span>`+
+  $("wifidev").innerHTML=d.cards.length?d.cards.map(c=>c.camera_net?`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b>${devInfo(c)} · Kameranetz (hier nicht änderbar)</span></div>`:
+    `<div class="wstat${c.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b>${devInfo(c)} · ${c.ip?`verbunden${c.ssid?" mit <b>"+esc(c.ssid)+"</b>":""} · ${esc(c.ip)}${c.signal!=null?" · Signal "+c.signal+" %":""}`:"nicht verbunden"}</span>`+
     (c.ip?`<label title="Sendet die Box auch über dieses Netz. Danach Sendekette neu starten."><input type="checkbox" data-wup="${esc(c.iface)}"${ups.includes(c.iface)?" checked":""}> Zum Senden verwenden</label>`:"")+`</div>`).join(""):'<div class="ph">Keine WLAN-Karte gefunden.</div>';
   const sig=d.cards.map(c=>c.iface+":"+c.ip).join("|");
   if(wifiSig!==null&&sig!==wifiSig) srtlaLoad();          // neue Verbindung: Liste der Sendewege unten aktualisieren
@@ -1284,12 +1322,13 @@ async function tick(){
       el.innerHTML=`${fmt(tot)} <small>Mbit/s ↑</small>`;
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
     }
-    let netHtml=nets.map(([n,r])=>
-      `<div class="row"><span>${upDot(m.uplinks&&m.uplinks[n])}${esc(n)}</span><span><b>${fmt(r.tx_mbit)}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(r.rx_mbit)} ↓</span></div>`).join("");
+    const upRow=(nm,tx,rx,cls)=>`<div class="row${cls||""}"><span class="nm">${nm}</span><span class="num"><b>${fmt(tx)}</b></span><span class="unit u">Mbit/s ↑</span><span class="sep">·</span><span class="num">${fmt(rx)}</span><span class="unit u">↓</span></div>`;
+    let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(n),r.tx_mbit,r.rx_mbit)).join("");
     if(nets.length>1){   // Summe über alle verbundenen Netzwerkkarten (Ethernet, WLAN, USB/Mobilfunk)
       const sum=k=>nets.reduce((a,[n,r])=>a+(+r[k]||0),0);
-      netHtml+=`<div class="row" style="box-shadow:0 -1px 0 var(--line)"><span><b>Summe</b> <span class="unit">(${nets.length} ${nets.length===1?"Netz":"Netze"})</span></span><span><b>${fmt(sum("tx_mbit"))}</b> <span class="unit">Mbit/s ↑</span> · ${fmt(sum("rx_mbit"))} ↓</span></div>`;
+      netHtml+=upRow(`<b title="Summe über ${nets.length} Netze">Summe</b> <span class="unit">(${nets.length})</span>`,sum("tx_mbit"),sum("rx_mbit")," sum");
     }
+    $("net").classList.toggle("hasrows",!!netHtml);
     $("net").innerHTML=netHtml||'<span class="muted">keine Daten</span>';
     setRates(m.net);
     renderCams(m.cameras); renderCamLights(m.cameras);

@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.56 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.57 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -124,7 +124,7 @@ DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. 
 
 ## Bluetooth-Stick für die DJI-Kameras
 
-Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB-Stick besser. Die Karte "DJI-Kameras (Bluetooth)" zeigt, welcher Adapter läuft und ob ein Treiber gerade eingerichtet wird, und meldet einen Stick, aus dem der Kernel keinen Adapter macht.
+Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB-Stick besser. Der Abschnitt "Bluetooth" in der Karte "Netze zum Senden und WLAN" zeigt, welche Bluetooth-Sticks laufen (mit Name und USB-Kennung), ob ein Treiber gerade eingerichtet wird, und meldet einen Stick, aus dem der Kernel keinen Adapter macht (nicht unterstützt oder ohne Treiber).
 
 | Stick | Chip | Stand |
 |---|---|---|

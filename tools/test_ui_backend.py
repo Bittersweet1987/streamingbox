@@ -1084,6 +1084,64 @@ class HeaderControls(unittest.TestCase):
         self.assertIn("text-overflow:ellipsis", self.html[self.html.index("#camlights .row .nm"):][:200])    # langer Name wird gekürzt
         self.assertIn("const any=list.some(c=>c.battery!=null)", self.html)               # ohne Akkustand keine Spalte
 
+    def test_upload_rows_in_the_status_use_one_grid_with_fixed_number_columns(self):
+        """Die Upload-Zeilen im Status wackelten, weil sich die Breite der Zahlen änderte: jetzt ein gemeinsames Raster mit festen Spalten."""
+        h = self.html
+        self.assertIn("#net.hasrows{display:grid;grid-template-columns:minmax(0,1fr) minmax(3em,auto) auto .9em minmax(2.5em,auto) auto", h)
+        self.assertIn("font-variant-numeric:tabular-nums", h[h.index("#net.hasrows .row>.num"):][:120])
+        self.assertIn("#net.hasrows .row{display:contents}", h)
+        # jede Zeile (auch die Summe) hat dieselben sechs Zellen: Name, Zahl, Einheit, Punkt, Zahl, Pfeil
+        row = h[h.index("const upRow="):][:420]
+        for cell in ('class="nm"', 'class="num"', 'class="unit u">Mbit/s ↑', 'class="sep">·', 'class="unit u">↓'):
+            self.assertIn(cell, row)
+        self.assertIn('upRow(`<b title="Summe über ${nets.length} Netze">Summe</b> <span class="unit">(${nets.length})</span>`', h)     # kurz, damit es nicht umbricht
+        self.assertNotIn("#net.hasrows .sum>.nm{overflow:visible", h)                                         # die Summenzeile bricht nicht um (Auslassungspunkte wie die anderen Namen)
+        self.assertIn('$("net").classList.toggle("hasrows",!!netHtml)', h)
+
+    def test_adding_a_camera_has_no_role_choice_any_more(self):
+        """Issue #4: Hauptbild und Bild-in-Bild wählt man im Bildaufbau; beim Anlegen einer Kamera gibt es keine Rolle mehr."""
+        self.assertNotIn("f_role", self.html)
+        self.assertIn('body:JSON.stringify({name:$("f_name").value,key:$("f_key").value})', self.html)
+
+    def test_bluetooth_sticks_are_listed_below_the_wlan_section_and_the_ok_message_is_gone(self):
+        """Issue #6: Bluetooth als eigener Abschnitt nach der WLAN-Verbindung; die Meldung "Treiber ... ist eingerichtet" entfällt, wenn alles läuft."""
+        h = self.html
+        self.assertLess(h.index('id="wificard"'), h.index('<div class="sech">Bluetooth (für DJI-Kameras)</div>'))
+        self.assertLess(h.index('id="btcard"'), h.index('id="neterr"'))
+        self.assertIn("function btRender(d)", h)
+        self.assertIn("btRender(d);", h[h.index("function djiRender(d){"):][:140])          # bei jeder Antwort des Bluetooth-Dienstes
+        self.assertIn("nicht nutzbar", h[h.index("function btRender"):][:2200])              # ein Stick ohne Adapter wird mit seinem Hinweis gezeigt
+        dji_part = h[h.index("function djiRender(d){"):][:2500]
+        self.assertNotIn('"Bluetooth-Adapter: "', dji_part)                                      # die Zeile mit der Adapterliste in der DJI-Karte entfällt
+        self.assertNotIn('["working","waiting","failed","unsupported","ok"]', dji_part)          # Zustand "ok" wird nicht mehr als Text gezeigt
+
+    def test_wlan_cards_show_the_name_of_the_stick(self):
+        """Issue #6: Die Namen der WLAN-Sticks (z. B. 802.11ac NIC) stehen in der Übersicht und in der Auswahl der WLAN-Karte."""
+        self.assertIn("${devInfo(c)} · Kameranetz", self.html)
+        self.assertIn("<b>${esc(c.iface)}</b>${devInfo(c)} · ${c.ip?", self.html)
+        self.assertIn('${c.name?" · "+esc(c.name):(c.ip?" · "+esc(c.ip):"")}', self.html)
+
+    def test_wifi_cards_carry_name_vendor_usb_id_and_driver(self):
+        info = {"usb_id": "0bda:c811", "name": "802.11ac NIC", "vendor": "Realtek", "driver": "rtl8821cu"}
+        w = server.Wifi(tempfile.mkdtemp(), False, mock.Mock(iface="eth1"))
+        with mock.patch("os.listdir", lambda p: ["lo", "wlan0"]), mock.patch("os.path.isdir", lambda p: p.endswith("wlan0/wireless")), \
+                mock.patch.object(server, "iface_ips", lambda: []), mock.patch.object(server, "read", lambda p, d="": "up"), \
+                mock.patch.object(server.dji, "netdev_info", lambda n: dict(info)):
+            cards = w.cards()
+        self.assertEqual(len(cards), 1)
+        self.assertEqual({k: cards[0][k] for k in ("iface", "name", "vendor", "usb_id", "driver")},
+                         {"iface": "wlan0", "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "rtl8821cu"})
+
+    def test_main_connection_has_its_own_heading_not_under_the_dji_one(self):
+        """Issue #5: Die Hauptverbindung gilt für alle RTMP-Kameras (Handy, Drohne ...); sie stand fälschlich unter "DJI-Kameras (Bluetooth)"."""
+        h = self.html
+        main, dji = h.index('<div class="sech">Hauptverbindung</div>'), h.index('<div class="sech">DJI-Kameras (Bluetooth)</div>')
+        self.assertLess(main, dji)
+        self.assertLess(h.index('id="netsel"'), dji)            # Auswahl und Adresszeile gehören zur Hauptverbindung
+        self.assertLess(h.index('id="netinfo"'), dji)
+        self.assertGreater(h.index('id="djicams"'), dji)        # der DJI-Teil (Adapter, Kameras, Suche) bleibt unter seiner Überschrift
+        self.assertNotIn("Bereich „DJI-Kameras“ gewählt", h)    # der Hinweis oben verweist auf "Hauptverbindung"
+
     def test_data_badge_no_longer_says_live(self):
         self.assertNotIn('mode.textContent=m.demo?"Demo-Werte":"live"', self.html)
         self.assertIn('"Demo-Werte":"verbunden"', self.html)

@@ -11,6 +11,7 @@ import re
 
 SYSFS_USB = "/sys/bus/usb/devices"
 SYSFS_BT = "/sys/class/bluetooth"
+SYSFS_NET = "/sys/class/net"
 BTDRIVER_STATUS = "/run/pipbox-btdriver/status.json"     # schreibt der Root-Helfer pipbox-btdriver.py (Treiber für Realtek-Sticks)
 BARROT_VENDOR = "33fa"      # Barrot Technology (z. B. UGREEN Bluetooth 5.4 und 6.0, Modell CM748)
 BARROT_HINT = ("Dieser Stick hat einen BARROT-Chip (zum Beispiel UGREEN Bluetooth 5.4 oder 6.0). Der Kernel dieser BELABOX (5.10) "
@@ -59,20 +60,47 @@ def usb_bluetooth_devices(root=None):
     return out
 
 
-def usb_id_for_hci(name, root=None):
-    """USB-Kennung "vvvv:pppp" des Sticks hinter einem Bluetooth-Adapter (z. B. "hci0"), gelesen aus /sys: vom Adapter aufwärts bis zum
-    USB-Gerät. Leer bei einem eingebauten Adapter (kein USB-Gerät darüber). BlueZ selbst liefert dafür nichts Brauchbares: Seine
-    Modalias ist meist die Standardkennung "usb:v1D6Bp0246" (Linux Foundation) und nennt nie den Stick."""
-    p = os.path.realpath(os.path.join(root or SYSFS_BT, name))
+def usb_device_above(path):
+    """Das USB-Gerät hinter einem Gerät in /sys (Netzwerkkarte, Bluetooth-Adapter): vom Pfad aufwärts bis zu einem Verzeichnis mit USB-Kennung.
+    Gibt {"usb_id": "vvvv:pppp", "name": Produktname, "vendor": Herstellername} zurück (Name und Hersteller so, wie der Stick sie meldet,
+    können leer sein), bei einem eingebauten Gerät ohne USB-Gerät darüber {}."""
+    p = os.path.realpath(path)
     for _ in range(12):
         vid, pid = _read1(f"{p}/idVendor").lower(), _read1(f"{p}/idProduct").lower()
         if vid and pid:
-            return f"{vid}:{pid}"
+            return {"usb_id": f"{vid}:{pid}", "name": _read1(f"{p}/product")[:60], "vendor": _read1(f"{p}/manufacturer")[:40]}
         up = os.path.dirname(p)
         if up == p:
             break
         p = up
-    return ""
+    return {}
+
+
+def usb_info_for_hci(name, root=None):
+    """USB-Angaben (Kennung, Name, Hersteller) des Sticks hinter einem Bluetooth-Adapter wie "hci0"; {} bei einem eingebauten Adapter."""
+    return usb_device_above(os.path.join(root or SYSFS_BT, name))
+
+
+def usb_id_for_hci(name, root=None):
+    """USB-Kennung "vvvv:pppp" des Sticks hinter einem Bluetooth-Adapter (z. B. "hci0"), gelesen aus /sys: vom Adapter aufwärts bis zum
+    USB-Gerät. Leer bei einem eingebauten Adapter (kein USB-Gerät darüber). BlueZ selbst liefert dafür nichts Brauchbares: Seine
+    Modalias ist meist die Standardkennung "usb:v1D6Bp0246" (Linux Foundation) und nennt nie den Stick."""
+    return usb_info_for_hci(name, root).get("usb_id", "")
+
+
+def netdev_info(name, root=None):
+    """Angaben zu einer Netzwerkkarte (z. B. "wlan0"): USB-Kennung, Name und Hersteller des Sticks (leer bei eingebauter Karte) und der
+    Kerneltreiber. Liest nur /sys."""
+    base = os.path.join(root or SYSFS_NET, name, "device")
+    out = dict(usb_device_above(base)) or {}
+    out.setdefault("usb_id", "")
+    out.setdefault("name", "")
+    out.setdefault("vendor", "")
+    try:
+        out["driver"] = os.path.basename(os.path.realpath(os.path.join(base, "driver"))) if os.path.islink(os.path.join(base, "driver")) else ""
+    except OSError:
+        out["driver"] = ""
+    return out
 
 
 def usb_id_from_modalias(modalias):
@@ -122,8 +150,10 @@ def adapter_info(objects=None):
             continue
         mid = usb_id_from_modalias(a.get("Modalias"))
         # Die Kennung des Sticks kommt aus /sys; BlueZ meldet meist nur die Standardkennung (1d6b:0246, Linux Foundation)
-        uid = usb_id_for_hci(os.path.basename(str(path))) or ("" if mid.startswith("1d6b:") else mid)
-        adapters.append({"usb_id": uid, "address": str(a.get("Address", "")), "powered": bool(a.get("Powered", False))})
+        info = usb_info_for_hci(os.path.basename(str(path)))
+        uid = info.get("usb_id") or ("" if mid.startswith("1d6b:") else mid)
+        adapters.append({"usb_id": uid, "name": info.get("name", ""), "vendor": info.get("vendor", ""),
+                         "address": str(a.get("Address", "")), "powered": bool(a.get("Powered", False))})
         if uid:
             ids.append(uid)
     drv = {}

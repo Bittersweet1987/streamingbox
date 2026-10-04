@@ -27,6 +27,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import dji                         # Namen von USB-Sticks (WLAN, Bluetooth) aus /sys, liegt neben dieser Datei
+
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 # Echte Netzwerkkarten für die Upload-Anzeige (Ethernet, WLAN, USB-/Mobilfunk-Modems). Virtuelles (Tailscale, Docker,
 # Brücken) bleibt draußen, sonst würde der Verkehr doppelt gezählt. Angezeigt wird, was gerade verbunden ist.
@@ -1713,9 +1715,11 @@ class Wifi:
         ips = {o["iface"]: o["ip"] for o in iface_ips()}
         for n in names:
             if os.path.isdir(f"/sys/class/net/{n}/wireless") and not n.startswith("p2p"):
+                info = dji.netdev_info(n)                          # Name des WLAN-Sticks (z. B. "802.11ac NIC"), USB-Kennung, Treiber
                 out.append({"iface": n, "ip": ips.get(n, ""), "camera_net": n == self.netchoice.iface,
                             "up": (read(f"/sys/class/net/{n}/operstate", "") or "").strip() == "up",
-                            "ssid": "", "signal": None})
+                            "ssid": "", "signal": None, "name": info["name"], "vendor": info["vendor"],
+                            "usb_id": info["usb_id"], "driver": info["driver"]})
         if out:                                        # Name und Signal des verbundenen Netzes (Profilname = SSID)
             try:
                 r = subprocess.run(["nmcli", "-t", "-f", "DEVICE,CONNECTION", "dev"], capture_output=True, text=True, timeout=4)
@@ -1737,7 +1741,8 @@ class Wifi:
 
     def status(self):
         if self.demo:
-            return {"helper_installed": True, "cards": [{"iface": "wlan0", "ip": "10.0.0.5", "camera_net": False, "up": True, "ssid": "Demo-Hotspot", "signal": 80}],
+            return {"helper_installed": True, "cards": [{"iface": "wlan0", "ip": "10.0.0.5", "camera_net": False, "up": True, "ssid": "Demo-Hotspot", "signal": 80,
+                                "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "rtl8821cu"}],
                     "state": "idle", "message": "", "scan": {"iface": "wlan0", "nets": [
                         {"ssid": "Demo-Hotspot", "signal": 80, "security": "WPA2", "in_use": False},
                         {"ssid": "Mein Handy", "signal": 62, "security": "WPA2 WPA3", "in_use": False},
@@ -2528,7 +2533,7 @@ class DjiService:
                 {"ifname": "eth0", "ssid": "", "ip": "192.168.1.20", "type": "other", "secret_missing": False},
                 {"ifname": "eth1", "ssid": "", "ip": "192.168.80.1", "type": "other", "secret_missing": False}]}
         if cmd == "adapters":
-            return {"adapters": [{"usb_id": "0b05:190e", "address": "A0:AD:9F:00:00:00", "powered": True}],
+            return {"adapters": [{"usb_id": "0b05:190e", "name": "ASUS USB-BT500", "vendor": "Realtek", "address": "A0:AD:9F:00:00:00", "powered": True}],
                     "adapter_problems": [], "driver": {}}
         if cmd == "scan":
             f["scan"] = [{"addr": "AA:BB:CC:00:00:03", "name": "OsmoAction6", "model": "Osmo Action 6", "kind": "action6",

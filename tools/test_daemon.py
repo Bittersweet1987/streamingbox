@@ -88,6 +88,32 @@ class BluetoothSticks(unittest.TestCase):
         self.assertEqual(dji.usb_id_for_hci("hci1", bt), "")                    # eingebaut: kein USB-Gerät darüber
         self.assertEqual(dji.usb_id_for_hci("hci9", bt), "")                    # gibt es nicht
 
+    def test_stick_names_come_from_sysfs_for_bluetooth_and_wlan(self):
+        """Issue #6: Der Name des Sticks (Produkt, Hersteller, Kennung) wird angezeigt, so wie die Box ihn aus /sys liest (Werte von der echten Box)."""
+        usb = self.usb([("5-1.4", "0b05", "190E", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
+                        ("2-1", "0bda", "c811", "802.11ac NIC", ("ff", "ff", "ff"), "rtl8821cu")])
+        for d, vendor in (("5-1.4", "Realtek"), ("2-1", "Realtek")):
+            with open(os.path.join(usb, d, "manufacturer"), "w") as f:
+                f.write(vendor + "\n")
+        bt = self.bt_tree(usb, [("hci0", "5-1.4"), ("hci1", None)])
+        self.assertEqual(dji.usb_info_for_hci("hci0", bt), {"usb_id": "0b05:190e", "name": "ASUS USB-BT500", "vendor": "Realtek"})
+        self.assertEqual(dji.usb_info_for_hci("hci1", bt), {})                         # eingebaut: nichts Bekanntes
+        net = tempfile.mkdtemp()                                                       # /sys/class/net/wlan0/device -> USB-Schnittstelle
+        iface = os.path.join(usb, "2-1", "2-1:1.0")
+        os.makedirs(os.path.join(net, "wlan0"))
+        os.symlink(iface, os.path.join(net, "wlan0", "device"))
+        self.assertEqual(dji.netdev_info("wlan0", net), {"usb_id": "0bda:c811", "name": "802.11ac NIC", "vendor": "Realtek", "driver": "rtl8821cu"})
+        builtin = os.path.join(tempfile.mkdtemp(), "platform", "fe2c0000.pcie")      # eingebaute Karte: kein USB-Gerät darüber, nur der Treiber
+        os.makedirs(os.path.join(builtin, "drivers", "brcmfmac"))
+        os.makedirs(os.path.join(net, "wlan1"))
+        os.symlink(builtin, os.path.join(net, "wlan1", "device"))
+        os.symlink(os.path.join(builtin, "drivers", "brcmfmac"), os.path.join(builtin, "driver"))
+        self.assertEqual(dji.netdev_info("wlan1", net), {"usb_id": "", "name": "", "vendor": "", "driver": "brcmfmac"})
+        self.assertEqual(dji.netdev_info("gibtesnicht", net), {"usb_id": "", "name": "", "vendor": "", "driver": ""})
+        with mock.patch.object(dji, "SYSFS_USB", usb), mock.patch.object(dji, "SYSFS_BT", bt):
+            st = dji.adapter_info(self.bluez())
+        self.assertEqual((st["adapters"][0]["name"], st["adapters"][0]["vendor"], st["adapters"][0]["usb_id"]), ("ASUS USB-BT500", "Realtek", "0b05:190e"))
+
     BLUEZ_DEFAULT = "usb:v1D6Bp0246d0540"       # was BlueZ auf der echten Box meldet: die Standardkennung, nicht die des Sticks
 
     def bluez(self, modalias=None):
