@@ -359,6 +359,9 @@ def friendly_error(e):
     return None
 
 
+STATUS_ONLY_KEY = "hdmi"     # Schlüssel des HDMI-Eingangs der Box: Der Akkustand erscheint bei der HDMI-Kamera (Status, Twitch-Warnung)
+
+
 def camera_key(addr, taken=()):
     """RTMP-Schlüssel einer DJI-Kamera: dji- plus die letzten sechs Stellen der Adresse (eindeutig, ohne Kollision mit anderen
     Kameras der Box, deren Schlüssel nicht mit dji- beginnen)."""
@@ -522,7 +525,10 @@ class Camera:
         if cfg.get("model") == ACTION2_NAME:
             raise CameraError("Osmo Action 2: Die Fernsteuerung funktioniert laut Moblin nicht.")
         loop = asyncio.get_event_loop()
-        ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
+        if cfg.get("status_only"):
+            ssid = password = rtmp_url = ""          # nur Akkustand lesen: kein WLAN, kein Stream
+        else:
+            ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
         key = cfg.get("rtmp_key") or "cam1"
         if self.daemon.adapter_missing():
             prob = dji.adapter_problems([], dji.usb_bluetooth_devices())
@@ -643,6 +649,12 @@ class Camera:
             if self.stop_requested:
                 return
 
+            # Nur Akkustand: Die Kamera sendet ihre Status (Akku) schon nach dem Koppeln. Weder WLAN noch Stream anfassen (die Kamera kann
+            # zugleich per HDMI senden). Bleibt verbunden, bis gestoppt wird; bei Verbindungsverlust beginnt die Sitzung von vorn.
+            if cfg.get("status_only"):
+                await self._status_only_loop(client, disconnected)
+                return
+
             # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
             self.set_state("preparing", "Stream wird vorbereitet")
             await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
@@ -730,6 +742,24 @@ class Camera:
                     await wait_for(ID_STOP, 10)
                 except Exception:
                     pass
+
+    STATUS_SILENCE_SECONDS = 180
+
+    async def _status_only_loop(self, client, disconnected):
+        """Verbunden bleiben und nur Statusmeldungen (Akku) mitlesen."""
+        self.set_state("status", "Nur Akkustand per Bluetooth")
+        self.fail_count = 0
+        self.reuse_failed = False
+        self.last_rx = time.time()
+        while not self.stop_requested:
+            try:
+                await asyncio.wait_for(disconnected.wait(), 1)
+            except asyncio.TimeoutError:
+                pass
+            if disconnected.is_set() or not client.is_connected:
+                raise CameraError("Die Bluetooth-Verbindung ging verloren")
+            if time.time() - self.last_rx > self.STATUS_SILENCE_SECONDS:
+                raise CameraError("Die Kamera sendet keine Statusmeldungen mehr")
 
     async def run_loop(self):
         """Verbinden, streamen und von vorn beginnen, solange "automatisch verbinden" an ist."""
@@ -843,7 +873,7 @@ class Camera:
 # ------------------------------------------------------------------ Dienst ---
 
 SETTINGS_ALLOWED = {"name": str, "wifi_ifname": str, "ssid": str, "password": str, "ip": str,
-                    "resolution": str, "fps": int, "bitrate": int, "stabilization": str, "autoconnect": bool}
+                    "resolution": str, "fps": int, "bitrate": int, "stabilization": str, "autoconnect": bool, "status_only": bool}
 NETWORK_FIELDS = ("wifi_ifname", "ssid", "password", "ip")
 LEGACY_MODEL_IDS = {"osmoAction2": 0x0010, "osmoAction3": 0x0012, "osmoAction4": 0x0014, "osmoAction5Pro": 0x0015,
                     "osmo360": 0x0017, "osmoAction6": 0x0018, "osmoPocket3": 0x0020, "osmoPocket4": 0x0021}
@@ -1087,6 +1117,14 @@ class Daemon:
             self.scan_error = ("Es wurden gar keine Bluetooth-Geräte empfangen. Antennen am Funkmodul prüfen "
                                "oder einen USB-Bluetooth-Stick verwenden.")
 
+    def _apply_status_only(self, cam):
+        """Der Schlüssel folgt dem Modus: Nur-Akku-Kameras tragen den Schlüssel des HDMI-Eingangs, sonst einen eigenen dji-Schlüssel."""
+        taken = {c.cfg.get("rtmp_key") for c in self.cameras.values() if c is not cam}
+        if cam.cfg.get("status_only"):
+            cam.cfg["rtmp_key"] = STATUS_ONLY_KEY
+        elif cam.cfg.get("rtmp_key") == STATUS_ONLY_KEY:
+            cam.cfg["rtmp_key"] = camera_key(cam.addr, taken)
+
     def sanitize(self, cam):
         cfg = cam.cfg
         if not str(cfg.get("name", "")).strip():
@@ -1134,6 +1172,8 @@ class Daemon:
             for k in ("resolution", "fps", "bitrate", "stabilization"):
                 if k in prof:
                     cfg[k] = prof[k]
+            if req.get("status_only") is True:
+                cfg["status_only"], cfg["rtmp_key"] = True, STATUS_ONLY_KEY
             cam = Camera(self, addr, cfg)
             self.cameras[addr] = cam
             self.sanitize(cam)
@@ -1144,6 +1184,8 @@ class Daemon:
         if cam is None:
             return {"error": "Unbekannte Kamera"}
         if cmd == "update":
+            if cam.locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
+                return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
             if cam.locked() and any(k in req for k in NETWORK_FIELDS):
                 return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
             for k, t in SETTINGS_ALLOWED.items():
@@ -1151,6 +1193,8 @@ class Daemon:
                     if k == "password" and req[k] == "":
                         continue                         # leer lassen = gespeichertes Passwort behalten
                     cam.cfg[k] = req[k]
+            if "status_only" in req and isinstance(req["status_only"], bool):
+                self._apply_status_only(cam)
             if "wifi_ifname" in req:
                 self.offer_connection_network(cam)
             if "ssid" in req or "password" in req:

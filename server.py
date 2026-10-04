@@ -3318,7 +3318,7 @@ class Updates:
 DJI_COMMANDS = ("state", "wifi_options", "scan", "add", "update", "use_saved", "delete_saved", "remove",
                 "connect", "disconnect", "reconnect")
 DJI_FIELDS = ("addr", "name", "model", "kind", "wifi_ifname", "ssid", "password", "ip", "resolution", "fps", "bitrate",
-              "stabilization", "autoconnect")
+              "stabilization", "autoconnect", "status_only")
 
 
 class DjiService:
@@ -3454,7 +3454,7 @@ class DjiService:
         have = {c["key"] for c in self.cams.cams}
         for c in cameras:
             key = c.get("rtmp_key")
-            if key and key not in have:
+            if key and key not in have and key != HDMI_KEY:      # Nur-Akku-Kameras tragen den Schlüssel des HDMI-Eingangs: der legt seine Kamera selbst an
                 try:
                     self.cams.add(c.get("name") or c.get("model") or "DJI-Kamera", key, self._free_role())
                     have.add(key)
@@ -3498,6 +3498,8 @@ class DjiService:
             # Der Name gilt auch in der Kameraliste der Box: dort umbenennen (ein doppelter Name wird hier abgelehnt)
             cfg = self._config().get(str(req.get("addr", "")).upper()) or {}
             cam = next((c for c in self.cams.cams if c["key"] == cfg.get("rtmp_key")), None)
+            if cfg.get("status_only"):
+                cam = None                                    # die Kamera der Liste gehört dem HDMI-Eingang, nicht umbenennen
             if cam and str(req["name"]).strip() and cam["name"] != str(req["name"]).strip()[:40]:
                 self.cams.update(cam["id"], name=str(req["name"]))
         res = self._call(req)
@@ -3554,7 +3556,10 @@ class DjiService:
         elif cmd == "remove":
             del f["cameras"][addr]
         elif cmd in ("connect", "reconnect"):
-            cam.update(state="streaming", detail="Die Kamera streamt (Vorschau)", publishing=True, locked=True, battery=64)
+            if cam.get("status_only"):
+                cam.update(state="status", detail="Nur Akkustand per Bluetooth", locked=True, battery=64)
+            else:
+                cam.update(state="streaming", detail="Die Kamera streamt (Vorschau)", publishing=True, locked=True, battery=64)
         elif cmd == "disconnect":
             cam.update(state="idle", detail="", publishing=False, locked=False, battery=None)
         elif cmd == "delete_saved":
@@ -4376,7 +4381,7 @@ class SettingsTransfer:
         dj = []
         for addr, c in sorted(self.djisvc._config().items()):
             if isinstance(c, dict):
-                e = {k: c.get(k) for k in ("name", "model", "kind", "wifi_ifname", "ip", "resolution", "fps", "bitrate", "stabilization", "autoconnect", "ssid")
+                e = {k: c.get(k) for k in ("name", "model", "kind", "wifi_ifname", "ip", "resolution", "fps", "bitrate", "stabilization", "autoconnect", "ssid", "status_only")
                      if c.get(k) is not None}
                 e["addr"] = str(addr).upper()
                 if secrets_on and c.get("password"):
@@ -4581,6 +4586,10 @@ class SettingsTransfer:
                 if not isinstance(c["autoconnect"], bool):
                     raise ValueError("Ein Wert einer DJI-Kamera ist ungültig (autoconnect)")
                 e["autoconnect"] = c["autoconnect"]
+            if c.get("status_only") is not None:
+                if not isinstance(c["status_only"], bool):
+                    raise ValueError("Ein Wert einer DJI-Kamera ist ungültig (status_only)")
+                e["status_only"] = c["status_only"]
             out.append(e)
         return out, ["Die Bluetooth-Kopplung lässt sich nicht mitnehmen: Die Kameras müssen nach dem Einspielen einmal neu verbunden werden"] if out else []
 

@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.86 (Beta)
+- Neu: **Nur Akkustand lesen** (Karte "Kameras", DJI-Kamera, Schalter "Nur Akkustand lesen (Kamera sendet per HDMI)"). Für eine Kamera, die per HDMI sendet: Die Box koppelt sich nur per Bluetooth, liest den Akkustand und lässt WLAN und Stream in Ruhe. Der Akku erscheint dann bei der HDMI-Kamera im Status und in der Twitch-Warnung. Standard: aus.
+  - **Nur mit nachgestellter Kamera geprüft (Tests), nicht mit einer echten Action 5.** Offen: ob sie ihren Akkustand per Bluetooth auch dann sendet, wenn sie per HDMI sendet.
+  - Der Modus ist nur im getrennten Zustand umschaltbar. Er gehört zur Kamera und wird mit der Einstellungssicherung gesichert.
+
 ## 0.9.85 (Beta)
 - Neu: **HDMI-Kamera**. Der HDMI-Eingang der Box (z. B. eine Action 5 per USB-C-HDMI) wird als Kamera "HDMI" eingespeist und ist wie jede Kamera wählbar (Bildaufbau, Fußleiste, Notbetrieb). Neuer Abschnitt "HDMI- und USB-Kameras" unten in der Karte "Kameras": Schalter "Als Kamera senden", Bitrate, Bildrate, Ton (HDMI-Ton oder ohne).
   - Eigener Dienst `pipbox-hdmi` (root): startet bei Signal, bei Ausfall oder neuem Bildformat neu. Hardware-Kodierung (H.264), gemessen etwa 40 % eines Kerns (1080p60 auf 30 fps).
