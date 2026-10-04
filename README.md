@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.51 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.52 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -64,7 +64,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Status:** Drei Kästen nebeneinander. *System*: CPU (Gesamtwert und höchster Kern), Temperatur, Lüfter und Arbeitsspeicher. *Kameras*: je Kamera Name,
   **Ampel** und aktuelle Eingangsbitrate. *Upload*: je verbundener Netzwerkkarte Datenrate samt **Ampel** und Summe (Ethernet, WLAN, USB-/Mobilfunk-Router). Warnungen
   erscheinen darüber; sind keine da, bleibt der Platz leer.
-- **RTMP-Kameras:** neue Streams werden automatisch erkannt; Kameras lassen sich umbenennen, Rollen zuweisen.
+- **RTMP-Kameras:** neue Streams werden automatisch erkannt; Kameras lassen sich umbenennen. Jede Kamera (zum Beispiel ein Handy) kann über eine eigene Verbindung der Box senden, etwa einen zweiten Router, um die Last zu verteilen; die angezeigte Adresse gilt dann für diese Verbindung.
 - **DJI-Kameras per Bluetooth** (Protokoll nach Moblin, MIT): Suche, Koppeln, WLAN und RTMP-Ziel übergeben, Start, mit Statusmeldungen je Schritt.
   **Je Kamera wählbare Verbindung** aus den vorhandenen Verbindungen der Box: WLAN-Hotspot und WLAN-Netze mit Name und Passwort aus NetworkManager, alle anderen
   (Ethernet, USB-Router, Modem) mit einmal eingetragenem und gespeichertem WLAN der Kamera. Pro Kamera Auflösung, fps, Bitrate und Stabilisierung.

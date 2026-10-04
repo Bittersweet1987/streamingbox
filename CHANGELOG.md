@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.52 (Beta)
+- Neu: **Die Adresse jeder Kamera in der Liste "RTMP-Kameras" gilt für ihre eigene Verbindung**, nicht nur für die Hauptverbindung. Eine Kamera oder ein Handy, das über eine andere Verbindung der Box sendet (zum Beispiel einen zweiten Router, um die Last zu verteilen), zeigt die Adresse der Box in diesem Netz.
+  - **Andere Kameras (zum Beispiel ein Handy):** In ihrer Zeile gibt es die Auswahl "Verbindung" mit allen Verbindungen der Box (mit Adresse, feste Zweitadressen wie bei der Hauptverbindung). Standard ist die Hauptverbindung. Ist die gewählte Verbindung gerade nicht da, gilt bis zu ihrer Rückkehr die Hauptverbindung; die Wahl bleibt gespeichert.
+  - **DJI-Kameras:** Die Zeile zeigt die Verbindung aus der DJI-Karte der Kamera ("in der DJI-Karte gewählt"), ohne etwas doppelt einzustellen; hat die Kamera keine gewählt, steht dort die Hauptverbindung. Der Server verweigert, die Verbindung einer DJI-Kamera in der Liste zu setzen.
+  - Die Auswahl "Netzwerk der Kamera" im Bereich "DJI-Kameras" heißt jetzt "Hauptverbindung" und gilt für alle Kameras ohne eigene Verbindung.
+- Tests: Adresse je Verbindung (Standard, eigene Wahl, feste Zweitadresse, zurück zur Hauptverbindung, unbekannte und verschwundene Verbindung), DJI-Kamera nach ihrer Karte ("Manuell", nichts gewählt, Verbindung gerade nicht da), andere Kameras bleiben unberührt.
+- Hinweis: Der DJI-Dienst ändert sich in dieser Version nicht; beim Einspielen werden die Kameras nicht neu verbunden.
+
 ## 0.9.51 (Beta)
 Korrekturen zu 0.9.50 nach dem ersten Test mit echten Kameras auf der Box.
 - Behoben: **"device not found" beim Verbinden** (Action 5 Pro, Action 6). BlueZ vergisst eine Kamera, sobald die Suche endet; die Vorlage beendete die Suche vor dem Verbinden. Jetzt läuft die Suche, bis die Verbindung steht, und endet erst dann. Dasselbe hatte schon die frühere Version gemessen.

@@ -80,7 +80,9 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .camcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:10px;margin-top:12px}
 .camcol{display:flex;flex-direction:column;gap:8px;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
 .camcol[hidden]{display:none}
-.camcol.slotoff{display:none}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
+.camcol.slotoff{display:none}
+.cam .camnet{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px}
+.cam .camnet select{padding:2px 6px;font-size:12px;max-width:100%}   /* mehr Bildfenster als Kameras gibt es nicht (siehe pipConstrain) */
 .camcol h3{margin:0;font-size:13px;color:var(--accent)}
 .camcol .opt{color:var(--muted);font-weight:400}
 .camcol>label{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -208,9 +210,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button type="submit">Kamera hinzufügen</button>
     </form>
     <div id="formerr" class="err"></div>
-    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für das Netzwerk, das Sie im Bereich „DJI-Kameras“ unter „Netzwerk für die angezeigte RTMP-Adresse“ gewählt haben.</div>
+    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie im Bereich „DJI-Kameras“ gewählt haben.</div>
       <div class="sech">DJI-Kameras (Bluetooth)</div><div id="djicard">
-    <div class="ph" style="margin-top:0">Netzwerk für die angezeigte RTMP-Adresse der übrigen Kameras. Jede DJI-Kamera wählt ihre Verbindung unten in ihrer eigenen Karte.</div>
+    <div class="ph" style="margin-top:0">Hauptverbindung: gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung. Eine andere Verbindung wählt man je Kamera in der Liste „RTMP-Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
     <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
     <div id="netinfo" class="ph"></div>
     <div id="djinote" class="muted"></div>
@@ -429,6 +431,18 @@ function upDot(u){
 function renderCamLights(list){
   setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
+let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
+const netLabel=o=>`${o.label} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
+function camNetHtml(c){
+  // Die Adresse oben gilt für die Verbindung der Kamera: DJI-Kameras wählen sie in ihrer Karte, andere Kameras (z. B. ein Handy) hier.
+  if((c.key||"").startsWith("dji-")){
+    const o=netOpts.find(x=>x.iface===c.via);
+    return `<div class="camnet muted">Verbindung: ${c.via_src==="dji"?esc(c.via==="manual"?"Manuell":(o?netLabel(o):c.via))+" (in der DJI-Karte gewählt)":"Hauptverbindung (in der DJI-Karte wählbar)"}</div>`;
+  }
+  const opts=[`<option value="">Hauptverbindung (Standard)</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${c.iface===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
+  if(c.iface&&!netOpts.some(o=>o.iface===c.iface)) opts.push(`<option value="${esc(c.iface)}" selected>${esc(c.iface)} (nicht verbunden)</option>`);
+  return `<label class="camnet muted">Verbindung <select class="camnetsel" data-id="${c.id}">${opts.join("")}</select></label>`;
+}
 function renderCams(list){
   const box=$("cams");
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
@@ -436,12 +450,12 @@ function renderCams(list){
   const quiet=c=>c.state==="live"||c.state==="unknown"?0:1;
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
-  const sig=JSON.stringify(list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto]));
+  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts]);
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
     box.innerHTML=list.length?list.map(c=>
       `<div class="cam" data-cid="${c.id}"><div class="top"><span><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
-      <span class="muted"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code></div>`).join("")
+      <span class="muted"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code>${camNetHtml(c)}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -456,6 +470,11 @@ $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("del")) return; const id=e.target.dataset.id;
   if(!confirm("Kamera entfernen?")) return;
   await fetch("/api/cameras/"+id,{method:"DELETE"}); tick();
+});
+$("cams").addEventListener("change",async e=>{
+  if(!e.target.classList.contains("camnetsel")) return;
+  const r=await fetch("/api/cameras/"+e.target.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({iface:e.target.value})});
+  if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verbindung konnte nicht gesetzt werden"); tick();
 });
 $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("ren")) return; e.preventDefault();
@@ -696,6 +715,7 @@ $("d_scan").onclick=async()=>{ await djiCmd({cmd:"scan"}); djiLoad(); };
 let netBusy=false;
 async function netRender(){
   const r=await fetch("/api/network"); if(!r.ok) return; const d=await r.json();
+  netOpts=d.options||[];
   const sel=$("netsel"); if(document.activeElement===sel||netBusy) return;
   sel.innerHTML=d.options.map(o=>`<option value="${esc(o.iface)}"${(d.selected?o.iface===d.selected:o.ip===d.ip)?" selected":""}>${esc(o.label)} · ${esc(o.cam_ip||o.ip)}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}</option>`).join("")||"<option>keine Netzwerke</option>";
   $("netinfo").textContent=`Adresse für die Kamera: rtmp://${d.ip}:1935/publish/<Schlüssel>`+(d.selected?"":" (Standardweg, noch nicht gewählt)");

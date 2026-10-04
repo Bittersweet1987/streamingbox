@@ -1164,6 +1164,7 @@ class CameraStore:
         self.lock = threading.Lock()
         self.cams = []
         self.ipfn = lan_ip
+        self.ifaces = iface_ips     # in Tests ersetzbar
         try:
             with open(path) as f:
                 self.cams = json.load(f)
@@ -1223,11 +1224,27 @@ class CameraStore:
                 self.save()
         return added
 
-    def update(self, cam_id, name=None, role=None):
+    def host_for_iface(self, name):
+        """Adresse der Box in der Verbindung <name> (feste Zweitadresse, sonst die der Schnittstelle) oder None, wenn es sie nicht gibt."""
+        for o in self.ifaces():
+            if o["iface"] == name:
+                return o.get("cam_ip") or o["ip"]
+        return None
+
+    def update(self, cam_id, name=None, role=None, iface=None):
         with self.lock:
             cam = next((c for c in self.cams if c["id"] == cam_id), None)
             if not cam:
                 raise KeyError(cam_id)
+            if iface is not None:
+                if not isinstance(iface, str):
+                    raise ValueError("Verbindung ungültig")
+                if iface and self.host_for_iface(iface) is None:
+                    raise ValueError("Unbekannte Verbindung oder keine IPv4-Adresse")
+                if iface:
+                    cam["iface"] = iface
+                else:
+                    cam.pop("iface", None)                 # leer: wieder die Hauptverbindung
             if name is not None:
                 name = name.strip()[:40]
                 if not name:
@@ -1278,13 +1295,22 @@ class CameraStore:
                 res[key] = {"fps": float(fps) if fps else None, "mbit": round(bw / 1e6, 1)}
         return res
 
-    def listing(self, host):
-        host = self.ipfn()   # Adresse im Netz der Kamera (Kameras lösen keine .local-Namen auf)
+    def listing(self, host, addr_for=None):
+        """Kameras mit Adresse und Zustand. Die Adresse gilt für die Verbindung der Kamera: DJI-Kameras nach ihrer Karte
+        (addr_for(Schlüssel) -> (Adresse, Verbindung) oder None), andere Kameras nach der gewählten Verbindung (Feld iface),
+        sonst nach der Hauptverbindung (Kameras lösen keine .local-Namen auf, darum immer eine IP-Adresse)."""
+        main = self.ipfn()
         live = self.live_streams()
         out = []
         for c in self.cams:
             st = None if live is None else live.get(c["key"])
-            out.append({**c,
+            via, src, host = None, "main", main
+            over = addr_for(c["key"]) if addr_for else None
+            if over and over[0]:
+                host, via, src = over[0], over[1], "dji"
+            elif c.get("iface") and self.host_for_iface(c["iface"]):
+                host, via, src = self.host_for_iface(c["iface"]), c["iface"], "own"
+            out.append({**c, "via": via, "via_src": src,
                         "url": f"rtmp://{host}:1935/{self.app}/{c['key']}",
                         "state": "unknown" if live is None else
                                  ("live" if st else "offline"),
@@ -2367,6 +2393,24 @@ class DjiService:
                 return cfg.get("fps") if cfg.get("fps") in (25, 30) else 30
         return None
 
+    def host_for_key(self, key):
+        """(Adresse der Box, Verbindung) für die Adresse dieser DJI-Kamera nach der Verbindung in ihrer Karte, sonst None
+        (dann gilt die Hauptverbindung)."""
+        if not str(key).startswith("dji-"):
+            return None
+        for cfg in self._config().values():
+            if isinstance(cfg, dict) and cfg.get("rtmp_key") == key:
+                w = cfg.get("wifi_ifname")
+                if not w:
+                    return None
+                if w == "manual":
+                    return (cfg["ip"], "manual") if cfg.get("ip") else None
+                for o in iface_ips():
+                    if o["iface"] == w:
+                        return (o.get("cam_ip") or o["ip"], w)
+                return None
+        return None
+
     def _ensure_listed(self, cameras):
         """Jede Kamera des Dienstes steht auch in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
         if not self.cams:
@@ -2569,7 +2613,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(401, {"error": "nicht angemeldet"})
         if path == "/api/metrics":
             m = self.sampler.sample()
-            m["cameras"] = self.cams.listing(self.host())
+            m["cameras"] = self.cams.listing(self.host(), self.djisvc.host_for_key)
             m["uplinks"] = uplink_states(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
             pic = self.send.picture()
             for c in m["cameras"]:
@@ -2699,7 +2743,11 @@ class Handler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/cameras/([0-9a-f]{8})$", path)
             if m:
                 try:
-                    return self.reply(200, self.cams.update(m.group(1), d.get("name"), d.get("role")))
+                    if d.get("iface") is not None:
+                        cam = next((c for c in self.cams.cams if c["id"] == m.group(1)), None)
+                        if cam and cam["key"].startswith("dji-"):
+                            raise ValueError("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt")
+                    return self.reply(200, self.cams.update(m.group(1), d.get("name"), d.get("role"), d.get("iface")))
                 except KeyError:
                     return self.reply(404, {"error": "nicht gefunden"})
             if path == "/api/cameras":

@@ -971,7 +971,85 @@ class AuthModes(unittest.TestCase):
         self.assertIn('d.get("remember") is True', src)
 
 
+class CameraConnection(unittest.TestCase):
+    """Die Adresse jeder Kamera in der Liste gilt für ihre Verbindung (DJI-Karte, eigene Wahl oder Hauptverbindung)."""
+    IFACES = [{"iface": "eth0", "ip": "192.168.1.20", "cam_ip": "192.168.1.20", "label": "LAN"},
+              {"iface": "eth1", "ip": "192.168.5.9", "cam_ip": "192.168.80.50", "label": "Kameranetz"},
+              {"iface": "eth2", "ip": "192.168.80.5", "cam_ip": "192.168.80.5", "label": "Router"}]
+
+    def store(self):
+        d = tempfile.mkdtemp()
+        c = server.CameraStore(os.path.join(d, "cameras.json"), "publish", "", False)
+        c.ipfn = lambda: "192.168.1.20"                       # Hauptverbindung
+        c.ifaces = lambda: self.IFACES
+        c.live_streams = lambda: {}
+        return d, c
+
+    def test_default_is_the_main_connection(self):
+        d, c = self.store()
+        c.add("Handy", "handy", "extra")
+        row = c.listing("")[0]
+        self.assertEqual((row["url"], row["via_src"], row["via"]), ("rtmp://192.168.1.20:1935/publish/handy", "main", None))
+
+    def test_own_connection_changes_the_shown_address(self):
+        d, c = self.store()
+        cam = c.add("Handy", "handy", "extra")
+        c.update(cam["id"], iface="eth2")
+        row = c.listing("")[0]
+        self.assertEqual((row["url"], row["via_src"], row["via"]), ("rtmp://192.168.80.5:1935/publish/handy", "own", "eth2"))
+        c.update(cam["id"], iface="eth1")                                     # feste Zweitadresse zählt, wie bei der Hauptverbindung
+        self.assertIn("192.168.80.50", c.listing("")[0]["url"])
+        c.update(cam["id"], iface="")                                         # zurück zur Hauptverbindung
+        self.assertEqual(c.listing("")[0]["via_src"], "main")
+        self.assertNotIn("iface", c.cams[0])
+
+    def test_unknown_connection_is_refused_and_a_vanished_one_falls_back(self):
+        d, c = self.store()
+        cam = c.add("Handy", "handy", "extra")
+        with self.assertRaises(ValueError):
+            c.update(cam["id"], iface="eth9")
+        with self.assertRaises(ValueError):
+            c.update(cam["id"], iface=["eth0"])
+        c.update(cam["id"], iface="eth2")
+        c.ifaces = lambda: self.IFACES[:2]                                    # der Router ist weg
+        row = c.listing("")[0]
+        self.assertEqual((row["via_src"], row["url"]), ("main", "rtmp://192.168.1.20:1935/publish/handy"))
+        self.assertEqual(c.cams[0]["iface"], "eth2")                         # gewählt bleibt gewählt, bis der Router wiederkommt
+
+    def test_dji_camera_uses_the_connection_of_its_card(self):
+        d, c = self.store()
+        c.add("Action 4", "dji-f04fe2", "extra")
+        c.add("Handy", "handy", "extra")
+        svc = server.DjiService(d, c, "publish", 1935)
+        with open(os.path.join(d, "dji-cameras.json"), "w") as f:
+            json.dump({"cameras": {"58:B8:58:F0:4F:E2": {"rtmp_key": "dji-f04fe2", "wifi_ifname": "eth2"}}}, f)
+        with mock.patch.object(server, "iface_ips", lambda: self.IFACES):
+            rows = {r["key"]: r for r in c.listing("", svc.host_for_key)}
+        self.assertEqual((rows["dji-f04fe2"]["url"], rows["dji-f04fe2"]["via_src"], rows["dji-f04fe2"]["via"]),
+                         ("rtmp://192.168.80.5:1935/publish/dji-f04fe2", "dji", "eth2"))
+        self.assertEqual(rows["handy"]["via_src"], "main")                    # andere Kameras bleiben unberührt
+
+    def test_dji_manual_connection_and_none_chosen(self):
+        d, c = self.store()
+        svc = server.DjiService(d, c, "publish", 1935)
+        with open(os.path.join(d, "dji-cameras.json"), "w") as f:
+            json.dump({"cameras": {"A": {"rtmp_key": "dji-000001", "wifi_ifname": "manual", "ip": "10.7.7.7"},
+                                   "B": {"rtmp_key": "dji-000002", "wifi_ifname": ""},
+                                   "C": {"rtmp_key": "dji-000003", "wifi_ifname": "eth9"}}}, f)
+        with mock.patch.object(server, "iface_ips", lambda: self.IFACES):
+            self.assertEqual(svc.host_for_key("dji-000001"), ("10.7.7.7", "manual"))
+            self.assertIsNone(svc.host_for_key("dji-000002"))                 # nichts gewählt: Hauptverbindung
+            self.assertIsNone(svc.host_for_key("dji-000003"))                 # Verbindung gerade nicht da
+            self.assertIsNone(svc.host_for_key("handy"))
+            self.assertIsNone(svc.host_for_key("dji-ffffff"))
+
+    def test_the_connection_of_a_dji_camera_is_not_set_in_the_list(self):
+        src = open(os.path.join(server.os.path.dirname(os.path.abspath(server.__file__)), "server.py"), encoding="utf-8").read()
+        self.assertIn("wird in ihrer DJI-Karte gewählt", src)
+
+
 class HiddenAttribute(unittest.TestCase):
+
     """Ein Element mit hidden muss auch wirklich verschwinden: eine Klasse mit display (z. B. .row, .updlink) überstimmt sonst das Attribut.
     Fehler 0.9.47: die gelben Punkte in der Kopfleiste blieben trotz hidden dauerhaft sichtbar."""
 
