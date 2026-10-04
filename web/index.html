@@ -208,7 +208,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 pre{white-space:pre-wrap;word-break:break-all;font-size:11px;color:var(--muted);max-height:220px;overflow:auto;margin:8px 0 0}
 .upd-line{display:flex;justify-content:space-between;padding:3px 0}
 .livehealth{font-size:12px;margin-top:8px;opacity:.85}.livehealth .ok{color:var(--ok)}.livehealth .warn{color:var(--warn)}.livehealth .crit,.livehealth .err{color:var(--crit)}
-details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
+details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block;cursor:pointer}.pwshow.copied{border-color:var(--ok)}.pwshow.copied::after,.pwshow.copyfail::after{font-family:inherit;font-size:13px;font-weight:400;letter-spacing:0}.pwshow.copied::after{content:"  ✓ kopiert";color:var(--ok)}.pwshow.copyfail::after{content:"  markiert: bitte Strg/Cmd+C";color:var(--warn)}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
 .foot a{color:var(--muted);text-decoration:underline}.footlinks{margin-top:6px}
 .pending{margin-top:10px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:13px}.pending button{margin-left:8px;padding:4px 10px}
 dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn);border-radius:12px;max-width:min(420px,90vw);padding:18px}dialog#rdlg::backdrop{background:rgba(0,0,0,.6)}
@@ -996,7 +996,7 @@ $("h_gen").addEventListener("click",()=>{
 $("h_show").addEventListener("click",async()=>{
   $("h_pw_out").textContent="";
   try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent($("h_if").value)); $("hmsg").textContent="";
-       $("h_pw_out").innerHTML='<div class="muted">Hotspot „'+esc(r.ssid)+'“, Passwort (Antippen markiert es zum Kopieren)</div><div class="pwshow">'+esc(r.password)+'</div>'; }
+       $("h_pw_out").innerHTML='<div class="muted">Hotspot „'+esc(r.ssid)+'“, Passwort (ein Klick kopiert es)</div><div class="pwshow">'+esc(r.password)+'</div>'; }
   catch(x){ $("hmsg").textContent=x.message; }
 });
 $("h_start").addEventListener("click",async()=>{
@@ -1437,6 +1437,25 @@ async function rLoad(){
   else $("r_msg").textContent=msg;
   $("r_msg").style.color=d.state==="failed"?"var(--crit)":"";
 }
+// Text in die Zwischenablage kopieren. Ohne HTTPS (Adresse im lokalen Netz) gibt es die Clipboard-Schnittstelle nicht: dann Text markieren und mit
+// execCommand kopieren (muss im selben Klick geschehen, darum vor jedem await).
+function copyFallback(t){
+  const ta=document.createElement("textarea"); ta.value=t; ta.setAttribute("readonly",""); ta.style.cssText="position:fixed;left:-9999px;top:0";
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0,t.length);
+  let ok=false; try{ ok=document.execCommand("copy"); }catch(e){}
+  ta.remove(); return ok;
+}
+async function copyText(t){
+  if(navigator.clipboard&&window.isSecureContext){ try{ await navigator.clipboard.writeText(t); return true; }catch(e){} }
+  return copyFallback(t);
+}
+// Ein angezeigtes Passwort (SSH, Hotspot) wird mit einem Klick kopiert
+document.addEventListener("click",async e=>{
+  const el=e.target.closest&&e.target.closest(".pwshow"); if(!el) return;
+  const ok=await copyText(el.textContent);
+  el.classList.remove("copied","copyfail"); el.classList.add(ok?"copied":"copyfail");
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove("copied","copyfail"),2500);
+});
 $("r_copy").addEventListener("click",async()=>{
   const t=$("r_url").textContent; let ok=false;
   try{ if(navigator.clipboard&&window.isSecureContext){ await navigator.clipboard.writeText(t); ok=true; } }catch(e){}
@@ -1694,7 +1713,7 @@ async function devPassword(){
   $("dev_msg").textContent="";
   try{
     const r=await srtlaCall("GET","/api/developer/password");
-    out.innerHTML='<div class="muted">SSH-Passwort'+(r.user?' für Benutzer „'+esc(r.user)+'“':'')+' (Antippen markiert es zum Kopieren)</div><div class="pwshow">'+esc(r.password)+'</div>'+
+    out.innerHTML='<div class="muted">SSH-Passwort'+(r.user?' für Benutzer „'+esc(r.user)+'“':'')+' (ein Klick kopiert es)</div><div class="pwshow">'+esc(r.password)+'</div>'+
       (r.state==="own"?'<div class="muted">Achtung: Das Passwort wurde danach von Hand geändert, dieses gilt vermutlich nicht mehr.</div>':(r.state==="generated"?'':'<div class="muted">(nicht geprüft, ob es noch gilt)</div>'));
   }catch(x){ $("dev_msg").textContent=x.message; }
 }

@@ -1,11 +1,15 @@
 # Änderungen
 
+## 0.9.70 (Beta)
+- Neu: **Ein Klick auf ein angezeigtes Passwort kopiert es in die Zwischenablage** (SSH-Passwort in der Karte "Entwickler" und Passwort des Hotspots). Als Rückmeldung steht kurz "✓ kopiert" hinter dem Passwort. Auch ohne HTTPS (Adresse im lokalen Netz, dort gibt es die Zwischenablage-Schnittstelle des Browsers nicht) geht es über den Ersatzweg mit Markieren und `execCommand`. Klappt das im Browser nicht, bleibt das Passwort markiert und es steht "markiert: bitte Strg/Cmd+C" dahinter. Der Hinweis über dem Passwort heißt jetzt "(ein Klick kopiert es)".
+- Tests: Seite enthält Kopierfunktion, Klick-Behandlung und den Hinweis.
+
 ## 0.9.69 (Beta)
 - Behoben: **Bei den GitHub-Versionen 0.9.67 und 0.9.68 war `web/index.html` beim Hochladen eine Fehlerseite ("Error response, Error code: 404") statt der Oberfläche.** Wer in diesem Zeitraum (4. Oktober 2026, 19:54 bis 20:08 Ortszeit, Commits `ba1f3e4` und `b0c0254`) mit "Software-Update" auf 0.9.67 oder 0.9.68 gegangen ist, sieht nur diese Fehlermeldung. Ursache war ein Fehler beim Hochladen (die letzte Datei der Liste wurde übersprungen und die Fehlerseite des Hilfsservers hochgeladen), nicht die Software selbst. Die richtige Datei liegt seit 20:08 Ortszeit auf GitHub (Commit `7cb5a10`) (Commit "Reparatur: web/index.html …"). **Reparatur einer betroffenen Box** (Anmeldung per SSH als root, ein Befehl; die Oberfläche liest die Seite bei jeder Anfrage neu, ein Neustart ist nicht nötig):
   `curl -fsSL https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/web/index.html -o /opt/pipbox/web/index.html`
   Alternativ `install.sh` aus dem Archiv der aktuellen Version erneut ausführen.
 - Neu: **Der Update-Helfer prüft das Archiv jetzt auch auf die Seiten der Oberfläche.** `web/index.html` und `web/login.html` müssen mit `<!doctype html` beginnen, "IRL4YOU" enthalten und `</html>` haben; sonst wird das Update abgelehnt ("Die Seite im Archiv ist beschädigt") und nichts eingespielt. Eine Fehlerseite wie oben kommt damit nicht mehr durch. (Gilt für Updates, die der neue Helfer macht, also ab dem Update auf 0.9.69.)
-- Geändert: **Das SSH-Passwort in der Karte "Entwickler" und das Passwort des Hotspots werden groß angezeigt** (22 Pixel, Schreibmaschinenschrift, Antippen markiert es zum Kopieren; im Streammodus weiter ausgeblendet).
+- Geändert: **Das SSH-Passwort in der Karte "Entwickler" und das Passwort des Hotspots werden groß angezeigt** (22 Pixel, Schreibmaschinenschrift, markierbar; im Streammodus weiter ausgeblendet).
 - Tests: Archiv mit guten Seiten, Fehlerseite statt `index.html` oder `login.html`, leere oder fremde Seiten, die echten Seiten dieser Version (4 neue Tests).
 
 ## 0.9.68 (Beta)

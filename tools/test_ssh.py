@@ -385,6 +385,9 @@ class FilesAndPage(unittest.TestCase):
             self.assertIn(needle, page)
         self.assertIn(".pwshow{", page)                                                  # Passwort groß und markierbar
         self.assertIn('class="pwshow"', page)
+        self.assertIn("function copyText", page)                                         # Klick auf das Passwort kopiert es
+        self.assertIn('closest(".pwshow")', page)
+        self.assertIn("ein Klick kopiert es", page)
         self.assertLess(page.index('id="c_logs"'), page.index('id="c_dev"'))             # "nach Protokolle"
         self.assertLess(page.index('id="c_dev"'), page.index('id="c_power"'))
 
