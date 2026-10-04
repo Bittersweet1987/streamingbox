@@ -5,7 +5,9 @@ H.264 und AAC), echter Hardware-Decoder und -Encoder, der echte Baustein pbctl. 
 Datei. Danach wird die Datei dekodiert und geprüft, welche Bilder zu sehen und welche Tonspur zu hören war.
 
 Auf der Box ausführen (nicht während einer Sendung): python3 boxtest_e2e_view.py swap|classic [--keep]
-Schreibt nur nach /var/tmp/e2e, fasst /var/lib/pipbox und /run/pipbox-send nicht an. Eigene RTMP-Schlüssel e2e-a bis e2e-d.
+Schreibt selbst nur nach /var/tmp/e2e und fasst /var/lib/pipbox und /run/pipbox-send nicht an. ABER: Die Oberfläche der Box erkennt neue RTMP-Streams
+automatisch und legt sie als Kameras an. Nach dem Test stehen "Kamera e2e-a" bis "Kamera e2e-d" in /var/lib/pipbox/cameras.json (auto: true) und
+müssen in der Oberfläche (Karte Kameras) gelöscht werden. Nicht auf der Box eines Nutzers laufen lassen, ohne es vorher zu sagen.
 Echte Kameras ersetzt das nicht (andere Encoder, Profile, Tonformat)."""
 import json
 import os
