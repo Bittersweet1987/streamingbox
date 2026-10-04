@@ -1222,6 +1222,84 @@ class GracefulRelease(Session):
         self.assertNotIn("bluetoothctl disconnect", install)                                  # kein Trennen vor dem Neustart: BlueZ hält die Verbindung, der neue Dienst nutzt sie weiter
 
 
+    # ---- Nur Akkustand (Action 5 sendet per HDMI, Bluetooth liefert nur den Akku)
+    def test_status_only_reads_battery_without_wifi_and_stream(self):
+        async def go():
+            sim = CameraSim(battery=42)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await dm.handle({"cmd": "add", "addr": ADDR, "name": "Action 5", "model": "Osmo Action 5 Pro", "kind": "action5", "status_only": True})
+            cam = dm.cameras[ADDR]
+            self.assertEqual(cam.cfg["rtmp_key"], "hdmi")                       # Akku erscheint bei der HDMI-Kamera
+            await dm.handle({"cmd": "connect", "addr": ADDR})                   # ohne WLAN-Angaben: bei normalem Betrieb ein Fehler
+            self.assertTrue(await self.wait_state(cam, ("status",)), cam.detail)
+            self.assertEqual([m.id for m in sim.sent], [dd.ID_PAIR])            # nur koppeln, nichts an WLAN oder Stream
+            self.assertEqual(cam.battery, 42)
+            sim.client.cb(None, sim.status_message(battery=9))
+            await asyncio.sleep(0.1)
+            pub = cam.public()
+            self.assertEqual((pub["battery"], pub["state"], pub["rtmp_key"], pub["status_only"]), (9, "status", "hdmi", True))
+            self.assertTrue(pub["locked"])
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            self.assertEqual(cam.state, "idle")
+            self.assertEqual([m.id for m in sim.sent], [dd.ID_PAIR])            # beim Trennen kein Stopp-Befehl an die Kamera
+            self.assertEqual(sim.link_closed, 1)
+        arun(go())
+
+    def test_status_only_reconnects_after_bluetooth_loss(self):
+        async def go():
+            sim = CameraSim(battery=55)
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await dm.handle({"cmd": "add", "addr": ADDR, "name": "Action 5", "model": "Osmo Action 5 Pro", "kind": "action5", "status_only": True})
+            cam = dm.cameras[ADDR]
+            await dm.handle({"cmd": "update", "addr": ADDR, "autoconnect": True})
+            self.assertTrue(await self.wait_state(cam, ("status",)))
+            first = sim.client
+            sim.drop_bluetooth()
+            end = time.time() + 6
+            while time.time() < end and not (cam.state == "status" and sim.client is not first):
+                await asyncio.sleep(0.02)
+            self.assertEqual(cam.state, "status", cam.detail)
+            self.assertIsNot(sim.client, first)                                 # neue Verbindung, wieder nur Status
+            self.assertEqual([m.id for m in sim.sent], [dd.ID_PAIR, dd.ID_PAIR])
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_status_only_fails_when_camera_goes_silent(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await dm.handle({"cmd": "add", "addr": ADDR, "name": "Action 5", "model": "Osmo Action 5 Pro", "kind": "action5", "status_only": True})
+            cam = dm.cameras[ADDR]
+            with mock.patch.object(dd.Camera, "STATUS_SILENCE_SECONDS", 0.3):
+                await dm.handle({"cmd": "connect", "addr": ADDR})
+                self.assertTrue(await self.wait_state(cam, ("error",)))
+            self.assertIn("Statusmeldungen", cam.detail)
+        arun(go())
+
+    def test_switching_the_mode_changes_the_key_and_is_locked_while_connected(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            cam = dm.cameras[ADDR]
+            self.assertEqual(cam.cfg["rtmp_key"], "dji-000001")
+            self.assertFalse(cam.public().get("status_only"))
+            self.assertEqual((await dm.handle({"cmd": "update", "addr": ADDR, "status_only": True})).get("ok"), True)
+            self.assertEqual(cam.cfg["rtmp_key"], "hdmi")
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(cam, ("status",)))
+            self.assertIn("error", await dm.handle({"cmd": "update", "addr": ADDR, "status_only": False}))
+            self.assertTrue(cam.cfg["status_only"])
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            await dm.handle({"cmd": "update", "addr": ADDR, "status_only": False})
+            self.assertEqual(cam.cfg["rtmp_key"], "dji-000001")                 # eigener Schlüssel wie zuvor
+        arun(go())
+
+
 class Migration(unittest.TestCase):
     def legacy(self, d, net="eth2", wifi=True):
         def w(name, obj):
@@ -1346,6 +1424,24 @@ class DjiServiceTests(unittest.TestCase):
         self.assertNotIn("evil", seen)
         self.assertEqual(seen["token"], self.srv.token)                         # ein Token vom Browser zählt nie
         self.assertNotEqual(seen["id"], 99)
+
+    def test_status_only_field_passes_and_does_not_list_or_rename_the_hdmi_camera(self):
+        self.svc.command({"cmd": "update", "addr": ADDR, "status_only": True})
+        self.assertIs(self.srv.seen[-1]["status_only"], True)
+        self.svc._ensure_listed([{"rtmp_key": "hdmi", "name": "Action 5"}])        # der HDMI-Dienst legt seine Kamera selbst an
+        self.assertEqual([c["key"] for c in self.cams.cams], [])
+        self.cams.add("HDMI", "hdmi", "main")
+        with mock.patch.object(self.svc, "_config", lambda: {ADDR: {"rtmp_key": "hdmi", "status_only": True}}):
+            self.svc.command({"cmd": "update", "addr": ADDR, "name": "Neuer Name"})
+        self.assertEqual(self.cams.cams[0]["name"], "HDMI")
+
+    def test_status_only_is_part_of_the_settings_backup(self):
+        t = server.SettingsTransfer.__new__(server.SettingsTransfer)
+        clean_dji = t._clean_dji
+        out, _ = clean_dji([{"addr": ADDR, "name": "A5", "status_only": True}])
+        self.assertIs(out[0]["status_only"], True)
+        with self.assertRaises(ValueError):
+            clean_dji([{"addr": ADDR, "name": "A5", "status_only": "ja"}])
 
     def test_bad_address_is_refused_before_it_reaches_the_service(self):
         n = len(self.srv.seen)
