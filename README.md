@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.66 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.67 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -102,6 +102,8 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Ampel für die Sendewege** (Kasten "Upload" in der Karte "Status"): **Grün** = der Weg trägt Pakete, **Gelb** = verbunden, aber in Reserve (Laufzeit zu hoch oder unruhig), **Rot** = nicht verbunden oder kein Netz, **Grau** = keine Sendung.
 - **Stabile Bitrate über gebündelte Mobilfunkleitungen:** Der Encoder bekommt einen toleranteren Regler (kleiner Patch auf BELABOX/belacoder, siehe
   `belacoder/README.md`), damit die Bitrate nach einer kurzen Überlast wieder hochkommt, und einen Stall-Wächter, der nur den Ausgang prüft (ein kurzer Aussetzer einer kleinen Kamera beendet die Sendung nicht mehr). Auch die Einstellungen des Empfängers (SRT-Latenz, Umordnungstoleranz) beeinflussen die Bitrate.
+- **WLAN-Hotspot** (Karte "Verbindungen"): macht aus einem WLAN-Stick ein eigenes WLAN der Box (Name, Passwort, 2,4 oder 5 GHz, Kanal), zum Beispiel für
+  DJI-Kameras oder ein Handy. Die Kamera übernimmt Name und Passwort selbst. Mit NetworkManager umgesetzt; **mit echtem Stick und Kamera noch nicht geprüft**.
 - **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
   oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
   trotzdem kurz durchsehen).

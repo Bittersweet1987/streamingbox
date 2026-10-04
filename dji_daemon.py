@@ -248,6 +248,22 @@ def other_connections(skip):
     return found
 
 
+HOTSPOT_FILE = "/var/lib/pipbox/hotspot.json"       # Daemon.__init__ setzt den Pfad im Zustandsordner
+
+
+def hotspot_password(ifname, ssid):
+    """Passwort des Hotspots dieser Box (hotspot.json, vom WLAN-Helfer geschrieben). NetworkManager gibt das Passwort an diesen Dienst nicht
+    heraus; der eigene Hotspot ist aber zum Weitergeben an Kameras gedacht. Leer, wenn nichts passt."""
+    try:
+        with open(HOTSPOT_FILE) as f:
+            h = json.load(f).get(ifname)
+    except (OSError, ValueError, AttributeError):
+        return ""
+    if isinstance(h, dict) and h.get("ssid") == ssid and isinstance(h.get("password"), str):
+        return h["password"]
+    return ""
+
+
 def nm_wifi_options():
     """Verbindungen, über die eine Kamera bedient werden kann: WLAN-Hotspots und -Client-Netze (Name und Passwort aus
     NetworkManager) und jede andere aktive Verbindung (Name und Passwort von Hand). Kann der Dienst das Passwort eines
@@ -262,6 +278,8 @@ def nm_wifi_options():
         mode = run(["nmcli", "-g", "802-11-wireless.mode", "connection", "show", conn])
         psk = run(["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn])
         secured = bool(run(["nmcli", "-g", "802-11-wireless-security.key-mgmt", "connection", "show", conn]))
+        if mode == "ap" and secured and not psk and conn == "pipbox-hotspot-" + ifname:
+            psk = hotspot_password(ifname, ssid)
         ip = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", ifname]).split("/")[0].split("\n")[0]
         if not ssid or not ip:
             continue
@@ -915,7 +933,9 @@ def migrate_legacy(state_dir, wifi_options=None):
 
 class Daemon:
     def __init__(self, state_dir, rtmp_port=RTMP_PORT, rtmp_app=RTMP_APP, stat_url=STAT_URL):
+        global HOTSPOT_FILE
         self.state_dir = state_dir
+        HOTSPOT_FILE = os.path.join(state_dir, "hotspot.json")
         self.config_file = os.path.join(state_dir, "dji-cameras.json")
         self.token_path = os.path.join(state_dir, "dji-token")
         self.rtmp_port, self.rtmp_app, self.stat_url = rtmp_port, rtmp_app, stat_url

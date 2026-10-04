@@ -258,7 +258,8 @@ class HelperChecks(unittest.TestCase):
             fail = rc if args[:2] in (("con", "up"), ("--ask", "dev")) else 0
             return mock.Mock(returncode=fail, stdout="", stderr=err if fail else "")
         with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: saved), \
-                mock.patch.object(self.h, "check_iface", lambda i: None), mock.patch.object(self.h, "check_not_camera_profile", lambda s: None):
+                mock.patch.object(self.h, "check_iface", lambda i: None), mock.patch.object(self.h, "check_not_camera_profile", lambda s: None), \
+                mock.patch.object(self.h, "hotspot_active", lambda i: False):
             try:
                 return calls, self.h.do_connect(req), None
             except RuntimeError as e:

@@ -147,6 +147,11 @@ def collect_secrets(sc):
             if isinstance(n, dict):
                 sc.secret(n.get("ssid"), "WLAN")
                 sc.secret(n.get("password"), "PASSWORT")
+    d = load("hotspot.json")                                    # Name und Passwort des eigenen Hotspots der Box
+    for h in (d.values() if isinstance(d, dict) else []):
+        if isinstance(h, dict):
+            sc.secret(h.get("ssid"), "HOTSPOT")
+            sc.secret(h.get("password"), "PASSWORT")
     d = load("cameras.json")
     for c in (d if isinstance(d, list) else []):
         if isinstance(c, dict):
@@ -162,7 +167,7 @@ def collect_secrets(sc):
     out = run(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"], 8)           # gespeicherte WLAN-Namen
     for line in out.splitlines():
         p = line.split(":")
-        if len(p) >= 2 and p[-1] == "802-11-wireless":
+        if len(p) >= 2 and p[-1] == "802-11-wireless" and not p[0].startswith("pipbox-hotspot-"):
             sc.secret(":".join(p[:-1]), "WLAN")
     out = run(["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "no"], 8)      # Netze der Umgebung (stehen oft im Journal)
     for line in out.splitlines():

@@ -23,6 +23,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1937,15 +1938,53 @@ def label_bluetooth(st, names):
 
 
 class Wifi:
-    """WLAN-Verbindung (z. B. Handy-Hotspot als weiterer Sendeweg). Lesen darf dieser Dienst, Verbinden macht der
-    Root-Helfer pipbox-wifi.py über eine Auslösedatei (0600, wird dort sofort gelöscht). Das Passwort liegt nur
-    dort und wird nie gespeichert oder ausgegeben; nmcli legt das Profil an."""
+    """WLAN-Verbindung (z. B. Handy-Hotspot als weiterer Sendeweg) und WLAN-Hotspot der Box. Lesen darf dieser Dienst, Verbinden macht der
+    Root-Helfer pipbox-wifi.py über eine Auslösedatei (0600, wird dort sofort gelöscht). Das Passwort eines WLANs, mit dem sich die Box
+    verbindet, liegt nur dort und wird nie gespeichert oder ausgegeben; nmcli legt das Profil an. Das Passwort des eigenen Hotspots ist
+    zum Weitergeben an Kameras und Handys gedacht und liegt in hotspot.json (Benutzer pipbox, 0600)."""
     STATUS = "/run/pipbox-wifi/status.json"
-    ACTIONS = ("scan", "connect", "forget", "disconnect")
+    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop")
+    HS_PREFIX = "pipbox-hotspot-"
+    HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}
 
-    def __init__(self, state_dir, demo, netchoice, names=None):
+    def __init__(self, state_dir, demo, netchoice, names=None, srtla=None):
         self.req = os.path.join(state_dir, "wifi-request")
-        self.demo, self.netchoice, self.names = demo, netchoice, names
+        self.hs_file = os.path.join(state_dir, "hotspot.json")
+        self.demo, self.netchoice, self.names, self.srtla = demo, netchoice, names, srtla
+        self.fake_hs = {}
+        self.fake_msg = ("", "")
+
+    def hotspots(self):
+        """Gespeicherte Hotspot-Einstellungen {Karte: {ssid, password, band, channel}}."""
+        if self.demo:
+            return dict(self.fake_hs)
+        try:
+            with open(self.hs_file) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, dict)} if isinstance(d, dict) else {}
+
+    def hotspot_secret(self, iface):
+        """Name und Passwort des Hotspots dieser Karte (nur für die angemeldete Oberfläche, auf Knopfdruck)."""
+        h = self.hotspots().get(iface if isinstance(iface, str) else "")
+        if not h or not h.get("password"):
+            raise ValueError("Auf dieser Karte ist kein Hotspot gespeichert")
+        return {"iface": iface, "ssid": str(h.get("ssid", "")), "password": str(h["password"])}
+
+    @staticmethod
+    def caps(iface):
+        """Was die Karte kann (NetworkManager): Zugangspunkt, 2,4 und 5 GHz. Fünf Minuten zwischengespeichert."""
+        def raw():
+            try:
+                r = subprocess.run(["nmcli", "-g", "WIFI-PROPERTIES.AP,WIFI-PROPERTIES.2GHZ,WIFI-PROPERTIES.5GHZ", "dev", "show", iface],
+                                   capture_output=True, text=True, timeout=5)
+                v = [x.strip().lower() == "yes" for x in r.stdout.splitlines()]
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return v + [False] * (3 - len(v)) if v else None
+        v = ttl_cached("wifi_caps_" + iface, 300.0, raw)
+        return {"ap": v[0], "band24": v[1], "band5": v[2]} if v else {"ap": None, "band24": None, "band5": None}
 
     def cards(self):
         out = []
@@ -1954,22 +1993,27 @@ class Wifi:
         except OSError:
             return out
         ips = {o["iface"]: o["ip"] for o in iface_ips()}
+        hs = self.hotspots()
         for n in names:
             if os.path.isdir(f"/sys/class/net/{n}/wireless") and not n.startswith("p2p"):
                 info = dji.netdev_info(n)                          # Name des WLAN-Sticks (z. B. "802.11ac NIC"), USB-Kennung, Treiber
                 out.append({"iface": n, "ip": ips.get(n, ""), "camera_net": n == self.netchoice.iface,
                             "up": (read(f"/sys/class/net/{n}/operstate", "") or "").strip() == "up",
                             "ssid": "", "signal": None, "name": info["name"], "vendor": info["vendor"],
-                            "usb_id": info["usb_id"], "driver": info["driver"]})
+                            "usb_id": info["usb_id"], "driver": info["driver"], **self.caps(n)})
                 self._name(out[-1])
         if out:                                        # Name und Signal des verbundenen Netzes (Profilname = SSID)
             try:
                 r = subprocess.run(["nmcli", "-t", "-f", "DEVICE,CONNECTION", "dev"], capture_output=True, text=True, timeout=4)
                 for line in r.stdout.splitlines():
                     dev, _, con = line.partition(":")
+                    con = con.replace("\\:", ":")
                     for c in out:
                         if c["iface"] == dev and c["ip"]:
-                            c["ssid"] = con.replace("\\:", ":")
+                            if con == self.HS_PREFIX + dev:        # der Hotspot dieser Box: kein Netz, mit dem die Karte verbunden ist
+                                c["hotspot_running"] = True
+                            else:
+                                c["ssid"] = con
                 for c in out:
                     if c["ssid"]:
                         r = subprocess.run(["nmcli", "-t", "-f", "IN-USE,SIGNAL", "dev", "wifi", "list", "ifname", c["iface"],
@@ -1979,6 +2023,11 @@ class Wifi:
                                 c["signal"] = int(line[2:])
             except (OSError, subprocess.TimeoutExpired):
                 pass
+        for c in out:
+            h = hs.get(c["iface"])
+            c["hotspot"] = ({"ssid": str(h.get("ssid", "")), "band": h.get("band", "bg"), "channel": h.get("channel", 0),
+                             "running": bool(c.pop("hotspot_running", False))} if h else None)
+            c.pop("hotspot_running", None)
         return out
 
     def _name(self, card):
@@ -1990,11 +2039,18 @@ class Wifi:
 
     def status(self):
         if self.demo:
-            demo_card = {"iface": "wlan0", "ip": "10.0.0.5", "camera_net": False, "up": True, "ssid": "Demo-Hotspot", "signal": 80,
-                         "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "rtl8821cu"}
-            self._name(demo_card)
-            return {"helper_installed": True, "cards": [demo_card],
-                    "state": "idle", "message": "", "scan": {"iface": "wlan0", "nets": [
+            cards = []
+            for iface, ip, ssid, usb in (("wlan0", "10.0.0.5", "Demo-Hotspot", "0bda:c811"), ("wlan1", "", "", "2357:011e")):
+                c = {"iface": iface, "ip": ip, "camera_net": False, "up": bool(ip), "ssid": ssid, "signal": 80 if ip else None,
+                     "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": usb, "driver": "rtl8821cu", "ap": True, "band24": True, "band5": True}
+                h = self.fake_hs.get(iface)
+                if h:
+                    c.update(ip="10.42.0.1", ssid="", signal=None, up=True)
+                c["hotspot"] = {"ssid": h["ssid"], "band": h["band"], "channel": h["channel"], "running": h.get("running", True)} if h else None
+                self._name(c)
+                cards.append(c)
+            return {"helper_installed": True, "cards": cards,
+                    "state": "idle", "message": self.fake_msg[1], "action": self.fake_msg[0], "scan": {"iface": "wlan0", "nets": [
                         {"ssid": "Demo-Hotspot", "signal": 80, "security": "WPA2", "in_use": False},
                         {"ssid": "Mein Handy", "signal": 62, "security": "WPA2 WPA3", "in_use": False},
                         {"ssid": "Gast", "signal": 31, "security": "offen", "in_use": False}]}, "saved": []}
@@ -2004,8 +2060,44 @@ class Wifi:
         except (OSError, ValueError):
             h = {}
         return {"helper_installed": os.path.exists("/etc/systemd/system/pipbox-wifi.path"), "cards": self.cards(),
-                "state": h.get("state", "idle"), "message": h.get("message", ""), "scan": h.get("scan") or {},
+                "state": h.get("state", "idle"), "message": h.get("message", ""), "action": h.get("action", ""), "scan": h.get("scan") or {},
                 "saved": h.get("saved") or [], "time": h.get("time", 0)}
+
+    def _hotspot_request(self, d, st, card):
+        """Prüft Starten und Beenden eines Hotspots; gibt die Anfrage für den Helfer zurück."""
+        action, iface = d.get("action"), card["iface"]
+        req = {"action": action, "iface": iface}
+        if action == "hotspot_stop":
+            if not (card.get("hotspot") or {}):
+                raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+            return req
+        ssid = d.get("ssid")
+        if (not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32 or ssid != ssid.strip()
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in ssid) or ssid.startswith(self.HS_PREFIX)):
+            raise ValueError("Name des Hotspots: 1 bis 32 Zeichen, keine Leerzeichen am Anfang oder Ende")
+        pw = d.get("password", "")
+        if not isinstance(pw, str):
+            raise ValueError("Passwort ungültig")
+        if pw == "":
+            if not (self.hotspots().get(iface) or {}).get("password"):
+                raise ValueError("Bitte ein Passwort vergeben (8 bis 63 Zeichen)")
+        elif not 8 <= len(pw) <= 63 or any(not 32 <= ord(ch) < 127 for ch in pw):
+            raise ValueError("Passwort: 8 bis 63 Zeichen, nur Buchstaben, Ziffern und Satzzeichen ohne Umlaute")
+        band = d.get("band", "bg")
+        if band not in self.HS_BANDS:
+            raise ValueError("Band: 2,4 GHz oder 5 GHz")
+        ch = d.get("channel", 0)
+        if isinstance(ch, bool) or not isinstance(ch, int) or (ch != 0 and ch not in self.HS_BANDS[band]):
+            raise ValueError("Kanal passt nicht zum Band")
+        if card.get("ap") is False:
+            raise ValueError("Diese WLAN-Karte kann keinen Hotspot aufbauen")
+        if band == "a" and card.get("band5") is False:
+            raise ValueError("Diese WLAN-Karte kann kein 5 GHz")
+        running = bool((card.get("hotspot") or {}).get("running"))
+        if card.get("ip") and not running and d.get("confirm") is not True:
+            raise ValueError("Bestätigung fehlt: Die Karte ist gerade mit einem WLAN verbunden, diese Verbindung wird beendet")
+        req.update(ssid=ssid, password=pw, band=band, channel=ch)
+        return req
 
     def request(self, d):
         action = d.get("action")
@@ -2017,28 +2109,57 @@ class Wifi:
         if st["state"] == "working" and time.time() - st.get("time", 0) < 90:
             raise ValueError("Es läuft schon eine Aktion")
         iface = str(d.get("iface", ""))
-        if action in ("scan", "connect", "disconnect"):
+        card = None
+        if action in ("scan", "connect", "disconnect") or action.startswith("hotspot_"):
             card = next((c for c in st["cards"] if c["iface"] == iface), None)
             if not card:
                 raise ValueError("Diese WLAN-Karte gibt es nicht")
             if card["camera_net"]:
                 raise ValueError("Diese Karte ist das Kameranetz")
+            if action in ("scan", "connect", "disconnect") and (card.get("hotspot") or {}).get("running"):
+                raise ValueError("Auf dieser Karte läuft ein Hotspot. Bitte zuerst den Hotspot beenden.")
         req = {"action": action, "iface": iface}
+        if action.startswith("hotspot_"):
+            req = self._hotspot_request(d, st, card)
         if action in ("connect", "forget"):
             ssid = d.get("ssid")
             if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32:
                 raise ValueError("Netzname fehlt oder ist zu lang")
+            if ssid.startswith(self.HS_PREFIX):
+                raise ValueError("Dieser Netzname ist für den Hotspot der Box reserviert")
             req["ssid"] = ssid
         if action == "connect":
             pw = d.get("password", "")
             if not isinstance(pw, str) or len(pw) > 64:
                 raise ValueError("Passwort ungültig")
             req.update(password=pw, hidden=d.get("hidden") is True)
+        if action == "hotspot_start":
+            self._leave_uplinks(iface)
         if self.demo:
+            if action == "hotspot_start":
+                self.fake_hs[iface] = {"ssid": req["ssid"], "password": req["password"] or (self.fake_hs.get(iface) or {}).get("password", ""),
+                                       "band": req["band"], "channel": req["channel"], "running": True}
+                self.fake_msg = (action, "Hotspot „%s“ läuft auf %s (Vorschau)" % (req["ssid"], iface))
+            elif action == "hotspot_stop" and iface in self.fake_hs:
+                self.fake_hs[iface]["running"] = False
+                self.fake_msg = (action, "Hotspot beendet (Vorschau)")
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(req, f)
+
+    def _leave_uplinks(self, iface):
+        """Ein Hotspot hat keinen Weg ins Internet: Die Karte darf danach kein Netz zum Senden mehr sein. Ist sie das einzige, wird nichts gestartet."""
+        if self.srtla is None:
+            return
+        ups = list(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
+        if iface not in ups:
+            return
+        rest = [u for u in ups if u != iface]
+        valid = [o["iface"] for o in iface_ips()]
+        if not any(u in valid for u in rest):
+            raise ValueError("Diese Karte ist gerade das einzige Netz zum Senden. Bitte zuerst ein anderes Netz zum Senden wählen.")
+        self.srtla.set_settings({"uplinks": rest}, valid or ["eth0", "eth1"])
 
 
 class Power:
@@ -3052,6 +3173,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.power.status())
         if path == "/api/wifi":
             return self.reply(200, self.wifi.status())
+        if path == "/api/wifi/hotspot":
+            q = urllib.parse.parse_qs((self.path.split("?", 1) + [""])[1])
+            try:
+                return self.reply(200, self.wifi.hotspot_secret((q.get("iface") or [""])[0]))
+            except ValueError as e:
+                return self.reply(404, {"error": str(e)})
         if path == "/api/remote":
             return self.reply(200, self.remote.status())
         if path == "/api/swupdate":
@@ -3244,7 +3371,7 @@ def main():
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
     Handler.names = DeviceNames(args.state)
-    Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names)
+    Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names, Handler.srtla)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
     Handler.logbundle = LogBundle(args.state, args.demo)
