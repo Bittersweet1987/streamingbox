@@ -245,6 +245,11 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </div>
     <div class="piponly pvwrap"><div class="sech">Vorschau: kleine Bilder verschieben</div><div id="pvbox" class="pvbox"></div><div id="pvnote" class="ph"></div></div>
     <label class="muted" style="display:block;margin-top:12px"><input type="checkbox" id="p_auto" checked> Automatisch umschalten, wenn eine Kamera ausfällt (nach 5 s ohne Signal; zurück nach 60 s stabilem Signal)</label>
+    <label class="muted piponly" style="display:block;margin-top:12px">Hauptbild tauschen ohne Unterbrechung (experimentell)
+      <select id="p_swap" style="width:auto;margin-left:6px" title="Der Tausch läuft dann, ohne den Encoder neu zu starten: der Empfänger bekommt weiter Daten. Dafür dekodiert die Box jede Kamera der Gruppe zweimal (groß und klein).">
+        <option value="0">aus (Encoder startet neu, etwa 5 s ohne Bild)</option>
+        <option value="2">Hauptbild und erstes kleines Bild</option>
+        <option value="4">alle Kameras (mehr Rechenlast)</option></select></label>
     <div class="actions"><button id="p_save" type="button">Bildaufbau speichern</button><span class="muted" style="margin-left:.75rem">Läuft gerade eine Übertragung, wird sie bei einer Änderung kurz neu gestartet.</span></div>
     <div id="pipeerr" class="err"></div>
     <div id="pipeinfo" class="ph"></div>
@@ -803,6 +808,7 @@ async function pipeLoad(){
   if(pipeDirty||pipDelayDirty){ $("pipeprev").textContent=d.preview||""; return; }   // ungespeicherte Eingaben nicht überschreiben
   if(document.activeElement.id!=="p_type") $("p_type").value=c.type;
   if(document.activeElement.id!=="p_auto") $("p_auto").checked=c.auto_failover!==false;
+  if(document.activeElement.id!=="p_swap") $("p_swap").value=String(c.swap_cams||0);
   posFree={1:{x:c.x??500,y:c.y??500},2:{x:c.x2??500,y:c.y2??500},3:{x:c.x3??500,y:c.y3??500}};
   pipConstrain({main:c.main,pip:c.pip,pip2:c.pip2,pip3:c.pip3,c1:c.corner,c2:c.corner2??2,c3:c.corner3??0});
   if(document.activeElement.id!=="p_size") $("p_size").value=c.size_pct;
@@ -814,7 +820,7 @@ async function pipeLoad(){
     const order=(pipCams||[]).map(x=>x.key).filter(k=>inPic.includes(k)), byKey=Object.fromEntries((pipCams||[]).map(x=>[x.key,x]));
     bar.hidden=!(c.type==="pip"&&c.main&&inPic.length>1);
     setHtml($("swapbtns"),order.map(k=>{ const cam=byKey[k]||{}, on=k===c.main;
-      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)"}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
+      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":(seamlessTo(c.main,k)?"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild, ohne Unterbrechung der Sendung)":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)")}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
   let info=c.main?`Gespeichert: ${c.type==="pip"?"Bild-in-Bild":"eine Kamera"}, Hauptbild ${c.main}${c.type==="pip"?", kleines Bild "+c.pip+(c.pip2?(c.pip3?", ":" und ")+c.pip2:"")+(c.pip3?" und "+c.pip3:""):""}.`:"Noch keine Pipeline gespeichert.";
@@ -849,7 +855,7 @@ $("pipecard").addEventListener("change",async e=>{
 });
 async function pipSave(){
   $("pipeerr").textContent="";
-  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,...delayBody()};
+  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,...delayBody()};
   try{ const r=await srtlaCall("POST","/api/pipeline",body); pipeDirty=false; pipDelayDirty=false; $("pipeerr").textContent=(r&&r.note)||"Gespeichert."; }catch(x){ $("pipeerr").textContent=x.message; }
   pipeLoad();
 }
@@ -930,10 +936,13 @@ $("live_go").addEventListener("click",async()=>{
   try{ await srtlaCall("POST","/api/send",{action:"start",confirm:true}); $("liveerr").textContent=""; }catch(x){ $("liveerr").textContent=x.message; }
   setTimeout(sendLoad,800);
 });
+function seamlessTo(main,key){      // läuft die Sendekette im Tausch-Betrieb und gehören beide Kameras zur Tauschgruppe?
+  const g=(sendData&&sendData.swap_group)||[]; return !!(sendData&&sendData.active&&g.includes(main)&&g.includes(key));
+}
 $("swapbtns").addEventListener("click",async e=>{
   const b=e.target.closest(".swapto"); if(!b) return;
   const live=!$("live_stop").hidden;
-  if(live&&!confirm("Hauptbild: "+b.textContent.trim()+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
+  if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm("Hauptbild: "+b.textContent.trim()+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
   try{ const r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
 $("live_stop").addEventListener("click",async()=>{

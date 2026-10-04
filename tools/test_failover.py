@@ -202,6 +202,85 @@ class PrepareWithFailover(unittest.TestCase):
         self.assertEqual(plan["layout"], ("cam-m", "cam-p", "cam-q"))
 
 
+class SeamlessSwapSender(PrepareWithFailover):
+    """Tausch ohne Neustart aus Sicht der Sendekette: Anfangszustand, Merkzettel für die Oberfläche, Nachführen der Einstellung."""
+
+    def start(self, live=None, **kw):
+        self.write_cfg(swap_cams=2, **kw)
+        with mock.patch.object(ps, "live_keys", lambda: live):
+            return ps.prepare()
+
+    def read(self, name):
+        with open(os.path.join(self.state, name)) as f:
+            return f.read()
+
+    def test_start_writes_initial_state_and_remembers_the_cameras(self):
+        stale = os.path.join(self.tmp, "swap-state")
+        open(stale, "w").write("1 0 2 3\n")
+        with mock.patch.object(server, "SWAP_STATE", stale):
+            *_, plan = self.start()
+        self.assertEqual(self.read(server.SWAP_SELECT).split(), ["0", "1", "2", "15"])
+        self.assertEqual(ps.SWAP_BASE, {"cams": ["cam-m", "cam-p", "cam-q"], "group": 2})
+        self.assertFalse(os.path.exists(stale))                    # Rückmeldung der letzten Sendekette ist weg
+        self.assertIn("pbpipsel", open(os.path.join(self.work, "pipeline")).read())
+
+    def test_degraded_start_uses_the_cameras_that_are_there(self):
+        self.start(live={"cam-p", "cam-q"})
+        self.assertEqual(ps.SWAP_BASE["cams"], ["cam-p", "cam-q"])
+        self.assertEqual(self.read(server.SWAP_SELECT).split(), ["0", "1", "15", "15"])
+        self.assertEqual(self.read("main-delay-ms").split(), ["120", "250", "0", "0"])        # Reihenfolge des Aufbaus
+
+    def test_without_swap_mode_nothing_is_written(self):
+        self.write_cfg()
+        with mock.patch.object(ps, "live_keys", lambda: None):
+            ps.prepare()
+        self.assertIsNone(ps.SWAP_BASE)
+        self.assertFalse(os.path.exists(os.path.join(self.state, server.SWAP_SELECT)))
+
+    def test_status_carries_the_cameras(self):
+        *_, plan = self.start()
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        run_dir = os.path.join(self.tmp, "run")
+        with mock.patch.object(ps, "RUN", run_dir), mock.patch.object(ps, "STATUS", os.path.join(run_dir, "status.json")):
+            s.write_status()
+            import json
+            st = json.load(open(os.path.join(run_dir, "status.json")))
+        self.assertEqual(st["swap"], {"cams": ["cam-m", "cam-p", "cam-q"], "group": 2})
+        self.assertTrue(st["delay_live"] and st["delay_live_pips"])
+
+    def test_sync_keeps_the_swapped_picture_after_a_later_camera_failure(self):
+        *_, plan = self.start()
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        s.sync_cfg()                                               # erster Abgleich: gleicher Stand
+        swapped = dict(CFG, swap_cams=2, main="cam-p", pip="cam-m", main_delay_ms=120, pip_delay_ms=1500)
+        import json
+        json.dump(swapped, open(os.path.join(self.state, "pipeline.json"), "w"))
+        os.utime(os.path.join(self.state, "pipeline.json"), None)
+        self.assertTrue(s.sync_cfg())
+        self.assertEqual((s.plan["cfg"]["main"], s.fo.keys[:2]), ("cam-p", ["cam-p", "cam-m"]))
+        self.assertFalse(s.sync_cfg())                             # unverändert: nichts zu tun
+        # cam-q fällt aus und kommt wieder: das Hauptbild bleibt cam-p
+        eff, used = ps.effective_cfg(s.fo.cfg, {"cam-p", "cam-m"})
+        self.assertEqual((eff["main"], eff["pip"], eff["main_delay_ms"], eff["pip_delay_ms"]), ("cam-p", "cam-m", 120, 1500))
+
+    def test_sync_ignores_other_cameras(self):
+        *_, plan = self.start()
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        s.sync_cfg()
+        import json
+        json.dump(dict(CFG, swap_cams=2, pip2="cam-z"), open(os.path.join(self.state, "pipeline.json"), "w"))
+        os.utime(os.path.join(self.state, "pipeline.json"), (time.time() + 5, time.time() + 5))
+        self.assertFalse(s.sync_cfg())
+        self.assertEqual(s.plan["cfg"]["pip2"], "cam-q")
+
+    def test_no_sync_without_swap_mode(self):
+        self.write_cfg()
+        with mock.patch.object(ps, "live_keys", lambda: None):
+            *_, plan = ps.prepare()
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        self.assertFalse(s.sync_cfg())
+
+
 class SenderSwitch(unittest.TestCase):
     def test_switch_restarts_only_belacoder_and_waits_without_cameras(self):
         s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"],

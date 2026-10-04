@@ -34,6 +34,7 @@ STATS_KEEP = 3000
 LISTEN_PORT = 9100
 DELAY_LIVE = False        # hat die gestartete Pipeline den Steuerbaustein pbctl?
 DELAY_LIVE_PIPS = False   # und kann er auch die kleinen Bilder verzögern?
+SWAP_BASE = None          # Tausch ohne Neustart: {"cams": [...], "group": n} der gestarteten Pipeline, sonst None
 PLUGIN_DIR = "/opt/pipbox/gst"
 DOWN_S = 5        # so lange darf eine Kamera ausbleiben, bevor umgeschaltet wird
 UP_S = 60         # so lange muss eine zurückgekehrte Kamera stabil senden, bevor sie wieder zugeschaltet wird
@@ -208,6 +209,19 @@ def ensure_work():
     os.chmod(WORK, 0o700)
 
 
+def put_state_file(name, text):
+    """Steuerdatei im Zustandsordner atomar schreiben. Der Ordner gehört dem Benutzer pipbox: kein Verweis darf als Ziel dienen."""
+    tmp = f"{STATE}/{name}.tmp"
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, f"{STATE}/{name}")
+
+
 def write_pipeline(cfg):
     """Pipeline-Text und Verzögerungsdatei für diese Einstellung schreiben. Gibt den Text zurück ('' bei Fehler)."""
     text = server.PipelineStore(os.devnull).build(cfg)
@@ -218,22 +232,24 @@ def write_pipeline(cfg):
         f.write(text)
     # Verzögerung des Hauptbildes: Steuerdatei für den laufenden Baustein (pbctl) passend zur Pipeline setzen
     try:
-        vals = [max(0, min(3000, int(cfg.get(k, 0) or 0))) if cfg["type"] == "pip" else 0
-                for k in ("main_delay_ms", "pip_delay_ms", "pip2_delay_ms", "pip3_delay_ms")]
-        tmp = f"{STATE}/main-delay-ms.tmp"
-        try:
-            os.unlink(tmp)                  # der Ordner gehört dem Benutzer pipbox: kein Verweis darf als Ziel dienen
-        except OSError:
-            pass
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "w") as f:
-            f.write(" ".join(map(str, vals)) + "\n")
-        os.replace(tmp, f"{STATE}/main-delay-ms")
+        vals = server.PipelineStore.delay_values(cfg)
+        put_state_file("main-delay-ms", " ".join(map(str, vals)) + "\n")
     except OSError:
         pass
-    global DELAY_LIVE, DELAY_LIVE_PIPS
+    global DELAY_LIVE, DELAY_LIVE_PIPS, SWAP_BASE
     DELAY_LIVE = "pbctl" in text
-    DELAY_LIVE_PIPS = "pip-queue=" in text
+    DELAY_LIVE_PIPS = "pip-queue=" in text or "cam1=" in text
+    plan = server.PipelineStore.swap_plan(cfg) if "pbpipsel" in text else None
+    SWAP_BASE = {"cams": plan["cams"], "group": plan["group"]} if plan else None
+    try:
+        os.unlink(server.SWAP_STATE)              # Rückmeldung der letzten Sendekette ist veraltet
+    except OSError:
+        pass
+    try:
+        if plan:                                  # Anfangszustand des Umschalters: wie gebaut (Hauptbild = erste Kamera)
+            put_state_file(server.SWAP_SELECT, plan["line"] + "\n")
+    except OSError:
+        pass
     return text
 
 
@@ -301,6 +317,7 @@ class Sender:
         self.waiting = False
         self.senv = None
         self._ups_t = 0
+        self._cfg_mt = None
         self.stats = collections.deque(maxlen=STATS_KEEP)    # (Zeit, Zeile)
         self.links = collections.deque(maxlen=300)           # Zustandszeilen der Wegewahl (srtla_send "links: ...")
         self.stop_ev = threading.Event()
@@ -384,7 +401,7 @@ class Sender:
         with self.lock:
             data = {"state": self.state, "since": self.since, "server": self.sv["name"],
                     "restarts": dict(self.restarts), "last": self.last, "last_age": int(time.time() - self.last_at) if self.last_at else None, "time": int(time.time()),
-                    "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS,
+                    "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
                     "applied": self.plan.get("sig")}
         if self.fo is not None:
             keys = configured_keys(self.plan["cfg"])
@@ -496,6 +513,10 @@ class Sender:
                     with self.lock:
                         self.state = "running"
             try:
+                self.sync_cfg()
+            except Exception as e:           # eine kaputte Datei darf die Übertragung nie beenden
+                print(f"send: Einstellung konnte nicht nachgeführt werden ({type(e).__name__})", flush=True)
+            try:
                 if time.monotonic() - self._ups_t >= 6:     # alle 6 s genügen: srtla_send merkt tote Wege selbst
                     self._ups_t = time.monotonic()
                     self.refresh_uplinks()
@@ -505,6 +526,25 @@ class Sender:
             self.flush_stats()
             self.stop_ev.wait(2)
         self.shutdown()
+
+    def sync_cfg(self):
+        """Nach einem Tausch ohne Neustart hat sich pipeline.json geändert, die Kameras sind dieselben: die Einstellung der automatischen
+        Umschaltung nachführen, sonst setzte ein späterer Kameraausfall das Hauptbild auf den alten Stand zurück."""
+        if self.fo is None or SWAP_BASE is None:
+            return False
+        try:
+            mt = os.stat(f"{STATE}/pipeline.json").st_mtime_ns
+        except OSError:
+            return False
+        if mt == self._cfg_mt:
+            return False
+        self._cfg_mt = mt
+        new = {**server.PipelineStore.DEFAULT, **load_json(f"{STATE}/pipeline.json")}
+        if new.get("type") != "pip" or set(configured_keys(new)) != set(self.fo.keys):
+            return False                          # andere Kameras: das regelt der normale Neustart
+        self.plan["cfg"] = new
+        self.fo.cfg, self.fo.keys = new, configured_keys(new)
+        return True
 
     def wait_links_ready(self, timeout=20):
         """Der Encoder startet erst, wenn srtla_send mindestens einen Weg zum Server aufgebaut hat (erste Zustandszeile mit

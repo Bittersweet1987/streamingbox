@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.38 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
+**Version 0.9.39 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
 Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 13 Mbit/s, die Box war dabei zu rund 70 Prozent im
 Leerlauf (CPU im Mittel etwa 25 bis 30 Prozent, 35 bis 37 °C). Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
 ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN").
@@ -27,7 +27,7 @@ vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
 - **Pipeline:** eine Kamera oder Bild-in-Bild mit bis zu drei kleinen Bildern (vier Kameras), Ecke und Größe wählbar, Ton von
   jeder Kamera. Die kleinen Bilder lassen sich in einer Vorschau frei verschieben (oder als Ecke wählen). Ein kleiner eigener GStreamer-Baustein (`gst/`) schreibt die kleinen Bilder in einem Durchgang direkt in
   das Hauptbild. Fällt eine Kamera aus, schaltet die Box automatisch auf die übrigen um (das dauert etwa 5 Sekunden ohne Bild) und nimmt die Kamera erst nach 60 Sekunden stabilem Signal wieder auf.
-- **Hauptbild wählen:** Bei Bild-in-Bild steht in der Live-Karte unter "Hauptbild" ein Schalter mit den Kameras, die im Bild sind. Die aktuelle Hauptkamera ist hervorgehoben, ein Klick auf eine andere macht sie zum Hauptbild und tauscht die beiden (Kamera und Verzögerung bleiben beisammen, Ecke, Größe und Ton bleiben am Platz). Läuft die Sendung, startet der Encoder dafür neu und das Bild ist etwa 5 Sekunden unterbrochen. Ein Wechsel ohne Neustart mit Überblendung ist geplant.
+- **Hauptbild wählen:** Bei Bild-in-Bild steht in der Live-Karte unter "Hauptbild" ein Schalter mit den Kameras, die im Bild sind. Die aktuelle Hauptkamera ist hervorgehoben, ein Klick auf eine andere macht sie zum Hauptbild und tauscht die beiden (Kamera und Verzögerung bleiben beisammen, Ecke, Größe und Ton bleiben am Platz). Läuft die Sendung, startet der Encoder dafür neu und das Bild ist etwa 5 Sekunden unterbrochen. **Experimentell:** Wählt man im Bildaufbau "Hauptbild tauschen ohne Unterbrechung" (Hauptbild und erstes kleines Bild, oder alle Kameras), läuft der Tausch ohne Neustart des Encoders als harter Schnitt, Ton inklusive. Dafür dekodiert die Box jede Kamera der Gruppe zweimal (groß und klein, bei vier Kameras 6 statt 4, bei "alle" 8 Dekodierungen). Bisher nur mit Testbildern auf der Box geprüft, noch nicht mit echten Kameras; die Kameras der Gruppe sollten dieselbe Auflösung senden. Eine Überblendung ist geplant.
 - **Gleichlauf:** Verzögerung für Hauptbild und jedes kleine Bild per Regler (0 bis 3000 ms), bei laufender Sendekette ohne
   Neustart änderbar. Zum Abgleichen liegt eine Stoppuhr unter `tools/stopwatch.html`.
 - **Ausgangswerte (frei änderbar):** Hauptbild 1080p/30 fps/8 Mbit/s, kleine Bilder 720p/30 fps/4 Mbit/s (nach der Rolle in
@@ -82,7 +82,7 @@ DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. 
 - Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") wurde bisher nur zu Hause getestet, wo einer der drei Wege das Heimnetz zum Empfänger ist (1 ms) und kaum über DSL läuft. Ein
   schwächerer Weg neben einem guten, etwa Starlink neben 5G, ist nicht geprüft. Gleiches gilt für unterwegs über Stunden.
 - Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).
-- Geplant, nicht gebaut: Wechsel zwischen Hauptbild und kleinem Bild ohne Neustart und mit Überblendung (heute startet der Tausch den Encoder neu und kostet etwa 5 Sekunden Bild), eigene
+- Geplant, nicht gebaut: Überblendung beim Wechsel zwischen Hauptbild und kleinem Bild (heute ein harter Schnitt, ohne den Tausch ohne Unterbrechung kostet er etwa 5 Sekunden Bild), eigene
   Empfangsprozesse je Kamera, damit ein Kameraausfall den Encoder nicht anhält, und HDMI- oder USB-Kameras als Quelle.
 
 Siehe [KONZEPT.md](KONZEPT.md) und [CHANGELOG.md](CHANGELOG.md).

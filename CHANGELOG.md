@@ -1,5 +1,20 @@
 # Änderungen
 
+## 0.9.39 (Beta)
+- Neu (experimentell, standardmäßig aus): **Hauptbild tauschen ohne Unterbrechung.** Im Bildaufbau wählt "Hauptbild tauschen ohne Unterbrechung" die Tauschgruppe: *aus* (wie bisher: der Encoder startet neu, etwa 5 Sekunden ohne Bild), *Hauptbild und erstes kleines Bild* oder
+  *alle Kameras*. Ist die Gruppe gewählt, bekommt jede ihrer Kameras zwei Zweige (groß für das Hauptbild, klein für das Bild-in-Bild), das ergibt bei vier Kameras im Bild 6 statt 4 Dekodierungen (bei *alle Kameras* 8). Ein neuer Umschalter im Baustein
+  (`pbpipsel`) wählt das Hauptbild; der Encoder läuft weiter, der Strom zum Empfänger reißt nicht ab. Die Zeitstempel laufen beim Umschalten lückenlos weiter (der Encoder sieht keinen Sprung), der Ton wird im selben Schritt mit umgeschaltet, und der Encoder bekommt
+  beim Schnitt einen vollständigen Bildanfang. Welche Kamera Hauptbild ist und welche Kameras an welcher Stelle kleiner erscheinen, schreibt der Umschalter in jedes Bild; `pbpipmix` liest es dort, Hauptbild und kleine Bilder wechseln also im selben Bild.
+  Das ist ein harter Schnitt; eine Überblendung ist geplant.
+- Wie der Tausch läuft: `POST /api/pipeline/swap` schreibt eine kleine Datei (`/var/lib/pipbox/main-select`, vier Zahlen), die `pbctl` alle 0,1 s liest; der Baustein meldet den eingestellten Zustand zurück (`/run/pipbox-send/swap-state`), erst dann gilt der Tausch
+  als übernommen. Kommt keine Rückmeldung, sendet die neue Hauptkamera nicht, weicht die Anordnung vom Aufbau ab (Notbetrieb) oder ist eine der Kameras nicht in der Tauschgruppe, gilt wie bisher der Neustart. Die Sendekette führt ihre Einstellung für die automatische
+  Umschaltung nach, damit ein späterer Kameraausfall das Hauptbild nicht auf den alten Stand zurücksetzt. Die Verzögerung gehört weiter zur Kamera (die Steuerdatei folgt der Reihenfolge beim Aufbau); der Plan steht im Status der Sendekette (`swap`).
+- Baustein: Platz 3 für das kleine Bild der Hauptkamera, neues Element `pbpipsel`, `pbctl` liest die Umschaltdatei und stellt die Warteschlangen je Kamera (`cam0` bis `cam3`) um. Wird der Baustein beim Update neu gebaut, ändert sich ohne die neue Einstellung nichts.
+- Gemessen mit Testbildern per RTMP auf der Box (kein echter Kameratest): Hauptbild und alle drei kleinen Bilder wechseln richtig, die Zeitstempel von Bild und Ton laufen durch (kein Sprung, keine Lücke), die Rückmeldung kommt in unter 0,7 s. Last des Prozesses: 4 Dekodierungen
+  ohne Tausch 43 bis 51 % eines Kerns, 6 Dekodierungen 46 bis 48 %, 8 Dekodierungen 54 bis 55 %, Temperatur 36 bis 38 °C. **Noch nicht geprüft:** mit echten Kameras, mit der Übertragung zum Empfänger und über längere Zeit. Beide Kameras der Gruppe sollten dieselbe Auflösung senden.
+- Tests: Pipeline-Text (6 und 8 Dekodierungen, Warteschlangen, Ton), Umschaltzeile, Reihenfolge der Verzögerungen, Übergabe an die laufende Sendekette (mit und ohne Rückmeldung), Nachführen der Einstellung, Anfangszustand.
+- Die Auswahl im UI heißt "Hauptbild tauschen ohne Unterbrechung (experimentell)".
+
 ## 0.9.38 (Beta)
 - Behoben: Im Kasten "System" waren der sichtbare Abstand von der Oberkante bis zur Überschrift (gemessen bis zur Oberkante der Buchstaben: 15 Pixel) und der Abstand vom unteren Balken bis zur Unterkante (11 Pixel) nicht gleich. Der Innenabstand der
   Kästen ist jetzt oben 8 und unten 12 Pixel; sichtbar sind es dadurch oben und unten gleich 13 Pixel.

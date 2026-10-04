@@ -474,6 +474,9 @@ class SrtlaStore:
 PIP_CORNERS = ("oben links", "oben rechts", "unten links", "unten rechts", "unten Mitte", "frei (verschiebbar)")
 FREE = 5                      # Nummer von "frei": Position aus x/y (Promille)
 PLUGIN_SO = "/opt/pipbox/gst/libgstpbpip.so"
+SEND_STATUS = "/run/pipbox-send/status.json"
+SWAP_SELECT = "main-select"            # Datei im Zustandsordner: welche Kamera ist Hauptbild (liest der Baustein pbctl)
+SWAP_STATE = "/run/pipbox-send/swap-state"   # hier meldet pbctl zurück, was er eingestellt hat
 _CENTER = {"mtime": None, "ok": True, "free": True}
 
 
@@ -506,6 +509,22 @@ def plugin_multi():
     except OSError:
         return True
     return _MULTI["ok"]
+
+
+_SWAP = {"mtime": None, "ok": True}
+
+
+def plugin_swap():
+    """Kennt der installierte Baustein den Umschalter für den Tausch ohne Unterbrechung (pbpipsel)? Ohne Baustein (Entwicklungsrechner) ja."""
+    try:
+        mt = os.stat(PLUGIN_SO).st_mtime
+        if _SWAP["mtime"] != mt:
+            with open(PLUGIN_SO, "rb") as f:
+                data = f.read()
+            _SWAP.update(mtime=mt, ok=b"pbpipsel" in data and b"follow-tag" in data)
+    except OSError:
+        return True
+    return _SWAP["ok"]
 
 
 def pip_size(pct):
@@ -552,7 +571,7 @@ class PipelineStore:
     DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0}
     Q = "queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040"
 
     def __init__(self, path):
@@ -574,13 +593,19 @@ class PipelineStore:
         self.write_delay_file()
 
     def write_delay_file(self):
-        """Wert für die laufende Sendekette (liest unser Baustein pbctl alle 0,3 s). Atomar ersetzen."""
+        """Wert für die laufende Sendekette (liest unser Baustein pbctl alle 0,3 s). Atomar ersetzen. Läuft die Sendekette im Tausch-Betrieb,
+        gilt die Reihenfolge der Kameras beim Aufbau (die Verzögerung gehört zur Kamera, nicht zum Platz)."""
         if self.path == os.devnull:
             return
         d = os.path.join(os.path.dirname(os.path.abspath(self.path)), "main-delay-ms")
         try:
-            pip = self.cfg.get("type") == "pip"
-            vals = [max(0, min(3000, int(self.cfg.get(k, 0) or 0))) if pip else 0 for k in DELAY_KEYS]
+            base = None
+            try:
+                with open(SEND_STATUS) as f:
+                    base = (json.load(f).get("swap") or {}).get("cams")
+            except (OSError, ValueError, AttributeError):
+                pass
+            vals = self.delay_values(self.cfg, base if isinstance(base, list) else None)
             with open(d + ".tmp", "w") as f:
                 f.write(" ".join(map(str, vals)) + "\n")
             os.chmod(d + ".tmp", 0o644)
@@ -618,8 +643,15 @@ class PipelineStore:
         cfg = {"type": t, "main": main, "pip": "", "corner": 3, "size_pct": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False, "swap_cams": 0}
         if t == "pip":
+            try:
+                swap = int(req.get("swap_cams", 0) or 0)
+            except (TypeError, ValueError):
+                raise ValueError("Tausch: aus, 2 oder 4 Kameras")
+            if swap not in (0, 2, 4):
+                raise ValueError("Tausch: aus, 2 oder 4 Kameras")
+            cfg["swap_cams"] = swap
             pipk = str(req.get("pip", ""))
             if pipk not in camera_keys or pipk == main:
                 raise ValueError("Kleines Bild: eine andere vorhandene Kamera wählen")
@@ -699,8 +731,77 @@ class PipelineStore:
             num(k, 0, 1000)
         for k in ("main_delay_ms", "pip_delay_ms", "pip2_delay_ms", "pip3_delay_ms"):
             num(k, 0, 3000)
+        num("swap_cams", 0, 4)
+        if out["swap_cams"] not in (2, 4):
+            out["swap_cams"] = 0
         out["type"] = "pip" if out.get("type") == "pip" else "single"
         return out
+
+    @classmethod
+    def _layout(cls, c):
+        """Welche kleinen Bilder wirklich dabei sind: (pip, pip2, pip3, multi). c ist eine geprüfte Einstellung (_safe_cfg)."""
+        pip = c["type"] == "pip" and bool(KEY_RE.match(c.get("pip", "")))
+        pip2 = bool(pip and c.get("pip2") and KEY_RE.match(c["pip2"]) and c.get("corner2") in range(len(PIP_CORNERS))
+                    and (c["corner2"] != c["corner"] or c["corner"] == FREE))
+        multi = plugin_multi()
+        pip3 = bool(multi and pip2 and c.get("pip3") and KEY_RE.match(c["pip3"])
+                    and c.get("corner3") in range(len(PIP_CORNERS)) and (c["corner3"] == FREE or c["corner3"] not in (c["corner"], c["corner2"])))
+        return pip, pip2, pip3, multi
+
+    @classmethod
+    def swap_plan(cls, cfg):
+        """Tausch ohne Unterbrechung (Hauptbild gegen eine Kamera tauschen, ohne den Encoder neu zu starten): Plan oder None.
+        Jede Kamera der Tauschgruppe bekommt zwei Zweige (groß und klein), ein Umschalter wählt das Hauptbild. Gruppe: Hauptbild und
+        erstes kleines Bild (swap_cams = 2) oder alle (4). cams: Kameras in der Reihenfolge des Aufbaus (Hauptbild, kleine Bilder 1 bis 3);
+        state/line: Anfangszustand (Hauptkamera, dann Kamera an Stelle 1 bis 3, 15 = keine), audio_pos: -1 Ton folgt dem Hauptbild,
+        0 bis 2 Ton der Kamera an dieser Stelle; asel: Ton läuft ebenfalls über einen Umschalter."""
+        c = cls._safe_cfg(cfg)
+        if c["type"] != "pip" or c["swap_cams"] not in (2, 4) or not KEY_RE.match(c.get("main", "")) or not plugin_swap():
+            return None
+        pip, pip2, pip3, multi = cls._layout(c)
+        if not pip or not multi:
+            return None
+        cams = [c["main"], c["pip"]] + ([c["pip2"]] if pip2 else []) + ([c["pip3"]] if pip3 else [])
+        if len(set(cams)) != len(cams):
+            return None
+        group = min(c["swap_cams"], len(cams))
+        audio = c.get("audio", "main")
+        if audio == "pip2" and not pip2 or audio == "pip3" and not pip3 or audio not in ("main", "pip", "pip2", "pip3"):
+            audio = "main"
+        pos = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}[audio]
+        nums = [0, 1, 2 if pip2 else 15, 3 if pip3 else 15]
+        return {"cams": cams, "group": group, "audio_pos": pos, "asel": pos < 0 or pos + 1 < group,
+                "state": nums[0] | nums[1] << 4 | nums[2] << 8 | nums[3] << 12, "line": " ".join(map(str, nums))}
+
+    @staticmethod
+    def swap_line(slots, cams, group):
+        """Umschaltzeile für die laufende Sendekette aus der Belegung (Hauptbild, kleine Bilder 1 bis 3; "" = leer) und den Kameras
+        beim Aufbau. Der Tausch geht nur innerhalb der Gruppe; alles andere bleibt am Platz. None, wenn das nicht passt."""
+        slots = [(s or "") for s in slots] + [""] * (4 - len(slots))
+        if len(cams) < 2 or group < 2 or group > len(cams) or slots[len(cams):] != [""] * (4 - len(cams)):
+            return None
+        if sorted(slots[:group]) != sorted(cams[:group]):
+            return None
+        if any(slots[i] != cams[i] for i in range(group, len(cams))):
+            return None
+        return " ".join([str(cams.index(slots[0]))] + [str(cams.index(s)) if s else "15" for s in slots[1:]])
+
+    @staticmethod
+    def delay_values(cfg, base=None):
+        """Verzögerungen in ms für die Steuerdatei, in der Reihenfolge der Kameras beim Aufbau der Sendekette (base: deren Schlüssel;
+        sonst die Reihenfolge der Einstellung). Die Verzögerung gehört zur Kamera, nicht zum Platz."""
+        if cfg.get("type") != "pip":
+            return [0, 0, 0, 0]
+        slots = ("main", "pip", "pip2", "pip3")
+        by_key = {cfg[s]: cfg.get(d, 0) for s, d in zip(slots, DELAY_KEYS) if cfg.get(s)}
+        order = list(base) if base else [cfg.get(s) for s in slots]
+        vals = []
+        for k in (order + [None] * 4)[:4]:
+            try:
+                vals.append(max(0, min(3000, int(by_key.get(k, 0) or 0))) if k else 0)
+            except (TypeError, ValueError):
+                vals.append(0)
+        return vals
 
     def build(self, cfg=None, rtmp_port=1935, rtmp_app="publish"):
         """Pipeline-Text für belacoder. Die Schlüssel sind geprüft (a-z, 0-9, -, _)."""
@@ -709,17 +810,12 @@ class PipelineStore:
             return ""
         q = self.Q
         base = f"rtmp://127.0.0.1:{rtmp_port}/{rtmp_app}"
-        pip = c["type"] == "pip" and KEY_RE.match(c.get("pip", ""))
-        pip2 = bool(pip and c.get("pip2") and KEY_RE.match(c["pip2"]) and c.get("corner2") in range(len(PIP_CORNERS))
-                    and (c["corner2"] != c["corner"] or c["corner"] == FREE))
-        multi = plugin_multi()
+        pip, pip2, pip3, multi = self._layout(c)
 
         def xy(cfg_, kx, ky, corner_):
             if corner_ != FREE:
                 return ""
             return f" {kx}={int(cfg_.get(kx, 500))} {ky}={int(cfg_.get(ky, 500))}"
-        pip3 = bool(multi and pip2 and c.get("pip3") and KEY_RE.match(c["pip3"])
-                    and c.get("corner3") in range(len(PIP_CORNERS)) and (c["corner3"] == FREE or c["corner3"] not in (c["corner"], c["corner2"])))
         out = []
         # Hauptbild (samt Ton) verzögern: die kleinen Bilder treffen dann zeitlich besser auf das Hauptbild.
         # Die Wartezeit sitzt NACH dem Auspacken (dort haben die Pakete die Zeitstempel der Kamera) und gilt für
@@ -744,6 +840,9 @@ class PipelineStore:
             th = d + FRAME_MS if d else 0
             return (f"queue name={name} max-size-time={(th + 500) * 1000000} max-size-buffers={0 if d else 30} "
                     f"leaky=downstream" + (f" min-threshold-time={th * 1000000}" if d else ""))
+        plan = self.swap_plan(c) if pip else None
+        if plan:
+            return self._build_dual(c, plan, base, small, xy, pip2, pip3)
         out.append(f"rtmpsrc location={base}/{c['main']} do-timestamp=true !\nflvdemux name=demux\n")
         if pip:
             # Kein videorate/textoverlay: sie halten das Hauptbild fest, dann wäre das Hineinschreiben
@@ -803,6 +902,59 @@ class PipelineStore:
         out.append("mpegtsmux name=mux !\nappsink name=appsink\n")
         return "\n".join(out)
 
+    def _build_dual(self, c, plan, base, small, xy, pip2, pip3):
+        """Pipeline für den Tausch ohne Unterbrechung (siehe swap_plan). Jede Kamera der Gruppe liefert ihr Bild zweimal: groß in den
+        Umschalter vsel (Hauptbild), klein in einen eigenen Platz des Bild-in-Bild (Platz = Kamera + 3 mod 4: Kamera 0 -> 3, 1 -> 0 ...).
+        Welche Kamera gerade Hauptbild ist und wo die anderen kleiner erscheinen, schreibt vsel in jedes Bild; pbpipmix liest es dort.
+        Der Ton läuft bei Bedarf über einen zweiten Umschalter asel, den pbctl im selben Schritt mitstellt. Die Wartezeit gehört je
+        Kamera zu allen ihren Warteschlangen (vfq = Bild groß, vsq = Bild klein, aq = Ton)."""
+        q = self.Q
+        cams, group, ap = plan["cams"], plan["group"], plan["audio_pos"]
+        w, h = pip_size(c["size_pct"])
+        out = []
+        out.append(f"pbpipsel name=vsel tag-offset=true force-key=true state={plan['state']} !\n"
+                   "identity name=v_delay signal-handoffs=TRUE !\nvideo/x-raw,format=NV12 !\n"
+                   f"pbpipmix name=pipmix follow-tag=true corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}"
+                   + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}" if pip2 else "")
+                   + (f" slot3=2 corner3={c['corner3']}{xy(c, 'x3', 'y3', c['corner3'])}" if pip3 else "") + " !\n"
+                   "queue max-size-time=500000000 max-size-buffers=4 leaky=downstream !\n"
+                   "mpph265enc zero-copy-pkt=0 qp-max=51 gop=60 name=venc_bps !\n"
+                   f"h265parse config-interval=-1 ! {q} ! mux.\n")
+        opus = "audioconvert ! audioresample quality=10 sinc-filter-mode=1 ! opusenc bitrate=128000 ! opusparse"
+        mute = "queue max-size-buffers=4 leaky=downstream ! fakesink sync=false async=false\n"
+        queues = []
+        for i, key in enumerate(cams):
+            d = int(c.get(DELAY_KEYS[i], 0) or 0)
+            items = [f"vsq{i}:s"]
+            out.append(f"rtmpsrc location={base}/{key} do-timestamp=true !\nflvdemux name=dm{i}\n")
+            small_chain = (f"{small(f'vsq{i}', DELAY_KEYS[i])} !\nh264parse ! mppvideodec width={w} height={h} !\nvideo/x-raw,format=NV12 !\n"
+                           f"queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot={(i + 3) % 4}\n")
+            if i < group:
+                qv = f"{q} name=vfq{i}" + (f" min-threshold-time={(d + FRAME_MS) * 1000000}" if d else "")
+                out.append(f"dm{i}.video !\ntee name=vt{i}\n")
+                out.append(f"vt{i}. !\n{qv} !\nh264parse ! mppvideodec !\nvideo/x-raw,format=NV12 !\nvsel.sink_{i}\n")
+                out.append(f"vt{i}. !\n{small_chain}")
+                items.insert(0, f"vfq{i}:v")
+            else:
+                out.append(f"dm{i}.video !\n{small_chain}")
+            qa = f"{q} name=aq{i}" + (f" min-threshold-time={d * 1000000}" if d else "")
+            if plan["asel"] and i < group:
+                out.append(f"dm{i}.audio !\n{qa} !\naacparse ! avdec_aac ! audioconvert ! audioresample quality=10 sinc-filter-mode=1 !\n"
+                           f"audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved ! asel.sink_{i}\n")
+                items.append(f"aq{i}:a")
+            elif not plan["asel"] and i == ap + 1:
+                out.append(f"dm{i}.audio !\n{qa} !\naacparse ! avdec_aac ! identity name=a_delay signal-handoffs=TRUE !\n{opus} ! {q} ! mux.\n")
+                items.append(f"aq{i}:a")
+            else:
+                out.append(f"dm{i}.audio !\n{mute}")
+            queues.append(f" cam{i}={','.join(items)}")
+        if plan["asel"]:
+            out.append(f"pbpipsel name=asel state={0 if ap < 0 else ap + 1} !\nidentity name=a_delay signal-handoffs=TRUE !\n"
+                       f"opusenc bitrate=128000 ! opusparse ! {q} ! mux.\n")
+        out.append("pbctl name=pbctl selector=vsel" + (" audio-selector=asel" if plan["asel"] else "") + f" audio-pos={ap}" + "".join(queues) + "\n")
+        out.append("mpegtsmux name=mux !\nappsink name=appsink\n")
+        return "\n".join(out)
+
     def status(self, cams):
         keys = [c["key"] for c in cams]
         return {"config": dict(self.cfg), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown")} for c in cams],
@@ -814,6 +966,7 @@ class SendControl:
     """Live gehen / beenden. Die eigentliche Sendekette läuft als Root-Dienst (pipbox-send);
     wir stellen nur Zustand und Voraussetzungen dar und legen eine Anforderungsdatei ab."""
     STATUS = "/run/pipbox-send/status.json"
+    SWAP_WAIT = 2.0               # so lange auf die Rückmeldung des Bausteins warten (Sekunden)
 
     def __init__(self, state_dir, srtla, pipeline, cams, demo=False):
         self.req = os.path.join(state_dir, "send-request")
@@ -893,6 +1046,8 @@ class SendControl:
                "since": d.get("since"), "restarts": d.get("restarts"), "delay_live": bool(d.get("delay_live")), "delay_live_pips": bool(d.get("delay_live_pips")),
                "server": sel and {"name": sel["name"], "host": sel["host"], "port": sel["port"]}}
         out["failover"] = d.get("failover") if active else None
+        sw = d.get("swap") if active else None
+        out["swap_group"] = [k for k in sw["cams"][:int(sw.get("group", 0))] if isinstance(k, str)] if isinstance(sw, dict) and isinstance(sw.get("cams"), list) else []
         applied = d.get("applied") if active else None
         cur = srtla_signature(self.srtla.data)
         out["pending"] = [lab for k, lab in PENDING_LABELS if isinstance(applied, dict) and k in applied and applied[k] != cur[k]]
@@ -935,6 +1090,48 @@ class SendControl:
         """Dasselbe für die Verzögerung der kleinen Bilder (neuere Version des Steuerbausteins)."""
         d = self._detail()
         return bool(self._active() and d.get("delay_live_pips") and not (d.get("failover") or {}).get("degraded"))
+
+    def swap_live(self):
+        """Tausch des Hauptbilds in der laufenden Sendekette übernehmen lassen, ohne Neustart (nur im Tausch-Betrieb und wenn die
+        Anordnung der Kameras noch zum Aufbau passt). Wahr, wenn der Baustein den neuen Zustand zurückgemeldet hat; sonst bleibt der Neustart."""
+        if self.demo or not self._active():
+            return False
+        d = self._detail()
+        sw = d.get("swap")
+        if not isinstance(sw, dict) or not isinstance(sw.get("cams"), list) or (d.get("failover") or {}).get("degraded"):
+            return False
+        cfg = self.pipeline.cfg
+        slots = [cfg.get(k) for k in ("main", "pip", "pip2", "pip3")]
+        try:
+            line = PipelineStore.swap_line(slots, sw["cams"], int(sw.get("group", 0)))
+            if line is None:
+                return False
+            live = {c["key"]: c.get("state") for c in self.cams.listing("")}
+            if live.get(cfg.get("main")) != "live":          # die neue Hauptkamera sendet nicht: lieber neu starten (Notbetrieb)
+                return False
+        except (TypeError, ValueError, KeyError):
+            return False
+        folder = os.path.dirname(self.req)
+        tmp = os.path.join(folder, SWAP_SELECT + ".tmp")
+        t0 = time.time()
+        try:
+            with open(tmp, "w") as f:
+                f.write(line + "\n")
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(folder, SWAP_SELECT))
+        except OSError:
+            return False
+        end = time.monotonic() + self.SWAP_WAIT
+        while time.monotonic() < end:                       # der Baustein liest alle 0,1 s und meldet den Zustand zurück
+            try:
+                if os.stat(SWAP_STATE).st_mtime >= t0 - 0.2:
+                    with open(SWAP_STATE) as f:
+                        if f.read().split() == line.split():
+                            return True
+            except OSError:
+                pass
+            time.sleep(0.1)
+        return False
 
     def restart_if_live(self):
         """Nach geänderter Pipeline: läuft die Sendekette, wird sie kurz neu gestartet.
@@ -2286,6 +2483,8 @@ class Handler(BaseHTTPRequestHandler):
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
                     raise ValueError("Kamera unbekannt")
                 self.pipeline.swap_main_pip(with_key)
+                if self.send.swap_live():
+                    return self.reply(200, {"ok": True, "restarted": False, "note": "Getauscht, ohne Unterbrechung."})
                 restarted, note = self.send.restart_if_live()
                 return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
             if path == "/api/pipeline":

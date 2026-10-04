@@ -622,5 +622,183 @@ class SwapMainPip(unittest.TestCase):
             self.assertEqual(st.cfg["main"], "cam-a")
 
 
+class SeamlessSwap(unittest.TestCase):
+    """Tausch ohne Neustart: Pipeline-Text, Umschaltzeile, Verzögerungsreihenfolge und Übergabe an die laufende Sendekette."""
+    CFG = dict(server.PipelineStore.DEFAULT, type="pip", main="cam-a", pip="cam-b", pip2="cam-c", pip3="cam-d", corner=4, corner2=2, corner3=3,
+               main_delay_ms=100, pip_delay_ms=300, pip2_delay_ms=50, pip3_delay_ms=0, swap_cams=2)
+
+    def build(self, **kw):
+        return server.PipelineStore(os.devnull).build(dict(self.CFG, **kw))
+
+    def test_off_by_default_and_with_old_plugin(self):
+        self.assertNotIn("pbpipsel", self.build(swap_cams=0))
+        with mock.patch.object(server, "plugin_swap", lambda: False):
+            self.assertNotIn("pbpipsel", self.build())
+        self.assertNotIn("pbpipsel", self.build(type="single"))
+
+    def test_two_swappable_cameras_decode_six_times(self):
+        t = self.build()
+        self.assertEqual(t.count("mppvideodec"), 6)          # 2 groß + 4 klein
+        self.assertEqual(t.count("tee name="), 2)
+        self.assertEqual(t.count("pbpipsel"), 2)             # Bild und Ton
+        self.assertEqual(t.count("opusenc"), 1)
+        self.assertEqual(t.count("pbpipsink"), 4)
+        for ring in range(4):
+            self.assertEqual(t.count(f"pbpipsink slot={ring}"), 1)
+        self.assertIn("vsel.sink_0", t)
+        self.assertIn("vsel.sink_1", t)
+        self.assertNotIn("vsel.sink_2", t)
+        self.assertIn("follow-tag=true", t)
+        self.assertIn("pbctl name=pbctl selector=vsel audio-selector=asel audio-pos=-1 cam0=vfq0:v,vsq0:s,aq0:a cam1=vfq1:v,vsq1:s,aq1:a cam2=vsq2:s cam3=vsq3:s", t)
+
+    def test_four_swappable_cameras_decode_eight_times(self):
+        t = self.build(swap_cams=4)
+        self.assertEqual(t.count("mppvideodec"), 8)
+        for i in range(4):
+            self.assertIn(f"vsel.sink_{i}", t)
+            self.assertIn(f"asel.sink_{i}", t)
+
+    def test_group_is_limited_by_the_cameras_present(self):
+        t = self.build(swap_cams=4, pip3="")
+        self.assertEqual(t.count("tee name="), 3)
+        self.assertEqual(self.build(swap_cams=4, pip2="", pip3="").count("tee name="), 2)
+
+    def test_every_queue_named_for_the_control_exists(self):
+        t = self.build(swap_cams=4)
+        ctl = next(l for l in t.splitlines() if l.startswith("pbctl"))
+        for part in ctl.split():
+            if part.startswith("cam"):
+                for item in part.split("=", 1)[1].split(","):
+                    self.assertIn(f"name={item.split(':')[0]} ", t + " ")
+        self.assertEqual(t.count("name=a_delay"), 1)
+        self.assertEqual(t.count("name=v_delay"), 1)
+
+    def test_delay_belongs_to_the_camera_in_all_its_queues(self):
+        t = self.build()
+        self.assertIn("name=vfq0 min-threshold-time=133000000", t)     # 100 ms + ein Bild
+        self.assertIn("name=aq0 min-threshold-time=100000000", t)
+        self.assertIn("name=vfq1 min-threshold-time=333000000", t)
+        self.assertIn("queue name=vsq1 max-size-time=833000000 max-size-buffers=0 leaky=downstream min-threshold-time=333000000", t)
+
+    def test_audio_follows_the_picture_only_for_swappable_cameras(self):
+        t = self.build(audio="pip")                         # Ton vom ersten kleinen Bild: läuft über den Umschalter
+        self.assertIn("audio-pos=0", t)
+        self.assertIn("pbpipsel name=asel state=1", t)
+        t = self.build(audio="pip2")                        # Kamera 3 ist nicht in der Gruppe: fester Ton, kein Umschalter
+        self.assertNotIn("asel", t)
+        self.assertEqual(t.count("opusenc"), 1)
+        self.assertEqual(t.count("fakesink"), 3)
+        t = self.build(audio="pip2", swap_cams=4)
+        self.assertIn("audio-pos=1", t)
+        self.assertIn("pbpipsel name=asel state=2", t)
+
+    def test_plan_and_initial_state(self):
+        plan = server.PipelineStore.swap_plan(self.CFG)
+        self.assertEqual((plan["cams"], plan["group"], plan["line"]), (KEYS, 2, "0 1 2 3"))
+        self.assertEqual(plan["state"], 0 | 1 << 4 | 2 << 8 | 3 << 12)
+        plan = server.PipelineStore.swap_plan(dict(self.CFG, pip3="", swap_cams=4))
+        self.assertEqual((plan["group"], plan["line"]), (3, "0 1 2 15"))
+        self.assertIsNone(server.PipelineStore.swap_plan(dict(self.CFG, swap_cams=0)))
+        self.assertIsNone(server.PipelineStore.swap_plan(dict(self.CFG, pip="")))
+
+    def test_swap_line(self):
+        line = server.PipelineStore.swap_line
+        self.assertEqual(line(["cam-a", "cam-b", "cam-c", "cam-d"], KEYS, 2), "0 1 2 3")
+        self.assertEqual(line(["cam-b", "cam-a", "cam-c", "cam-d"], KEYS, 2), "1 0 2 3")
+        self.assertIsNone(line(["cam-c", "cam-b", "cam-a", "cam-d"], KEYS, 2))          # Kamera 3 ist nicht in der Gruppe
+        self.assertEqual(line(["cam-c", "cam-b", "cam-a", "cam-d"], KEYS, 4), "2 1 0 3")
+        self.assertEqual(line(["cam-b", "cam-a", "cam-c", ""], KEYS[:3], 2), "1 0 2 15")
+        self.assertIsNone(line(["cam-b", "cam-a", "cam-c", "cam-d"], KEYS[:3], 2))      # andere Kameras als beim Aufbau
+        self.assertIsNone(line(["cam-x", "cam-b", "cam-c", "cam-d"], KEYS, 2))
+        self.assertIsNone(line(["cam-a", "cam-b"], ["cam-a"], 1))
+
+    def test_delay_file_order_stays_with_the_cameras(self):
+        cfg = dict(self.CFG)
+        self.assertEqual(server.PipelineStore.delay_values(cfg), [100, 300, 50, 0])
+        st = server.PipelineStore(os.path.join(tempfile.mkdtemp(), "p.json"))
+        st.cfg.update(cfg)
+        st.swap_main_pip()                                   # cfg: b ist Hauptbild und trägt seine 300 ms mit
+        self.assertEqual((st.cfg["main"], st.cfg["main_delay_ms"], st.cfg["pip_delay_ms"]), ("cam-b", 300, 100))
+        self.assertEqual(server.PipelineStore.delay_values(st.cfg, KEYS), [100, 300, 50, 0])   # Reihenfolge des Aufbaus
+        self.assertEqual(server.PipelineStore.delay_values(st.cfg), [300, 100, 50, 0])         # ohne Aufbau: Reihenfolge der Einstellung
+        self.assertEqual(server.PipelineStore.delay_values(dict(cfg, type="single")), [0, 0, 0, 0])
+
+    def test_setting_is_validated(self):
+        s = store()
+        s.set(dict(BASE, swap_cams=4), KEYS)
+        self.assertEqual(s.cfg["swap_cams"], 4)
+        for bad in (3, 1, "x", -2):
+            with self.assertRaises(ValueError):
+                store().set(dict(BASE, swap_cams=bad), KEYS)
+        s.set(dict(BASE), KEYS)
+        self.assertEqual(s.cfg["swap_cams"], 0)
+        self.assertEqual(server.PipelineStore._safe_cfg(dict(BASE, swap_cams=3))["swap_cams"], 0)
+
+    def control(self, cams_state=None, swap=None):
+        d = tempfile.mkdtemp()
+        st = server.PipelineStore(os.path.join(d, "pipeline.json"))
+        st.cfg.update(self.CFG)
+        cams = mock.Mock()
+        cams.listing.return_value = [{"key": k, "state": (cams_state or {}).get(k, "live")} for k in KEYS]
+        sc = server.SendControl(d, mock.Mock(), st, cams)
+        sc.SWAP_WAIT = 1.0
+        sc._active = lambda: True
+        sc._detail = lambda: {"swap": swap if swap is not None else {"cams": KEYS, "group": 2}, "failover": {"degraded": False}}
+        return d, st, sc
+
+    def answer(self, d, state_path, delay=0.2):
+        """Spielt den Baustein: liest die Umschaltdatei und meldet den Zustand zurück."""
+        def run():
+            time.sleep(delay)
+            with open(os.path.join(d, server.SWAP_SELECT)) as f:
+                txt = f.read()
+            with open(state_path, "w") as f:
+                f.write(txt)
+        th = threading.Thread(target=run)
+        th.start()
+        return th
+
+    def test_live_swap_writes_the_line_and_waits_for_the_report(self):
+        d, st, sc = self.control()
+        state = os.path.join(d, "swap-state")
+        with mock.patch.object(server, "SWAP_STATE", state):
+            st.swap_main_pip()
+            th = self.answer(d, state)
+            self.assertTrue(sc.swap_live())
+            th.join()
+        with open(os.path.join(d, server.SWAP_SELECT)) as f:
+            self.assertEqual(f.read().strip(), "1 0 2 3")
+
+    def test_live_swap_without_report_falls_back_to_restart(self):
+        d, st, sc = self.control()
+        with mock.patch.object(server, "SWAP_STATE", os.path.join(d, "never")):
+            st.swap_main_pip()
+            self.assertFalse(sc.swap_live())
+
+    def test_stale_report_is_not_taken_for_an_answer(self):
+        d, st, sc = self.control()
+        state = os.path.join(d, "swap-state")
+        with open(state, "w") as f:
+            f.write("1 0 2 3\n")
+        os.utime(state, (time.time() - 60, time.time() - 60))
+        with mock.patch.object(server, "SWAP_STATE", state):
+            st.swap_main_pip()
+            self.assertFalse(sc.swap_live())
+
+    def test_live_swap_refused_when_it_cannot_work(self):
+        for kw in ({"swap": {"cams": KEYS, "group": 2}, "cams_state": {"cam-b": "off"}},   # neue Hauptkamera sendet nicht
+                   {"swap": {"cams": KEYS[:3], "group": 2}},                                # Anordnung weicht vom Aufbau ab
+                   {"swap": None}):
+            d, st, sc = self.control(**kw)
+            if kw.get("swap") is None:
+                sc._detail = lambda: {}
+            st.swap_main_pip()
+            self.assertFalse(sc.swap_live(), kw)
+            self.assertFalse(os.path.exists(os.path.join(d, server.SWAP_SELECT)), kw)
+        d, st, sc = self.control()
+        st.swap_main_pip("cam-c")                                                            # Kamera 3 gehört nicht zur Gruppe
+        self.assertFalse(sc.swap_live())
+
+
 if __name__ == "__main__":
     unittest.main()
