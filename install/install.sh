@@ -15,6 +15,19 @@ case "${1:-install}" in
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $need \
         || echo "WARNUNG: Pakete konnten nicht installiert werden (Internet?). Die DJI-Kameras gehen erst, wenn bluez, python3-dbus und python3-gi da sind."
     fi
+    # DJI-Dienst: Bluetooth-Bibliothek bleak. Für Ubuntu 22.04 gibt es kein Paket dafür, deshalb pip (braucht Internet). Fehlt sie
+    # danach, bricht die Installation hier ab, bevor etwas verändert wurde: Der Update-Helfer stellt dann die vorige Version wieder
+    # her, statt die DJI-Kameras still lahmzulegen.
+    if ! python3 -c "import bleak" 2>/dev/null; then
+      echo "Installiere die Bluetooth-Bibliothek bleak (pip)"
+      dpkg -s python3-pip >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-pip || true
+      pip3 install --disable-pip-version-check "bleak>=0.22" || true
+      if ! python3 -c "import bleak" 2>/dev/null; then
+        echo "FEHLER: Die Bluetooth-Bibliothek bleak konnte nicht installiert werden (Internet? pip3?). Der DJI-Dienst braucht sie." >&2
+        echo "Von Hand: sudo apt-get install -y python3-pip && sudo pip3 install bleak, danach install.sh erneut ausführen." >&2
+        exit 1
+      fi
+    fi
     getent group bluetooth >/dev/null || groupadd --system bluetooth
     systemctl stop pipbox.service 2>/dev/null || true
     # Fester, rechteloser Benutzer (der D-Bus-Daemon akzeptiert keine DynamicUser-Benutzer).

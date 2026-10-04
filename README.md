@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.49 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.50 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -24,6 +24,8 @@ sudo sh install/install.sh
 
 Die Installation lädt fehlende Pakete nach und baut den Bild-in-Bild-Baustein und den SRTLA-Sender selbst; das kann einige
 Minuten dauern.
+Dazu gehört die Bluetooth-Bibliothek `bleak` für den DJI-Dienst (per `pip`, braucht Internet). Gelingt das nicht, bricht die
+Installation mit einer Meldung ab, bevor etwas verändert wurde.
 
 **Schritt 3: Anmelden.** Im Browser `http://<Adresse der Box>:8780` öffnen und mit dem BELABOX-Passwort anmelden. Ist in Schritt 1
 noch kein Passwort gesetzt worden, steht auf der Seite, dass es zuerst in der BELABOX-Oberfläche festgelegt werden muss; die Seite
@@ -63,10 +65,11 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   **Ampel** und aktuelle Eingangsbitrate. *Upload*: je verbundener Netzwerkkarte Datenrate samt **Ampel** und Summe (Ethernet, WLAN, USB-/Mobilfunk-Router). Warnungen
   erscheinen darüber; sind keine da, bleibt der Platz leer.
 - **RTMP-Kameras:** neue Streams werden automatisch erkannt; Kameras lassen sich umbenennen, Rollen zuweisen.
-- **DJI-Kameras per Bluetooth** (Protokoll nach Moblin, MIT): Suche, Koppeln, WLAN und RTMP-Ziel übergeben, Start. Pro Kamera
-  Auflösung, fps, Bitrate und Stabilisierung. Ein eigener Dienst (`pipbox-dji`) hält die Verbindungen, verbindet nach
-  Ausfällen neu, überwacht, ob der Stream ankommt, folgt Änderungen der Box-Adresse im Kameranetz und heilt einen hängenden
-  Bluetooth-Adapter.
+- **DJI-Kameras per Bluetooth** (Protokoll nach Moblin, MIT): Suche, Koppeln, WLAN und RTMP-Ziel übergeben, Start, mit Statusmeldungen je Schritt.
+  **Je Kamera wählbare Verbindung** aus den vorhandenen Verbindungen der Box: WLAN-Hotspot und WLAN-Netze mit Name und Passwort aus NetworkManager, alle anderen
+  (Ethernet, USB-Router, Modem) mit einmal eingetragenem und gespeichertem WLAN der Kamera. Pro Kamera Auflösung, fps, Bitrate und Stabilisierung.
+  Ein eigener Dienst (`pipbox-dji`, Bibliothek `bleak`) hält die Verbindungen, verbindet nach Ausfällen neu, überwacht, ob der Stream ankommt, und
+  verbindet mehrere Kameras nacheinander (gleichzeitig bricht auf dem Funkchip ab).
 - **SRTLA-Serverliste:** mehrere Server speichern und per Auswahl umschalten (Stream-ID wird nie angezeigt).
 - **Pipeline:** eine Kamera oder Bild-in-Bild mit bis zu drei kleinen Bildern (vier Kameras), Ecke und Größe wählbar, Ton von
   jeder Kamera. Die kleinen Bilder lassen sich in einer Vorschau frei verschieben (oder als Ecke wählen). Ein kleiner eigener GStreamer-Baustein (`gst/`) schreibt die kleinen Bilder in einem Durchgang direkt in
@@ -176,6 +179,6 @@ alles erneut.
 
 ## Lizenz
 
-MIT, siehe [LICENSE](LICENSE) und [NOTICE.md](NOTICE.md) (enthält die Lizenz von Moblin, dessen DJI-Protokoll hier
-nachgebaut wurde). **Ausnahme:** Der Ordner `srtla/` (Patch auf BELABOX/srtla und der damit gebaute Sender) steht unter
+MIT, siehe [LICENSE](LICENSE) und [NOTICE.md](NOTICE.md) (enthält die Lizenzen von Moblin, dessen DJI-Protokoll hier
+nachgebaut wurde, und vom DJI-Dienst, dessen Ablauf übernommen wurde). **Ausnahme:** Der Ordner `srtla/` (Patch auf BELABOX/srtla und der damit gebaute Sender) steht unter
 AGPL-3.0, wie das Original.

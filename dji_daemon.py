@@ -1,44 +1,671 @@
 #!/usr/bin/env python3
 """Bluetooth-Dienst für DJI-Kameras (pipbox-dji.service).
 
-Läuft getrennt von der Weboberfläche. Grund: Eine DJI-Kamera streamt nur, solange
-die Box die Bluetooth-Verbindung hält; startet man die Oberfläche neu, würden sonst
-alle Kameras abbrechen. Dieser Dienst hält die Verbindungen, merkt sich, welche
-Kameras laufen sollen (dji-active.json), und verbindet sie nach einem Ausfall
-selbst wieder (mit wachsender Wartezeit).
+Koppelt DJI-Osmo-Kameras per Bluetooth LE, sagt ihnen, in welches WLAN sie sich einbuchen sollen, und startet den
+RTMP-Livestream zur Box (nginx-rtmp, Port 1935). Jede Kamera hat ihre eigene Verbindung: aus allen aktiven Verbindungen der
+Box wird gewählt (WLAN-Hotspot und WLAN-Client-Netze mit Name und Passwort aus NetworkManager, alle anderen Verbindungen wie
+Ethernet, USB-Router oder Modem mit einmal von Hand eingegebenem WLAN der Kamera).
 
-Schnittstelle: nur 127.0.0.1, jede Anfrage braucht das Token aus <state>/dji-token
-(nur der Benutzer pipbox kann es lesen). Das WLAN-Passwort der Kamera liegt in
-dji-active.json (Rechte 0600), niemals im Journal.
+Läuft getrennt von der Weboberfläche. Grund: Eine DJI-Kamera streamt nur, solange die Box die Bluetooth-Verbindung hält;
+startet man die Oberfläche neu, würden sonst alle Kameras abbrechen. Der Dienst merkt sich die Kameras samt Einstellungen
+(dji-cameras.json) und verbindet sie nach einem Ausfall selbst wieder.
+
+Das BLE-Protokoll stammt von Moblin (https://github.com/eerimoq/moblin, MIT, Copyright (c) 2023 Erik Moqvist), geprüft gegen
+datagutt/node-osmo (MIT). Ablauf der Sitzung, Verbindungsliste und Befehle folgen dem DJI-Dienst von Bittersweet1987
+(Copyright 2026), hier an IRL4YOU BOX angepasst (siehe NOTICE.md).
+
+Schnittstelle: nur 127.0.0.1, JSON-Zeilen über TCP. Jede Anfrage braucht das Token aus <state>/dji-token (nur der Benutzer
+pipbox kann es lesen). Passwörter der Kamera-WLANs liegen nur in dji-cameras.json (Rechte 0600), niemals im Journal und
+nie in einer Antwort an den Browser.
 """
 import argparse
+import asyncio
+import hmac
 import json
+import logging
 import os
+import re
 import secrets
-import threading
+import subprocess
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.request
+
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:  # Protokoll und Befehle lassen sich auch ohne bleak testen
+    BleakClient = BleakScanner = None
 
 import dji
 
-PORT = 8793
-STAT_URL = "http://127.0.0.1:1936/"   # nginx-rtmp-Statistik
-SILENT_LIMIT = 45                    # so lange darf der Stream fehlen, bevor neu verbunden wird
-GRACE = 60                           # nach dem Start so lange Zeit lassen, bis der Stream erscheint
-BACKOFF = (10, 20, 40, 60)       # Sekunden bis zum nächsten Wiederverbinden
-NET_SETTLE = 8                   # nach dem Wiederkehren des Kameranetzes (Router) so lange warten, bis die Kameras ihm beitreten können
+LISTEN_HOST, LISTEN_PORT = "127.0.0.1", 9101
+RTMP_PORT = 1935
+RTMP_APP = "publish"
+STAT_URL = "http://127.0.0.1:1936/"          # nginx-rtmp-Statistik
+ONBOARD_USB_ID = "13d3:3572"                 # eingebautes Realtek-Modul der ROCK 5B+ (empfängt dort nichts): Stick zuerst
+
+log = logging.getLogger("pipbox-dji")
+
+# ---------------------------------------------------------------- Protokoll ---
+
+FIRST_BYTE = 0x55
+VERSION = 0x04
 
 
-def publishing_keys():
-    """Schlüssel der Streams, die gerade bei der Box ankommen; None, wenn die Statistik nicht lesbar ist."""
-    import re
-    import urllib.request
+def crc_generic(data, width, poly, init, ref_in=True, ref_out=True, xor=0):
+    """CRC bitweise, wie im CRC-Katalog parametriert."""
+    mask = (1 << width) - 1
+    top = 1 << (width - 1)
+    crc = init
+    if ref_in:
+        # gespiegelter Algorithmus: Polynom und Startwert werden einmal vorab gespiegelt
+        rpoly = int("{:0{w}b}".format(poly, w=width)[::-1], 2)
+        rinit = int("{:0{w}b}".format(init, w=width)[::-1], 2)
+        crc = rinit
+        for b in data:
+            crc ^= b
+            for _ in range(8):
+                crc = (crc >> 1) ^ rpoly if crc & 1 else crc >> 1
+        if not ref_out:
+            crc = int("{:0{w}b}".format(crc, w=width)[::-1], 2)
+        return (crc ^ xor) & mask
+    for b in data:
+        crc ^= b << (width - 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ poly) & mask if crc & top else (crc << 1) & mask
+    if ref_out:
+        crc = int("{:0{w}b}".format(crc, w=width)[::-1], 2)
+    return (crc ^ xor) & mask
+
+
+def crc8(data):
+    return crc_generic(data, 8, 0x31, 0xEE, True, True, 0x00)
+
+
+def crc16(data):
+    return crc_generic(data, 16, 0x1021, 0x496C, True, True, 0x0000)
+
+
+def pack_string(value):
+    b = value.encode("utf-8")
+    return bytes([len(b) & 0xFF]) + b
+
+
+def pack_url(url):
+    b = url.encode("utf-8")
+    return bytes([len(b) & 0xFF, 0]) + b
+
+
+class Message:
+    def __init__(self, target, mid, mtype, payload=b""):
+        self.target = target
+        self.id = mid
+        self.type = mtype
+        self.payload = bytes(payload)
+
+    def encode(self):
+        out = bytearray([FIRST_BYTE, (13 + len(self.payload)) & 0xFF, VERSION])
+        out.append(crc8(bytes(out)))
+        out += self.target.to_bytes(2, "little")
+        out += self.id.to_bytes(2, "little")
+        out += self.type.to_bytes(3, "little")
+        out += self.payload
+        out += crc16(bytes(out)).to_bytes(2, "little")
+        return bytes(out)
+
+    @staticmethod
+    def decode(data):
+        data = bytes(data)
+        if len(data) < 13 or data[0] != FIRST_BYTE:
+            raise ValueError("falsches erstes Byte oder zu kurz")
+        if data[1] != len(data):
+            raise ValueError("falsche Länge")
+        if data[2] != VERSION:
+            raise ValueError("falsche Version")
+        if data[3] != crc8(data[0:3]):
+            raise ValueError("Kopf-Prüfsumme falsch")
+        if int.from_bytes(data[-2:], "little") != crc16(data[:-2]):
+            raise ValueError("Prüfsumme falsch")
+        return Message(int.from_bytes(data[4:6], "little"),
+                       int.from_bytes(data[6:8], "little"),
+                       int.from_bytes(data[8:11], "little"),
+                       data[11:-2])
+
+    def __repr__(self):
+        return "Message(target=0x%04x id=0x%04x type=0x%06x payload=%s)" % (
+            self.target, self.id, self.type, self.payload.hex())
+
+
+# Transaktions-IDs (der Wert ist egal, er muss nur zur Antwort passen)
+ID_PAIR, ID_STOP, ID_PREPARE, ID_WIFI, ID_START, ID_CONFIGURE = 0x8092, 0xEAC8, 0x8C12, 0x8C19, 0x8C2C, 0x8C2D
+# Ziele
+T_PAIR, T_STOP, T_PREPARE, T_WIFI, T_CONFIGURE, T_START = 0x0702, 0x0802, 0x0802, 0x0702, 0x0102, 0x0802
+# Typen
+TY_PAIR, TY_STOP, TY_PREPARE, TY_WIFI, TY_CONFIGURE, TY_START, TY_STATUS = \
+    0x450740, 0x8E0240, 0xE10240, 0x470740, 0x8E0240, 0x780840, 0x020D00
+
+PAIR_PAYLOAD = bytes([0x20]) + b"284ae5b8d76b3375a04a6417ad71bea3"
+PAIR_PIN = "mbln"      # die bisherige PIN dieses Projekts: schon gekoppelte Kameras müssen nicht neu bestätigt werden
+STOP_PAYLOAD = bytes([0x01, 0x01, 0x1A, 0x00, 0x01, 0x02])
+CONFIRM_PAYLOAD = bytes([0x01, 0x01, 0x1A, 0x00, 0x01, 0x01])
+
+# Modell-ID (die ersten zwei Bytes nach der Hersteller-ID in der Werbung) -> (Name, Art)
+MODELS = {
+    0x0010: ("Osmo Action 2", "action23"),
+    0x0012: ("Osmo Action 3", "action23"),
+    0x0014: ("Osmo Action 4", "action4"),
+    0x0015: ("Osmo Action 5 Pro", "action5"),
+    0x0017: ("Osmo 360", "action5"),
+    0x0018: ("Osmo Action 6", "action6"),
+    0x0020: ("Osmo Pocket 3", "pocket3"),
+    0x0021: ("Osmo Pocket 4", "pocket4"),
+}
+NEW_PROTOCOL = ("action5", "action6", "pocket4")  # brauchen nach dem Start die Bestätigungsnachricht
+CONFIGURE_KINDS = {"action4": 0x08, "action6": 0x08, "action5": 0x1A}
+ACTION2_NAME = "Osmo Action 2"                     # Fernsteuerung klappt laut Moblin nicht
+
+RESOLUTIONS = {"480p": 0x47, "720p": 0x04, "1080p": 0x0A}
+FPS = {25: 2, 30: 3}
+STABILIZATION = {"off": 0, "rocksteady": 1, "horizonsteady": 2, "rocksteadyplus": 3, "horizonbalancing": 4}
+
+DJI_COMPANY_IDS = (0x08AA, 0xF7AA)  # Bytes AA 08 / AA F7 als Little-Endian-Zahl
+
+
+def model_from_manufacturer_data(manufacturer_data):
+    """bleak liefert {Hersteller-ID: Daten}; gibt (Modell-ID, Name, Art) zurück oder None, wenn es keine DJI-Kamera ist."""
+    for cid, payload in manufacturer_data.items():
+        if cid in DJI_COMPANY_IDS:
+            mid = int.from_bytes(payload[0:2], "little") if len(payload) >= 2 else -1
+            name, kind = MODELS.get(mid, ("DJI-Gerät (unbekanntes Modell)", "unknown"))
+            return mid, name, kind
+    return None
+
+
+def build_start_payload(kind, rtmp_url, resolution, bitrate_kbps, fps):
+    res = RESOLUTIONS[resolution]
+    fpsb = FPS.get(fps, 3)
+    if kind in ("action6", "pocket4"):
+        header, middle = ((b"\x01\x9c\x00", b"\xfe\x00") if kind == "action6"
+                          else (b"\x01\xb5\x00", b"\x02\x01"))
+        # Byte-genau wie Swifts JSONEncoder bei Moblin (Feldreihenfolge, "\/" für "/"): so läuft es bei Moblin an den Kameras
+        js = ('{"codec":"AVC","EnhancedRTMP":false,"supportStopLive":false,"watermark":0,'
+              '"rtmpAddress":%s,"orientation":"landscape"}' % json.dumps(rtmp_url).replace("/", "\\/")).encode()
+        return (header + bytes([res]) + (bitrate_kbps & 0xFFFF).to_bytes(2, "little") + middle +
+                bytes([fpsb]) + b"\x00\x00\x00" + len(js).to_bytes(2, "little") + js)
+    oa5 = 0x2A if kind in NEW_PROTOCOL else 0x2E
+    return (b"\x00" + bytes([oa5]) + b"\x00" + bytes([res]) +
+            (bitrate_kbps & 0xFFFF).to_bytes(2, "little") + b"\x02\x00" + bytes([fpsb]) +
+            b"\x00\x00\x00" + pack_url(rtmp_url))
+
+
+def build_configure_payload(kind, stabilization):
+    return b"\x01\x01" + bytes([CONFIGURE_KINDS[kind]]) + b"\x00\x01" + bytes([STABILIZATION.get(stabilization, 0)])
+
+
+# ------------------------------------------------------------------ System ---
+
+def run(cmd):
     try:
-        x = urllib.request.urlopen(STAT_URL, timeout=3).read().decode()
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        return ""
+
+
+def other_connections(skip):
+    """Die übrigen aktiven Verbindungen der Box (Ethernet, Modem, USB-Router …), dieselben wie in der Verbindungsliste der
+    Oberfläche. Die Kamera braucht trotzdem ein WLAN: Name und Passwort werden von Hand eingegeben, nur die IP der Box kommt
+    aus der gewählten Verbindung."""
+    found = []
+    for line in run(["ip", "-4", "-o", "addr", "show"]).splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        ifname, ip = parts[1], parts[3].split("/")[0]
+        if ifname in skip or ifname == "lo" or re.match(r"(tailscale|docker|veth|br-|p2p-|virbr)", ifname):
+            continue
+        if ip.startswith("169.254."):
+            continue
+        found.append({"ifname": ifname, "ssid": "", "password": "", "ip": ip, "type": "other"})
+    return found
+
+
+def nm_wifi_options():
+    """Verbindungen, über die eine Kamera bedient werden kann: WLAN-Hotspots und -Client-Netze (Name und Passwort aus
+    NetworkManager) und jede andere aktive Verbindung (Name und Passwort von Hand). Kann der Dienst das Passwort eines
+    WLANs nicht lesen, steht "secret_missing" im Eintrag: Dann wie "von Hand" behandeln."""
+    options = []
+    for line in run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev"]).splitlines():
+        parts = line.replace("\\:", "\x00").split(":")
+        if len(parts) < 4 or parts[1] != "wifi" or parts[2] != "connected":
+            continue
+        ifname, conn = parts[0], parts[3].replace("\x00", ":")
+        ssid = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", conn])
+        mode = run(["nmcli", "-g", "802-11-wireless.mode", "connection", "show", conn])
+        psk = run(["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn])
+        secured = bool(run(["nmcli", "-g", "802-11-wireless-security.key-mgmt", "connection", "show", conn]))
+        ip = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", ifname]).split("/")[0].split("\n")[0]
+        if not ssid or not ip:
+            continue
+        options.append({"ifname": ifname, "ssid": ssid, "password": psk, "ip": ip,
+                        "type": "hotspot" if mode == "ap" else "client",
+                        "secret_missing": bool(secured and not psk)})
+    options += other_connections({o["ifname"] for o in options})
+    return options
+
+
+def public_option(o):
+    """Eintrag der Verbindungsliste für den Browser: ohne Passwort."""
+    return {k: o[k] for k in ("ifname", "ssid", "ip", "type") if k in o} | {"secret_missing": bool(o.get("secret_missing"))}
+
+
+def rtmp_publishing(key, stat_url=None):
+    """True, wenn gerade jemand zu rtmp://<Box>/publish/<key> sendet (nginx-rtmp-Statistik). None, wenn sie nicht lesbar ist."""
+    try:
+        with urllib.request.urlopen(stat_url or STAT_URL, timeout=2) as r:
+            body = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    m = re.search(r"<stream>\s*<name>%s</name>[\s\S]*?</stream>" % re.escape(key), body)
+    return bool(m and "<publishing/>" in m.group(0))
+
+
+def preferred_adapter():
+    """hciN des Adapters für Suche und Verbindung: ein Stick zuerst, das eingebaute Modul zuletzt. None = BlueZ-Standard."""
+    try:
+        names = [n for n in os.listdir(dji.SYSFS_BT) if re.fullmatch(r"hci\d+", n)]
     except OSError:
         return None
-    return {re.search(r"<name>(.*?)</name>", m.group(0)).group(1)
-            for m in re.finditer(r"<stream>.*?</stream>", x, re.S) if "<publishing/>" in m.group(0)}
+    if not names:
+        return None
+    names.sort(key=lambda n: (dji.usb_id_for_hci(n) == ONBOARD_USB_ID, int(n[3:])))
+    return names[0]
+
+
+async def bluez_cleanup(addr):
+    """Einen hängenden BlueZ-Eintrag verwerfen. Eine Kamera, die ohne ordentliches Trennen verschwand, kann sonst in BlueZ
+    "verbunden" bleiben und sich nie wieder melden."""
+    for args in (["disconnect", addr], ["remove", addr]):
+        try:
+            p = await asyncio.create_subprocess_exec("bluetoothctl", *args,
+                                                     stdout=asyncio.subprocess.DEVNULL,
+                                                     stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(p.wait(), 8)
+        except Exception:
+            pass
+
+
+def camera_key(addr, taken=()):
+    """RTMP-Schlüssel einer DJI-Kamera: dji- plus die letzten sechs Stellen der Adresse (eindeutig, ohne Kollision mit anderen
+    Kameras der Box, deren Schlüssel nicht mit dji- beginnen)."""
+    hexa = re.sub(r"[^0-9a-f]", "", addr.lower())
+    for n in (6, 8, 10, 12):
+        key = "dji-" + hexa[-n:]
+        if key not in taken:
+            return key
+    return "dji-" + hexa
+
+
+# ----------------------------------------------------------- Kamerasitzung ---
+
+class CameraError(Exception):
+    pass
+
+
+class Camera:
+    """Zustand und BLE-Sitzung einer eingerichteten Kamera."""
+
+    RETRY_SECONDS = 8
+    CONNECT_SETTLE = 1.0     # so lange bleibt das Verbinden nach dem Aufbau noch gesperrt (dem Funkchip einen Moment geben)
+
+    def __init__(self, daemon, addr, cfg):
+        self.daemon = daemon
+        self.addr = addr
+        self.cfg = cfg
+        self.state = "idle"
+        self.detail = ""
+        self.battery = None
+        self.task = None
+        self.stop_requested = False
+        self.manual_off = False      # "Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden"
+        self.last_seen = 0
+        self.last_rx = 0
+        self.fail_count = 0
+        self.retry_at = 0
+        self.wake = asyncio.Event()
+        self.publishing = False      # die Kamera liefert ihren Stream (der Dienst prüft das), auch ohne Bluetooth
+        self.force_cleanup = False   # "Verbinden" von Hand: erst einen hängenden BlueZ-Eintrag verwerfen
+        self.typed_network = True
+
+    def locked(self):
+        """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet."""
+        return self.state not in ("idle", "error") or self.publishing
+
+    def set_state(self, state, detail=""):
+        if state != self.state or detail != self.detail:
+            log.info("%s: %s %s", self.addr, state, detail)
+            self.state, self.detail = state, detail
+
+    def public(self):
+        c = dict(self.cfg)
+        c.pop("password", None)
+        c["saved"] = [n["ssid"] for n in self.cfg.get("saved", [])]   # nur die Namen, nie die Passwörter
+        retry_in = max(0, int(self.retry_at - time.time())) if self.retry_at else 0
+        c.update({"addr": self.addr, "state": self.state, "detail": self.detail,
+                  "battery": self.battery, "in_range": time.time() - self.last_seen < 30,
+                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked()})
+        return c
+
+    def resolve_target(self):
+        """SSID, Passwort und RTMP-Adresse aus der gewählten Verbindung ermitteln."""
+        cfg = self.cfg
+        self.typed_network = True    # Name und Passwort von Hand eingegeben (lohnt zu merken), nicht aus NetworkManager
+        ifname = cfg.get("wifi_ifname")
+        if ifname and ifname != "manual":
+            for o in self.daemon.wifi_options():
+                if o["ifname"] == ifname:
+                    if o["type"] == "other" or o.get("secret_missing"):
+                        if o["type"] != "other" and not cfg.get("password"):
+                            raise CameraError("Das Passwort des WLANs %s lässt sich nicht aus NetworkManager lesen. "
+                                              "Bitte WLAN-Name und Passwort der Kamera von Hand eintragen." % o["ssid"])
+                        ssid, pw, ip = cfg.get("ssid") or o["ssid"], cfg.get("password", ""), o["ip"]
+                    else:
+                        self.typed_network = False
+                        ssid, pw, ip = o["ssid"], o["password"], o["ip"]
+                    break
+            else:
+                raise CameraError("Die Verbindung %s ist nicht aktiv. Router prüfen: eingeschaltet, per USB verbunden, "
+                                  "im USB-Modus?" % ifname)
+        else:
+            ssid, pw, ip = cfg.get("ssid", ""), cfg.get("password", ""), cfg.get("ip", "")
+        if not ssid or not ip:
+            raise CameraError("Für die Kamera ist keine Verbindung gewählt (WLAN-Name oder Adresse der Box fehlt)")
+        key = cfg.get("rtmp_key") or "cam1"
+        return ssid, pw, "rtmp://%s:%d/%s/%s" % (ip, self.daemon.rtmp_port, self.daemon.rtmp_app, key)
+
+    async def find_device(self):
+        """Die Werbung der Kamera suchen. Nur eine Suche gleichzeitig (BlueZ erlaubt eine)."""
+        async with self.daemon.ble_lock:
+            if self.fail_count >= 2 or self.force_cleanup:
+                self.force_cleanup = False
+                await bluez_cleanup(self.addr)
+            kw = self.daemon.scan_kwargs()
+            device = None
+            try:
+                device = await BleakScanner.find_device_by_address(self.addr, timeout=15, **kw)
+            except Exception as e:
+                log.info("%s: Suche fehlgeschlagen: %s", self.addr, e)
+            if device is None:
+                try:
+                    found = await BleakScanner.discover(timeout=6, return_adv=True, **kw)
+                    if self.addr in found:
+                        device = found[self.addr][0]
+                except Exception as e:
+                    log.info("%s: zweite Suche fehlgeschlagen: %s", self.addr, e)
+            if device is not None:
+                self.last_seen = time.time()
+            return device
+
+    async def session(self):
+        cfg = self.cfg
+        model_kind = cfg.get("kind", "unknown")
+        if BleakClient is None:
+            raise CameraError("Die Bluetooth-Bibliothek (bleak) ist nicht installiert. install.sh erneut ausführen.")
+        if cfg.get("model") == ACTION2_NAME:
+            raise CameraError("Osmo Action 2: Die Fernsteuerung funktioniert laut Moblin nicht.")
+        loop = asyncio.get_event_loop()
+        ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
+        key = cfg.get("rtmp_key") or "cam1"
+        if self.daemon.adapter_missing():
+            prob = dji.adapter_problems([], dji.usb_bluetooth_devices())
+            raise CameraError(prob[0]["hint"] if prob else "Kein Bluetooth-Adapter gefunden")
+
+        # Das Verbinden geschieht nacheinander: Ein Funkchip bricht gleichzeitige Verbindungsversuche gegenseitig ab
+        # (le-connection-abort-by-local, gemessen mit mehreren Kameras an einem Stick). Nach dem Verbinden laufen alle parallel.
+        if self.daemon.conn_lock.locked():
+            self.set_state("connecting", "Wartet, bis eine andere Kamera fertig verbunden ist")
+        await self.daemon.conn_lock.acquire()
+        held = [True]
+        loop2 = asyncio.get_event_loop()
+
+        def release():
+            if held[0]:
+                held[0] = False
+                loop2.call_later(self.CONNECT_SETTLE, self.daemon.conn_lock.release)    # dem Funkchip einen Moment geben, bevor die nächste dran ist
+
+        try:
+            await self._connect_and_stream(loop, ssid, password, rtmp_url, key, release)
+        finally:
+            release()
+
+    async def _connect_and_stream(self, loop, ssid, password, rtmp_url, key, release):
+        cfg = self.cfg
+        model_kind = cfg.get("kind", "unknown")
+        self.set_state("searching", "Kamera wird gesucht")
+        device = await self.find_device()
+        if device is None:
+            raise CameraError("Kamera nicht gefunden. Ist sie an, Bluetooth aktiv und nicht mit dem Handy verbunden?")
+
+        queue = asyncio.Queue()
+        disconnected = asyncio.Event()
+
+        def on_notify(_char, data):
+            try:
+                msg = Message.decode(data)
+            except ValueError as e:
+                log.debug("Nachricht verworfen %s: %s", bytes(data).hex(), e)
+                return
+            self.last_rx = time.time()
+            if msg.type == TY_STATUS and len(msg.payload) >= 21:
+                self.battery = msg.payload[20]
+                return
+            queue.put_nowait(msg)
+
+        async def wait_for(mid, timeout=15):
+            end = time.time() + timeout
+            while True:
+                left = end - time.time()
+                if left <= 0:
+                    raise CameraError("Keine Antwort der Kamera (0x%04x)" % mid)
+                try:
+                    msg = await asyncio.wait_for(queue.get(), left)
+                except asyncio.TimeoutError:
+                    raise CameraError("Keine Antwort der Kamera (0x%04x)" % mid)
+                if msg.id == mid:
+                    return msg
+
+        self.set_state("connecting", "Verbinde per Bluetooth")
+        self.last_rx = time.time()
+        async with BleakClient(device, timeout=20, disconnected_callback=lambda c: disconnected.set()) as client:
+            write_char = None
+            for service in client.services:
+                for ch in service.characteristics:
+                    if ch.uuid.startswith("0000fff5"):
+                        write_char = ch
+                    if "notify" in ch.properties or "indicate" in ch.properties:
+                        try:
+                            await client.start_notify(ch, on_notify)
+                        except Exception as e:  # manche Kennungen lehnen ab, das ist in Ordnung
+                            log.debug("Benachrichtigung auf %s fehlgeschlagen: %s", ch.uuid, e)
+            if write_char is None:
+                raise CameraError("Kein DJI-Gerät (Schreib-Kanal FFF5 fehlt)")
+            release()          # die Verbindung steht: die nächste Kamera darf jetzt verbinden
+
+            async def send(msg):
+                await client.write_gatt_char(write_char, msg.encode(), response=False)
+
+            # 1. Koppeln / Kopplung prüfen
+            self.set_state("pairing", "Falls die Kamera fragt, bitte dort bestätigen")
+            await send(Message(T_PAIR, ID_PAIR, TY_PAIR, PAIR_PAYLOAD + pack_string(PAIR_PIN)))
+            resp = await wait_for(ID_PAIR)
+            if resp.payload != bytes([0, 1]):
+                # noch nicht gekoppelt: die Kamera fragt den Nutzer und antwortet nach der Bestätigung mit irgendeiner Nachricht
+                try:
+                    await asyncio.wait_for(queue.get(), 60)
+                except asyncio.TimeoutError:
+                    raise CameraError("Die Kopplung wurde an der Kamera nicht bestätigt")
+
+            # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
+            self.set_state("preparing", "Stream wird vorbereitet")
+            await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
+            await wait_for(ID_STOP)
+            await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
+            await wait_for(ID_PREPARE)
+
+            self.set_state("wifi", ssid)
+            await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
+            resp = await wait_for(ID_WIFI, 30)
+            if resp.payload != bytes([0, 0]):
+                raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
+
+            # 3. Bildstabilisierung bei den Modellen, die sie brauchen
+            if model_kind in CONFIGURE_KINDS:
+                self.set_state("configuring", "Bildstabilisierung wird eingestellt")
+                await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
+                                   build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
+                await wait_for(ID_CONFIGURE)
+
+            # 4. den RTMP-Stream starten
+            self.set_state("starting", "Stream wird gestartet")
+            payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
+                                          int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
+            await send(Message(T_START, ID_START, TY_START, payload))
+            if model_kind in NEW_PROTOCOL:
+                await send(Message(T_STOP, ID_STOP, TY_STOP, CONFIRM_PAYLOAD))
+            await wait_for(ID_START, 30)
+            self.set_state("streaming", rtmp_url)
+            self.fail_count = 0
+            # das Netz hat funktioniert: für diese Kamera merken
+            if self.typed_network and ssid:
+                saved = [n for n in cfg.get("saved", []) if n["ssid"] != ssid]
+                saved.append({"ssid": ssid, "password": password})
+                cfg["saved"] = saved[-20:]
+                self.daemon.save()
+
+            # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen und die Kamera
+            #    muss über Bluetooth weiter reden. Sonst endet die Sitzung mit einem Fehler und beginnt von vorn (automatisch
+            #    verbinden): Die Kamera kann das WLAN verlassen haben, ausgeschaltet worden sein oder die Bluetooth-
+            #    Verbindung ohne Meldung verloren haben.
+            last_ok = time.time()
+            last_check = 0
+            while not disconnected.is_set() and not self.stop_requested:
+                try:
+                    await asyncio.wait_for(disconnected.wait(), 1)
+                except asyncio.TimeoutError:
+                    pass
+                while not queue.empty():
+                    queue.get_nowait()
+
+                now = time.time()
+                if now - last_check >= 5:
+                    last_check = now
+                    publishing = await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)
+                    if publishing is None or publishing:
+                        last_ok = now
+                    elif now - last_ok > 30:
+                        raise CameraError("Der Stream ist ausgefallen (Kamera außer Reichweite des WLANs?)")
+                if now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
+                    raise CameraError("Die Bluetooth-Verbindung ging verloren")
+
+            if disconnected.is_set() and not self.stop_requested:
+                raise CameraError("Die Bluetooth-Verbindung ging verloren")
+
+            if self.stop_requested and client.is_connected:
+                self.set_state("stopping", "Stream wird beendet")
+                try:
+                    await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
+                    await wait_for(ID_STOP, 10)
+                except Exception:
+                    pass
+
+    async def run_loop(self):
+        """Verbinden, streamen und von vorn beginnen, solange "automatisch verbinden" an ist."""
+        while True:
+            self.wake.clear()
+            try:
+                await self.session()
+                self.fail_count = 0
+                self.set_state("idle", "Getrennt")
+            except asyncio.CancelledError:
+                self.set_state("idle")
+                raise
+            except CameraError as e:
+                self.fail_count += 1
+                self.set_state("error", str(e))
+            except Exception as e:
+                self.fail_count += 1
+                log.exception("Sitzung fehlgeschlagen")
+                self.set_state("error", "%s: %s" % (type(e).__name__, e))
+            self.battery = None
+            if self.stop_requested or not self.cfg.get("autoconnect"):
+                self.retry_at = 0
+                return
+            # vor dem nächsten Versuch warten; "Verbinden" / "Neu verbinden" wecken sofort auf
+            self.retry_at = time.time() + self.RETRY_SECONDS
+            try:
+                await asyncio.wait_for(self.wake.wait(), self.RETRY_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            self.retry_at = 0
+            if self.stop_requested:
+                return
+
+    def running(self):
+        return self.task is not None and not self.task.done()
+
+    def start(self):
+        """Die Verbindungsschleife starten oder eine wartende sofort noch einmal versuchen lassen."""
+        if self.running():
+            self.wake.set()
+            return
+        self.fail_count = 0
+        self.stop_requested = False
+        self.manual_off = False
+        self.force_cleanup = True
+        self.task = asyncio.ensure_future(self.run_loop())
+
+    async def stop_session(self):
+        self.stop_requested = True
+        self.wake.set()
+        if self.running():
+            try:
+                await asyncio.wait_for(asyncio.shield(self.task), 15)
+            except Exception:
+                self.task.cancel()
+        self.retry_at = 0
+
+    async def stop(self):
+        # "Trennen" beendet die Verbindung sofort. "Automatisch verbinden" ist ein eigener Schalter und bleibt, wie er ist;
+        # die Kamera wird aber nicht von allein neu verbunden, bis "Verbinden" gedrückt wird (oder der Dienst neu startet).
+        self.manual_off = True
+        await self.stop_session()
+        self.set_state("idle")
+
+    async def restart(self):
+        """Die laufende Sitzung (falls es eine gibt) verwerfen und sofort neu verbinden."""
+        await self.stop_session()
+        self.set_state("idle")
+        self.start()
+
+
+# ------------------------------------------------------------------ Dienst ---
+
+SETTINGS_ALLOWED = {"name": str, "wifi_ifname": str, "ssid": str, "password": str, "ip": str,
+                    "resolution": str, "fps": int, "bitrate": int, "stabilization": str, "autoconnect": bool}
+NETWORK_FIELDS = ("wifi_ifname", "ssid", "password", "ip")
+LEGACY_MODEL_IDS = {"osmoAction2": 0x0010, "osmoAction3": 0x0012, "osmoAction4": 0x0014, "osmoAction5Pro": 0x0015,
+                    "osmo360": 0x0017, "osmoAction6": 0x0018, "osmoPocket3": 0x0020, "osmoPocket4": 0x0021}
+LEGACY_STAB = {"rockSteady": "rocksteady", "rockSteadyPlus": "rocksteadyplus",
+               "horizonBalancing": "horizonbalancing", "horizonSteady": "horizonsteady"}
+MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+DEFAULT_SETTINGS = {"resolution": "1080p", "fps": 30, "bitrate": 6000, "stabilization": "off"}
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def iface_ip(name):
@@ -57,24 +684,75 @@ def iface_ip(name):
         return None
 
 
+def migrate_legacy(state_dir, wifi_options=None):
+    """Einmalige Übernahme der Kameras der früheren Version (dji-known/-settings/-wifi/-active.json und camera-net.json) in
+    dji-cameras.json: Einstellungen, Name, das gespeicherte WLAN und was laufen sollte (automatisch verbinden) bleiben erhalten.
+    Die alten Dateien bleiben unangetastet liegen. Gibt das Wörterbuch {Adresse: Kamera} zurück (leer, wenn nichts da ist)."""
+    known = _read_json(os.path.join(state_dir, "dji-known.json"))
+    settings = _read_json(os.path.join(state_dir, "dji-settings.json"))
+    wifi = _read_json(os.path.join(state_dir, "dji-wifi.json"))
+    active = _read_json(os.path.join(state_dir, "dji-active.json"))
+    net = _read_json(os.path.join(state_dir, "camera-net.json")).get("iface")
+    names = {}                                  # selbst vergebene Namen aus der Kameraliste (cameras.json ist eine Liste)
+    try:
+        with open(os.path.join(state_dir, "cameras.json")) as f:
+            cams = json.load(f)
+    except (OSError, ValueError):
+        cams = []
+    for c in (cams if isinstance(cams, list) else []):
+        if isinstance(c, dict) and c.get("key") and c.get("name"):
+            names[c["key"]] = str(c["name"])
+    out = {}
+    for addr in sorted(set(k.upper() for k in known) | set(k.upper() for k in active)):
+        if not MAC_RE.match(addr):
+            continue
+        info = known.get(addr) or next((v for k, v in known.items() if k.upper() == addr), {}) or {}
+        act = active.get(addr) or next((v for k, v in active.items() if k.upper() == addr), {}) or {}
+        legacy = info.get("model") or act.get("model") or "unknown"
+        mid = LEGACY_MODEL_IDS.get(legacy)
+        mname, kind = MODELS.get(mid, ("DJI-Gerät (unbekanntes Modell)", "unknown"))
+        st = next((v for k, v in settings.items() if k.upper() == addr), {}) or {}
+        key = camera_key(addr, {c["rtmp_key"] for c in out.values()})
+        cfg = {"name": (names.get(camera_key(addr)) or info.get("model_name") or mname)[:40], "model": mname, "kind": kind,
+               "wifi_ifname": "manual", "ssid": "", "password": "", "ip": "",
+               "resolution": st.get("resolution", "1080p") if st.get("resolution") in RESOLUTIONS else "1080p",
+               "fps": st.get("fps", 30) if st.get("fps") in FPS else 30,
+               "bitrate": min(16000, max(500, int(st.get("bitrate_kbps", 6000) or 6000))),
+               "stabilization": LEGACY_STAB.get(st.get("stabilization"), st.get("stabilization", "off")),
+               "rtmp_key": key, "autoconnect": addr in {a.upper() for a in active}}
+        if cfg["stabilization"] not in STABILIZATION:
+            cfg["stabilization"] = "off"
+        if wifi.get("ssid"):
+            cfg["ssid"], cfg["password"] = str(wifi["ssid"]), str(wifi.get("password", ""))
+            cfg["saved"] = [{"ssid": cfg["ssid"], "password": cfg["password"]}]
+            if isinstance(net, str) and net:
+                # War ein Kameranetz gewählt, wird dessen Verbindung weiter benutzt (WLAN-Name und Passwort bleiben von Hand);
+                # ein WLAN, das NetworkManager führt, behält die feste Adresse, damit der gespeicherte Name gilt.
+                opt = next((o for o in (wifi_options if wifi_options is not None else nm_wifi_options()) if o["ifname"] == net), None)
+                if opt is None or opt["type"] == "other":
+                    cfg["wifi_ifname"] = net
+                else:
+                    cfg["ip"] = opt["ip"]
+        out[addr] = cfg
+    return out
+
+
 class Daemon:
-    def __init__(self, state_dir, dji_obj=None):
-        self.state = state_dir
-        self.active_path = os.path.join(state_dir, "dji-active.json")
+    def __init__(self, state_dir, rtmp_port=RTMP_PORT, rtmp_app=RTMP_APP, stat_url=STAT_URL):
+        self.state_dir = state_dir
+        self.config_file = os.path.join(state_dir, "dji-cameras.json")
         self.token_path = os.path.join(state_dir, "dji-token")
-        self.d = dji_obj or dji.Dji()
-        self.lock = threading.Lock()
-        self.desired = {}      # Adresse -> Startparameter
-        self.tries = {}        # Adresse -> (Versuche, nächster Zeitpunkt)
-        self.quiet = {}        # Adresse -> Zeitpunkt, seit dem der Stream fehlt (None = kommt an)
-        self.up_since = {}     # Adresse -> Zeitpunkt, seit dem die Sitzung "streaming" meldet
-        self.watch_rtmp = True
-        self.ipfn = lambda: self._net_ip()    # in Tests ersetzbar
-        self.ip_pending = None                # (neue Adresse, Anzahl Prüfungen)
-        self.net_down_logged = False
-        self.hold_until = 0                  # bis dahin keine neuen Verbindungen (Router fährt noch hoch)
+        self.rtmp_port, self.rtmp_app, self.stat_url = rtmp_port, rtmp_app, stat_url
+        self.cameras = {}
+        self.scan_results = []
+        self.scanning = False
+        self.scan_error = ""
+        self.ble_lock = asyncio.Lock()
+        self.conn_lock = asyncio.Lock()           # nur eine Kamera gleichzeitig verbinden
         self.token = self._load_token()
-        self._load_active()
+        self._opts = (0.0, [])
+        self._adapt = None
+        self.load()
 
     # -- Dateien
     def _load_token(self):
@@ -91,236 +769,254 @@ class Daemon:
             f.write(t + "\n")
         return t
 
-    def _load_active(self):
-        try:
-            with open(self.active_path) as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                self.desired = data
-        except (OSError, ValueError):
-            pass
+    def load(self):
+        if os.path.exists(self.config_file):
+            saved = _read_json(self.config_file)
+        else:
+            saved = {"cameras": migrate_legacy(self.state_dir)}
+            if saved["cameras"]:
+                log.info("%d Kamera(s) aus der früheren Version übernommen", len(saved["cameras"]))
+                self.cameras = {a: Camera(self, a, c) for a, c in saved["cameras"].items()}
+                self.save()
+                return
+        for addr, cfg in (saved.get("cameras") or {}).items():
+            if isinstance(cfg, dict):
+                self.cameras[addr] = Camera(self, addr, cfg)
 
-    def _save_active(self):
-        tmp = self.active_path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    def save(self):
+        data = {"cameras": {a: c.cfg for a, c in self.cameras.items()}}
+        tmp = self.config_file + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # enthält WLAN-Passwörter von Hand eingegebener Netze
         with os.fdopen(fd, "w") as f:
-            json.dump(self.desired, f)
-        os.replace(tmp, self.active_path)
+            json.dump(data, f, indent=2)
+        os.replace(tmp, self.config_file)
 
-    # -- Befehle
-    def net_info(self):
-        """Gewähltes Kameranetz und dessen aktuelle Adresse (ip=None: Schnittstelle fehlt, z. B. USB-Router weg)."""
+    # -- Hilfen
+    def wifi_options(self, max_age=3.0):
+        """Verbindungsliste (mit Passwörtern, nur für den Dienst selbst). Kurz zwischengespeichert."""
+        now = time.monotonic()
+        if now - self._opts[0] > max_age:
+            self._opts = (now, nm_wifi_options())
+        return self._opts[1]
+
+    def adapter_missing(self):
         try:
-            with open(os.path.join(self.state, "camera-net.json")) as f:
-                name = json.load(f).get("iface")
-        except (OSError, ValueError):
-            name = None
-        if not isinstance(name, str) or not name:
-            return {"iface": None, "ip": None}
-        return {"iface": name, "ip": iface_ip(name)}
+            return not [n for n in os.listdir(dji.SYSFS_BT) if re.fullmatch(r"hci\d+", n)]
+        except OSError:
+            return True
 
-    def status(self):
-        st = self.d.status()
-        with self.lock:
-            st["desired"] = sorted(self.desired)
-            # Eine verbundene Kamera sendet keine Bluetooth-Meldung mehr und fehlt deshalb in der letzten Suche.
-            # Sie bleibt in der Liste, solange sie laufen soll (sonst fehlen ihre Einstellungen und "Stoppen").
-            have = {x["address"].upper() for x in st["devices"]}
-            for addr, p in sorted(self.desired.items()):
-                if addr.upper() not in have:
-                    model = p.get("model", "unknown")
-                    st["devices"].append({"address": addr, "name": "", "model": model,
-                                          "model_name": dji.MODEL_NAMES.get(model, "DJI-Gerät"), "rssi": None})
-        st["net"] = self.net_info()
-        return st
+    def scan_kwargs(self):
+        a = preferred_adapter()
+        return {"adapter": a} if a else {}
 
-    def start(self, p):
-        addr = str(p["address"]).upper()
-        params = {k: p[k] for k in ("model", "ssid", "password", "url", "res", "fps", "kbps", "codec", "stab")}
-        self.d.start(addr, params["model"], params["ssid"], params["password"], params["url"],
-                     params["res"], params["fps"], params["kbps"], params["codec"], params["stab"])
-        with self.lock:                 # erst nach angenommenem Start merken
-            self.desired[addr] = params
-            self.tries.pop(addr, None)
-            self._save_active()
+    def adapter_info(self):
+        """Welche Bluetooth-Adapter laufen und welche Sticks stecken, ohne einen Adapter zu ergeben. Höchstens alle 10 s neu."""
+        now = time.monotonic()
+        if self._adapt and now - self._adapt[0] < 10:
+            return self._adapt[1]
+        info = dji.adapter_info()
+        self._adapt = (now, info)
+        return info
 
-    def stop(self, address=None):
-        with self.lock:
-            if address:
-                self.desired.pop(address.upper(), None)
+    def snapshot(self):
+        return {"cameras": [c.public() for c in self.cameras.values()], "scan": self.scan_results,
+                "scanning": self.scanning, "scan_error": self.scan_error, "bleak": BleakScanner is not None}
+
+    async def scan(self, seconds=8):
+        self.scan_error = ""
+        if BleakScanner is None:
+            self.scan_error = "Die Bluetooth-Bibliothek (bleak) ist nicht installiert. install.sh erneut ausführen."
+            return
+        if self.adapter_missing():
+            prob = dji.adapter_problems([], dji.usb_bluetooth_devices())
+            self.scan_error = prob[0]["hint"] if prob else "Kein Bluetooth-Adapter gefunden"
+            return
+        self.scanning = True
+        try:
+            async with self.ble_lock:
+                found = await BleakScanner.discover(timeout=seconds, return_adv=True, **self.scan_kwargs())
+        except Exception as e:
+            self.scanning = False
+            self.scan_error = "Suche fehlgeschlagen: %s" % e
+            return
+        self.scanning = False
+        results = []
+        for addr, (dev, adv) in found.items():
+            m = model_from_manufacturer_data(adv.manufacturer_data)
+            if m:
+                results.append({"addr": addr, "name": dev.name or m[1], "model": m[1], "kind": m[2],
+                                "rssi": adv.rssi, "paired": addr in self.cameras})
+                if addr in self.cameras:
+                    self.cameras[addr].last_seen = time.time()
+        results.sort(key=lambda r: -(r["rssi"] or -999))
+        self.scan_results = results
+        if not found:
+            self.scan_error = ("Es wurden gar keine Bluetooth-Geräte empfangen. Antennen am Funkmodul prüfen "
+                               "oder einen USB-Bluetooth-Stick verwenden.")
+
+    def sanitize(self, cam):
+        cfg = cam.cfg
+        if not str(cfg.get("name", "")).strip():
+            cfg["name"] = cfg.get("model") or cam.addr
+        cfg["name"] = cfg["name"].strip()[:40]
+        if cfg.get("resolution") not in RESOLUTIONS:
+            cfg["resolution"] = "1080p"
+        if cfg.get("fps") not in FPS:
+            cfg["fps"] = 30
+        try:
+            cfg["bitrate"] = min(16000, max(500, int(cfg.get("bitrate", 6000))))
+        except (TypeError, ValueError):
+            cfg["bitrate"] = 6000
+        if cfg.get("stabilization") not in STABILIZATION:
+            cfg["stabilization"] = "off"
+        if not re.match(r"^[A-Za-z0-9_-]{1,32}$", cfg.get("rtmp_key", "")):
+            cfg["rtmp_key"] = camera_key(cam.addr, {c.cfg.get("rtmp_key") for c in self.cameras.values() if c is not cam})
+
+    async def handle(self, req):
+        cmd = req.get("cmd")
+        if cmd == "state":
+            return self.snapshot()
+        if cmd == "wifi_options":
+            opts = await asyncio.get_event_loop().run_in_executor(None, self.wifi_options)
+            return {"wifi_options": [public_option(o) for o in opts]}
+        if cmd == "adapters":
+            return await asyncio.get_event_loop().run_in_executor(None, self.adapter_info)
+        if cmd == "scan":
+            asyncio.ensure_future(self.scan())
+            return {"ok": True}
+        if cmd == "add":
+            addr = str(req.get("addr", ""))
+            if not MAC_RE.match(addr):
+                return {"error": "Ungültige Geräteadresse"}
+            addr = addr.upper()
+            if addr in self.cameras:
+                return {"ok": True}
+            kind = req.get("kind", "unknown")
+            # jede Kamera sendet auf ihren eigenen RTMP-Schlüssel, damit mehrere gleichzeitig streamen können
+            key = camera_key(addr, {c.cfg.get("rtmp_key") for c in self.cameras.values()})
+            cfg = {"name": str(req.get("name") or req.get("model") or addr)[:40], "model": str(req.get("model", "")), "kind": kind,
+                   "wifi_ifname": str(req.get("wifi_ifname", "")), "rtmp_key": key, "autoconnect": False,
+                   **DEFAULT_SETTINGS}
+            prof = req.get("settings") if isinstance(req.get("settings"), dict) else {}
+            for k in ("resolution", "fps", "bitrate", "stabilization"):
+                if k in prof:
+                    cfg[k] = prof[k]
+            cam = Camera(self, addr, cfg)
+            self.cameras[addr] = cam
+            self.sanitize(cam)
+            self.save()
+            return {"ok": True, "key": cfg["rtmp_key"]}
+        addr = str(req.get("addr", "")).upper()
+        cam = self.cameras.get(addr)
+        if cam is None:
+            return {"error": "Unbekannte Kamera"}
+        if cmd == "update":
+            if cam.locked() and any(k in req for k in NETWORK_FIELDS):
+                return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
+            for k, t in SETTINGS_ALLOWED.items():
+                if k in req and isinstance(req[k], t) and not (t is int and isinstance(req[k], bool)):
+                    if k == "password" and req[k] == "":
+                        continue                         # leer lassen = gespeichertes Passwort behalten
+                    cam.cfg[k] = req[k]
+            self.sanitize(cam)
+            if req.get("autoconnect") is True:
+                cam.manual_off = False
+                if not cam.running():
+                    cam.start()
+            self.save()
+            return {"ok": True}
+        if cmd in ("use_saved", "delete_saved"):
+            ssid = str(req.get("ssid", ""))
+            if cmd == "delete_saved":
+                cam.cfg["saved"] = [n for n in cam.cfg.get("saved", []) if n["ssid"] != ssid]
             else:
-                self.desired.clear()
-            self._save_active()
-        self.d.stop(address)
+                if cam.locked():
+                    return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
+                for n in cam.cfg.get("saved", []):
+                    if n["ssid"] == ssid:
+                        cam.cfg["ssid"], cam.cfg["password"] = n["ssid"], n["password"]
+            self.save()
+            return {"ok": True}
+        if cmd == "remove":
+            await cam.stop()
+            del self.cameras[addr]
+            self.save()
+            return {"ok": True}
+        if cmd == "connect":
+            cam.start()                 # eine Verbindung jetzt; der Schalter "automatisch verbinden" bleibt unberührt
+            return {"ok": True}
+        if cmd == "disconnect":
+            await cam.stop()
+            self.save()
+            return {"ok": True}
+        if cmd == "reconnect":
+            asyncio.ensure_future(cam.restart())    # sofort neu verbinden, ohne den Schalter anzufassen
+            return {"ok": True}
+        return {"error": "Unbekannter Befehl"}
 
-    def _net_ip(self):
-        """IP der Schnittstelle, die in der Oberfläche als Kameranetz gewählt ist."""
+    async def client(self, reader, writer):
         try:
-            with open(os.path.join(self.state, "camera-net.json")) as f:
-                name = json.load(f).get("iface")
-        except (OSError, ValueError):
-            return None
-        return iface_ip(name) if isinstance(name, str) and name else None
-
-    def follow_ip(self):
-        """Ändert sich die Adresse der Box im Kameranetz (z. B. neue MAC am USB-Router), tragen wir sie in
-        die gespeicherten Ziele ein und verbinden die betroffenen Kameras neu. Erst nach zwei gleichen
-        Messungen, damit kurze Zwischenzustände nichts auslösen."""
-        import re
-        ip = self.ipfn()
-        if not ip:
-            self.ip_pending = None
-            return []
-        with self.lock:
-            stale = [a for a, p in self.desired.items()
-                     if re.match(r"^rtmp://\d+\.\d+\.\d+\.\d+[:/]", p.get("url", ""))
-                     and re.match(r"^rtmp://([^:/]+)", p["url"]).group(1) != ip]
-        if not stale:
-            self.ip_pending = None
-            return []
-        n = (self.ip_pending[1] + 1) if self.ip_pending and self.ip_pending[0] == ip else 1
-        self.ip_pending = (ip, n)
-        if n < 2:
-            return []
-        self.ip_pending = None
-        with self.lock:
-            for a in stale:
-                p = self.desired[a]
-                p["url"] = re.sub(r"^(rtmp://)[^:/]+", lambda m: m.group(1) + ip, p["url"])
-            self._save_active()
-        print(f"dji-daemon: Adresse der Box im Kameranetz ist jetzt {ip}, {len(stale)} Kamera(s) werden neu verbunden", flush=True)
-        for a in stale:
-            self.up_since.pop(a, None)
-            self.quiet.pop(a, None)
-            self.tries.pop(a, None)
-            self.d.stop(a)       # beendet die Sitzung; der Wächter startet sie mit der neuen Adresse neu
-        return stale
-
-    # -- Wächter: gewünschte Kameras am Laufen halten
-    def supervise_once(self, now=None):
-        now = now if now is not None else time.time()
-        if self.follow_ip():
-            time.sleep(3)
-        sessions = self.d.status()["sessions"]
-        with self.lock:
-            wanted = dict(self.desired)
-        net = self.net_info()
-        net_down = bool(net["iface"]) and not net["ip"]
-        if net_down and not self.net_down_logged:
-            print(f"dji-daemon: Kameranetz {net['iface']} ist nicht verfügbar: Stream-Wächter pausiert", flush=True)
-        if self.net_down_logged and not net_down:
-            # Kameranetz ist zurück: Wartezeiten zurücksetzen und kurz warten, bis das WLAN des Routers steht
-            self.tries.clear()
-            self.hold_until = now + NET_SETTLE
-            print(f"dji-daemon: Kameranetz {net['iface']} ist wieder da, Kameras werden in {NET_SETTLE} s neu verbunden", flush=True)
-        self.net_down_logged = net_down
-        started = False                      # höchstens eine neue Verbindung je Durchlauf (die Kameras nacheinander)
-        # Ohne Kameranetz kann kein Stream ankommen: dann nicht ständig neu verbinden
-        live = publishing_keys() if (self.watch_rtmp and not net_down) else None
-        for addr, p in wanted.items():
-            st = (sessions.get(addr) or {}).get("state", "idle")
-            if st == "streaming" and live is not None:
-                key = p["url"].rstrip("/").rsplit("/", 1)[-1]
-                self.up_since.setdefault(addr, now)
-                if key in live:
-                    self.quiet[addr] = None
-                elif now - self.up_since[addr] > GRACE:
-                    since = self.quiet.get(addr) or now
-                    self.quiet[addr] = since
-                    if now - since > SILENT_LIMIT:
-                        print(f"dji-daemon: {addr[-8:]} Stream kommt nicht an, Sitzung wird neu gestartet", flush=True)
-                        self.quiet[addr] = None
-                        self.up_since.pop(addr, None)
-                        self.d.stop(addr)           # beendet die Sitzung; der Wächter startet sie unten neu
-                        time.sleep(3)
-                        sessions = self.d.status()["sessions"]
-                        st = (sessions.get(addr) or {}).get("state", "idle")
-            elif st != "streaming":
-                self.up_since.pop(addr, None)
-                self.quiet.pop(addr, None)
-            if st not in ("idle", "failed"):
-                if st == "streaming":
-                    self.tries[addr] = (0, 0)     # läuft: Zähler zurücksetzen
-                continue                           # sonst in Arbeit: Zähler behalten, damit die Wartezeit wächst
-            n, nxt = self.tries.get(addr, (0, 0))
-            if now < nxt or now < self.hold_until or started:
-                continue
-            if net_down:
-                continue                           # ohne Kameranetz kann keine Kamera streamen: nicht verbrauchen
-            started = True
-            delay = BACKOFF[min(n, len(BACKOFF) - 1)]
-            self.tries[addr] = (n + 1, now + delay)
-            print(f"dji-daemon: {addr[-8:]} wird wieder verbunden (Versuch {n + 1})", flush=True)
-            try:
-                self.d.start(addr, p["model"], p["ssid"], p["password"], p["url"], p["res"],
-                             p["fps"], p["kbps"], p["codec"], p["stab"])
-            except ValueError as e:
-                print(f"dji-daemon: {addr[-8:]} {e}", flush=True)
-
-    def supervise_loop(self):
-        time.sleep(5)    # BlueZ nach dem Start kurz Zeit geben
-        while True:
-            try:
-                self.supervise_once()
-            except Exception as e:     # nie den Wächter beenden
-                print(f"dji-daemon: Wächterfehler {e!r}", flush=True)
-            time.sleep(5)
-
-
-def make_handler(dm):
-    class H(BaseHTTPRequestHandler):
-        def log_message(self, *a):
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                req = None
+                try:
+                    req = json.loads(line)
+                    if not isinstance(req, dict):
+                        raise ValueError("Ungültige Anfrage")
+                    if not hmac.compare_digest(str(req.get("token", "")), self.token):
+                        resp = {"error": "kein Zugriff"}
+                    else:
+                        resp = await self.handle(req)
+                except Exception as e:
+                    resp = {"error": str(e) or "Ungültige Anfrage"}
+                resp["reply_to"] = req.get("id") if isinstance(req, dict) else None
+                writer.write((json.dumps(resp) + "\n").encode())
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
             pass
+        finally:
+            writer.close()
 
-        def _auth(self):
-            import hmac
-            return hmac.compare_digest(self.headers.get("X-Token", ""), dm.token)
+    async def supervise(self):
+        """Netz: Eine Kamera mit "automatisch verbinden" hat immer eine laufende Verbindungsschleife."""
+        loop = asyncio.get_event_loop()
+        while True:
+            await asyncio.sleep(5)
+            for cam in list(self.cameras.values()):
+                key = cam.cfg.get("rtmp_key") or "cam1"
+                cam.publishing = bool(await loop.run_in_executor(None, rtmp_publishing, key, self.stat_url))
+                if cam.cfg.get("autoconnect") and not cam.running() and not cam.manual_off:
+                    log.warning("%s: Verbindungsschleife lief nicht, wird neu gestartet", cam.addr)
+                    cam.start()
 
-        def _send(self, code, obj):
-            body = json.dumps(obj).encode()
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    async def main(self, host=LISTEN_HOST, port=LISTEN_PORT):
+        server = await asyncio.start_server(self.client, host, port)
+        log.info("bereit auf %s:%d, Kameras: %d", host, port, len(self.cameras))
+        await asyncio.sleep(5)           # BlueZ nach dem Start kurz Zeit geben
+        for cam in self.cameras.values():
+            if cam.cfg.get("autoconnect"):
+                cam.start()
+        asyncio.ensure_future(self.supervise())
+        async with server:
+            await server.serve_forever()
 
-        def do_GET(self):
-            if not self._auth():
-                return self._send(401, {"error": "kein Zugriff"})
-            if self.path == "/status":
-                return self._send(200, dm.status())
-            self._send(404, {"error": "unbekannt"})
 
-        def do_POST(self):
-            if not self._auth():
-                return self._send(401, {"error": "kein Zugriff"})
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(min(n, 8192)) or b"{}")
-                if self.path == "/scan":
-                    dm.d.scan(30)
-                elif self.path == "/start":
-                    dm.start(body)
-                elif self.path == "/stop":
-                    dm.stop(body.get("address"))
-                else:
-                    return self._send(404, {"error": "unbekannt"})
-                self._send(200, {"ok": True})
-            except (ValueError, KeyError, TypeError) as e:
-                self._send(400, {"error": str(e) or "Ungültige Anfrage"})
-    return H
+async def amain(args):
+    await Daemon(args.state, args.rtmp_port, args.rtmp_app, args.stat_url).main(LISTEN_HOST, args.port)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--state", default="/var/lib/pipbox")
-    ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--port", type=int, default=LISTEN_PORT)
+    ap.add_argument("--rtmp-port", type=int, default=RTMP_PORT)
+    ap.add_argument("--rtmp-app", default=RTMP_APP)
+    ap.add_argument("--stat-url", default=STAT_URL)
     args = ap.parse_args()
-    dm = Daemon(args.state)
-    threading.Thread(target=dm.supervise_loop, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(dm))
-    print(f"dji-daemon: bereit auf 127.0.0.1:{args.port}, gewünschte Kameras: {len(dm.desired)}", flush=True)
-    srv.serve_forever()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    asyncio.run(amain(args))
 
 
 if __name__ == "__main__":

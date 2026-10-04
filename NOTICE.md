@@ -2,7 +2,7 @@
 
 ## Moblin (MIT-Lizenz)
 
-Die DJI-Kopplung (`dji.py`) folgt dem Ablauf, den das Projekt
+Die DJI-Kopplung (`dji_daemon.py`) folgt dem Ablauf, den das Projekt
 [Moblin](https://github.com/eerimoq/moblin) von Erik Moqvist für DJI-Kameras
 per Bluetooth umsetzt (Ordner `Moblin/Integrations/Dji/`). Nachrichtenformat,
 Konstanten und Ablauf wurden von dort nach Python übertragen. Gegenprobe mit
@@ -13,6 +13,38 @@ dokumentiert.
 ### Moblin – MIT License
 
 Copyright (c) 2023 Erik Moqvist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## DJI-Dienst (MIT-Lizenz)
+
+Sitzungsablauf, Verbindungsliste, Befehle und die Oberfläche der DJI-Kameras (`dji_daemon.py`, Karten in `web/index.html`)
+folgen dem DJI-Dienst von Bittersweet1987, hier an IRL4YOU BOX angepasst (Dienstbenutzer mit Schutzeinstellungen, Token der
+lokalen Schnittstelle, Rollenprofile, Schlüssel `dji-xxxxxx`, Verbindungssperre, Übernahme der Kameras der früheren Version,
+deutsche Texte). Der Urheber hat die Verwendung unter der MIT-Lizenz erlaubt (Lizenzdatei in seinem Projekt vom 4. Oktober 2026).
+
+Die Bibliothek [bleak](https://github.com/hbldh/bleak) (MIT) und ihre Abhängigkeiten werden bei der Installation per `pip`
+geladen und nicht mitgeliefert.
+
+### DJI-Dienst – MIT License
+
+Copyright (c) 2026 Bittersweet
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

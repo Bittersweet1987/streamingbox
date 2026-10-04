@@ -46,7 +46,6 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .cam code{display:block;margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
 .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);margin-left:6px}
 .cam a.ren{color:var(--text);text-decoration:none;border-bottom:1px dotted var(--muted)}
-.cam select.role{margin-left:8px;padding:2px 6px;font-size:12px}
 .dot.unk{background:var(--muted)}
 .add{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:8px;margin-top:12px}
 .add>label{display:flex;flex-direction:column;justify-content:flex-end;gap:4px;min-width:0}
@@ -128,6 +127,20 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .badge.attn{background:var(--warn);color:#0f172a}
 .badge.ok{background:var(--line);color:var(--muted)}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.dcam{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:0 12px}
+.dcam>summary{padding:10px 0;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;list-style:none}
+.dcam>summary::-webkit-details-marker{display:none}
+.dcam .dname{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcam .dright{white-space:nowrap;flex:0 0 auto;font-size:13px}
+.dcam .dbody{padding:0 0 12px}
+.dcam .dsub{font-size:13px;margin-bottom:4px}
+.dcam label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+.dcam label.f input,.dcam label.f select{width:100%}
+.dcam .chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
+.dcam .dsec{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
+.dcam .dsec>summary{cursor:pointer;font-size:13px;padding:4px 0}
+.dcam .dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:8px}
+.dscan{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px}
 button.sec{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400}
 button.warnbtn{background:var(--warn)}
 button:disabled{opacity:.45;cursor:not-allowed}
@@ -194,23 +207,17 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button type="submit">Kamera hinzufügen</button>
     </form>
     <div id="formerr" class="err"></div>
-    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für das Netzwerk, das Sie im Bereich „DJI-Kameras“ unter „Netzwerk der Kamera“ gewählt haben.</div>
+    <div class="ph">Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für das Netzwerk, das Sie im Bereich „DJI-Kameras“ unter „Netzwerk für die angezeigte RTMP-Adresse“ gewählt haben.</div>
       <div class="sech">DJI-Kameras (Bluetooth)</div><div id="djicard">
-    <div class="ph" style="margin-top:0">In welchem Netzwerk soll die Kamera die Box erreichen? Davon hängt die RTMP-Adresse ab.</div>
+    <div class="ph" style="margin-top:0">Netzwerk für die angezeigte RTMP-Adresse der übrigen Kameras. Jede DJI-Kamera wählt ihre Verbindung unten in ihrer eigenen Karte.</div>
     <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
     <div id="netinfo" class="ph"></div>
     <div id="djinote" class="muted"></div>
     <div id="djiadapt" class="ph"></div>
-    <div class="actions"><button id="d_scan" type="button">Nach DJI-Kameras suchen</button></div>
-    <div id="djilist"></div>
-    <div class="sens"><div class="ph" style="margin-top:12px">WLAN, dem die Kamera beitreten soll (muss das Netz der Box sein, z. B. Ihr Router):</div>
-    <form id="djiwifi" class="add">
-      <input id="d_ssid" placeholder="WLAN-Name" maxlength="32" autocomplete="off">
-      <input id="d_pw" type="password" placeholder="WLAN-Passwort" maxlength="63" autocomplete="new-password">
-      <button type="submit" class="sec">WLAN speichern</button>
-    </form>
-    <div id="djiwifistate" class="ph"></div></div>
-    <div id="djisession" class="ph"></div>
+    <div id="djicams"></div>
+    <div class="actions"><button id="d_scan" type="button">Nach DJI-Kameras suchen</button><span id="djiscanning" class="muted" hidden></span></div>
+    <div id="djiscan"></div>
+    <div class="ph">Kamera einschalten und wach halten, Kopplung an der Kamera bestätigen. Sie tritt dem gewählten WLAN bei und streamt zu dieser Box. Unterstützt: Osmo Action 3, 4, 5 Pro, 6, Osmo 360, Osmo Pocket 3 und 4. Welche Kamera Hauptbild oder Bild-in-Bild ist, wählen Sie in der Karte „Bildaufbau“.</div>
     <div id="djierr" class="err"></div>
   </div>
   </details>
@@ -432,7 +439,7 @@ function renderCams(list){
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
     box.innerHTML=list.length?list.map(c=>
-      `<div class="cam" data-cid="${c.id}"><div class="top"><span><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button><select class="role" data-id="${c.id}">${Object.entries(ROLE).map(([k,v])=>`<option value="${k}"${k===c.role?" selected":""}>${v}</option>`).join("")}</select>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
+      `<div class="cam" data-cid="${c.id}"><div class="top"><span><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
       <span class="muted"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div><code>${esc(c.url)}</code></div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
@@ -448,11 +455,6 @@ $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("del")) return; const id=e.target.dataset.id;
   if(!confirm("Kamera entfernen?")) return;
   await fetch("/api/cameras/"+id,{method:"DELETE"}); tick();
-});
-$("cams").addEventListener("change",async e=>{
-  if(!e.target.classList.contains("role")) return;
-  const r=await fetch("/api/cameras/"+e.target.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:e.target.value})});
-  if(!r.ok) alert((await r.json()).error); tick();
 });
 $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("ren")) return; e.preventDefault();
@@ -531,13 +533,86 @@ $("u_run").onclick=()=>{
 $("u_reboot").onclick=()=>{ if(confirm("Box jetzt neu starten?")) updPost("reboot",true); };
 $("upddet").addEventListener("toggle",tick);
 
-const DJI_STATE={connecting:"Verbinde…",pairing:"Koppeln…",preparing:"Vorbereiten…",wifi:"WLAN wird übergeben…",starting:"Stream startet…",streaming:"Streamt",stopping:"Beende…",failed:"Fehler",idle:""};
+// ---- DJI-Kameras: eine Karte je Kamera mit eigener Verbindung (Dienst: dji_daemon.py) ----
+const DJI_STATE={idle:["Getrennt",0],searching:["Sucht",1],connecting:["Verbindet",2],pairing:["Koppelt",3],preparing:["Bereitet vor",4],wifi:["WLAN wird übergeben",5],
+  configuring:["Stellt ein",6],starting:["Stream startet",6],streaming:["Streamt",0],stopping:["Beendet",0],error:["Fehler",0]};
+const DJI_BUSY=["searching","connecting","pairing","preparing","wifi","configuring","starting","stopping"];
+const DJI_STAB=[["off","Aus"],["rocksteady","RockSteady"],["rocksteadyplus","RockSteady+"],["horizonbalancing","HorizonBalancing"],["horizonsteady","HorizonSteady"]];
+let djiData={available:false,cameras:[],wifi_options:[],scan:[]}, djiStruct="", djiRecv=Date.now(), djiOpen={}, djiPend={};
+try{ djiOpen=JSON.parse(localStorage.getItem("pbDjiOpen")||"{}")||{}; }catch(e){ djiOpen={}; }
+const djiName=c=>((camsByKey[c.rtmp_key]||{}).name)||c.name;
+const djiIsOther=c=>(djiData.wifi_options||[]).some(o=>o.ifname===c.wifi_ifname&&(o.type==="other"||o.secret_missing));
+const djiNeedsNet=c=>c.wifi_ifname==="manual"||djiIsOther(c);
+function djiCardHtml(c){
+  const opts=djiData.wifi_options||[], known=opts.some(o=>o.ifname===c.wifi_ifname);
+  const netOpts=opts.map(o=>{ const lb=o.type==="other"?`${o.ifname} · ${o.ip}`:`${o.ssid} (${o.type==="hotspot"?"WLAN-Hotspot":"WLAN-Netz"} an ${o.ifname}, ${o.ip})`;
+    return `<option value="${esc(o.ifname)}"${c.wifi_ifname===o.ifname?" selected":""}>${esc(lb)}</option>`; }).join("");
+  const missing=(c.wifi_ifname&&c.wifi_ifname!=="manual"&&!known)?`<option value="${esc(c.wifi_ifname)}" selected>${esc(c.wifi_ifname)} (nicht verbunden)</option>`:"";
+  const res=["480p","720p","1080p"].map(r=>`<option${c.resolution===r?" selected":""}>${r}</option>`).join("");
+  const stab=DJI_STAB.map(x=>`<option value="${x[0]}"${c.stabilization===x[0]?" selected":""}>${x[1]}</option>`).join("");
+  const saved=(c.saved||[]).map(n=>`<option value="${esc(n)}"${n===c.ssid?" selected":""}>${esc(n)}</option>`).join("");
+  const st=djiOpen[c.addr]||{}, op=k=>st[k]?" open":"";
+  const other=djiIsOther(c);
+  return `<details class="dcam" data-addr="${esc(c.addr)}" data-sec="cam"${op("cam")}>
+  <summary><span class="dname"></span><span class="dright"><span class="dstate"></span> <span class="dbatt muted"></span></span></summary>
+  <div class="dbody">
+    <div class="dsub muted">${esc(c.model||"")} <span class="ddetail"></span></div>
+    <div class="actions"><button type="button" class="d-connect">Verbinden</button><button type="button" class="sec d-reconnect">Neu verbinden</button><button type="button" class="sec d-disconnect">Trennen</button></div>
+    <div class="actions" style="justify-content:space-between;align-items:center"><label class="chk" style="margin:0"><input type="checkbox" class="d-auto"${c.autoconnect?" checked":""}> Automatisch verbinden und streamen</label><button type="button" class="del d-remove">Entfernen</button></div>
+    <label class="f">Name<input class="d-name" maxlength="40" value="${esc(djiName(c))}"></label>
+    <details class="dsec" data-sec="conn"${op("conn")}><summary>Verbindung <span class="muted dsum-conn"></span></summary>
+      <label class="f">Verbindung der Kamera<select class="d-wifi"><option value="">– wählen –</option>${netOpts}${missing}<option value="manual"${c.wifi_ifname==="manual"?" selected":""}>Manuell (WLAN-Name, Passwort, Adresse)</option></select></label>
+      <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist oder sendet. Zuerst trennen.</div>
+      <div class="ph" style="margin-top:4px">Ein WLAN-Hotspot oder -Netz der Box: Die Kamera bekommt Name und Passwort selbst. Jede andere Verbindung (Ethernet, USB-Router, Modem): Hier den WLAN-Namen und das Passwort eintragen, dem die Kamera beitreten soll. Die Adresse der Box kommt aus der gewählten Verbindung.</div>
+      <div class="d-manual"${djiNeedsNet(c)?"":" hidden"}>
+        <label class="f d-savedrow"${(c.saved||[]).length?"":" hidden"}>Gespeicherte Netze<span style="display:flex;gap:6px"><select class="d-saved"><option value="">– gespeicherte Netze –</option>${saved}</select><button type="button" class="del d-saveddel">Löschen</button></span></label>
+        <label class="f">WLAN-Name der Kamera<input class="d-ssid" maxlength="32" autocomplete="off" value="${esc(c.ssid||"")}"></label>
+        <label class="f">WLAN-Passwort<input class="d-pw" type="password" maxlength="63" autocomplete="new-password" placeholder=""></label>
+        <label class="f d-iprow"${other?" hidden":""}>Adresse der Box in diesem Netz<input class="d-ip" maxlength="45" value="${esc(c.ip||"")}"></label>
+      </div>
+    </details>
+    <details class="dsec" data-sec="video"${op("video")}><summary>Bild und Stream <span class="muted dsum-video"></span></summary>
+      <div class="dgrid"><label class="f">Auflösung<select class="d-res">${res}</select></label>
+        <label class="f">Bildrate<select class="d-fps"><option value="25"${c.fps===25?" selected":""}>25 fps</option><option value="30"${c.fps!==25?" selected":""}>30 fps</option></select></label>
+        <label class="f">Bitrate (Mbit/s)<input class="d-br" type="number" min="0.5" max="16" step="0.5" value="${(c.bitrate||6000)/1000}"></label>
+        <label class="f">Stabilisierung<select class="d-stab">${stab}</select></label></div>
+      <div class="ph">Die Kamera sendet auf den Schlüssel <code>${esc(c.rtmp_key||"")}</code>. Bildrate: 25 oder 30 (60 gibt es beim DJI-Livestream nicht).</div>
+    </details>
+  </div></details>`;
+}
+function djiDynamic(){
+  const d=djiData, box=$("djicams");
+  for(const c of (d.cameras||[])){
+    const card=box.querySelector(`.dcam[data-addr="${c.addr}"]`); if(!card) continue;
+    let [txt,step]=DJI_STATE[c.state]||[c.state,0], col=c.state==="streaming"?"var(--ok)":c.state==="error"?"var(--crit)":c.state==="idle"?"var(--muted)":c.state==="pairing"?"var(--warn)":"var(--accent)";
+    if(step) txt+=` (${step}/6)`;
+    if((c.state==="idle"||c.state==="error")&&c.publishing){ txt="Stream läuft (ohne Bluetooth)"; col="var(--warn)"; }
+    const e=card.querySelector(".dstate"); e.textContent=txt; e.style.color=col;
+    if(!card.querySelector(".d-name").matches(":focus")){ const nm=djiName(c); card.querySelector(".dname").textContent=nm; }
+    card.querySelector(".dbatt").textContent=c.battery!=null?c.battery+" %":"";
+    let det=c.detail||(c.state==="idle"?(c.in_range?"In Reichweite":"Zuletzt nicht gesehen"):"");
+    const left=Math.max(0,(c.retry_in||0)-Math.floor((Date.now()-djiRecv)/1000));
+    if(c.state==="error"&&c.retry_in&&c.autoconnect) det+=(det?" – ":"")+"neuer Versuch in "+left+" s";
+    const dt=card.querySelector(".ddetail"); dt.textContent=det?"· "+det:""; dt.style.color=c.state==="error"?"var(--crit)":"";
+    const active=c.state!=="idle"||c.publishing;
+    card.querySelector(".d-connect").disabled=c.state==="streaming";
+    card.querySelector(".d-disconnect").disabled=!active;
+    card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel").forEach(f=>{ f.disabled=!!c.locked; });
+    card.querySelector(".d-lockhint").hidden=!c.locked;
+    const sv=card.querySelector(".d-saved"); if(sv&&sv!==document.activeElement) sv.value=(c.saved||[]).includes(c.ssid)?c.ssid:"";
+    const pw=card.querySelector(".d-pw"); if(pw&&pw!==document.activeElement) pw.placeholder=(c.saved||[]).includes(c.ssid)?"Passwort gespeichert – leer lassen, um es zu behalten":"Passwort";
+    const wo=(d.wifi_options||[]).find(o=>o.ifname===c.wifi_ifname);
+    card.querySelector(".dsum-conn").textContent=c.wifi_ifname==="manual"?"· "+(c.ssid||"–"):(c.wifi_ifname?"· "+(wo&&wo.ssid?wo.ssid:c.wifi_ifname):"");
+    card.querySelector(".dsum-video").textContent=`· ${c.resolution||""} ${c.fps||30} fps · ${(c.bitrate||6000)/1000} Mbit/s`;
+    const au=card.querySelector(".d-auto"); if(au!==document.activeElement) au.checked=!!c.autoconnect;
+  }
+}
 function djiRender(d){
-  if(!d.available){ $("djinote").textContent=d.reason||"Bluetooth nicht verfügbar"; $("d_scan").disabled=true; $("djilist").innerHTML=""; $("djilist").dataset.sig=""; return; }
-  $("d_scan").disabled=d.scanning; $("d_scan").textContent=d.scanning?"Suche läuft (30 s)…":"Nach DJI-Kameras suchen";
-  const netDown=d.net&&d.net.iface&&!d.net.ip;
-  $("djinote").textContent=netDown?`Das Kameranetz (${d.net.iface}) ist nicht verfügbar. Router prüfen: eingeschaltet, per USB verbunden, im USB-Modus? Solange es fehlt, können die Kameras nicht zur Box streamen.`:(d.scan_error||"");
-  $("djinote").style.color=(d.scan_error||netDown)?"var(--crit)":"";
+  djiData=d; djiRecv=Date.now();
+  const note=$("djinote"), box=$("djicams");
+  if(!d.available){ note.textContent=d.reason||"Bluetooth nicht verfügbar"; note.style.color="var(--crit)"; $("d_scan").disabled=true; box.innerHTML=""; djiStruct=""; $("djiscan").innerHTML=""; $("djiadapt").textContent=""; return; }
+  note.textContent=d.bleak===false?"Die Bluetooth-Bibliothek (bleak) ist nicht installiert. install.sh erneut ausführen (braucht Internet).":(d.scan_error||"");
+  note.style.color=note.textContent?"var(--crit)":"";
   { const pr=(d.adapter_problems||[]).map(x=>x.hint), ad=d.adapters||[];       // Bluetooth-Stick, der keinen Adapter ergibt, oder welcher Adapter läuft
     const el=$("djiadapt");
     const dr=d.driver||{}, drTxt=dr.message&&["working","waiting","failed","unsupported","ok"].includes(dr.state)?dr.message:"";   // Treiber für Realtek-Sticks (Helfer pipbox-btdriver)
@@ -546,69 +621,69 @@ function djiRender(d){
     else if(pr.length){ el.textContent=drTxt; }
     else { el.textContent=(ad.length?"Bluetooth-Adapter: "+ad.map(a=>(a.usb_id||"eingebaut")+(a.powered?"":" (aus)")).join(", ")+".":"Kein Bluetooth-Adapter gefunden.")+(drTxt?" "+drTxt:""); }
     el.style.color=bad?"var(--crit)":""; }
-  const S=d.sessions||{}, box=$("djilist");
-  const sess=x=>S[x.address.toUpperCase()]||{state:"idle",message:""};
-  const act=s=>!["idle","failed"].includes(s.state);
-  const sig=JSON.stringify([(d.devices||[]).map(x=>[x.address,x.model_name,x.name,!!x.offline]),!!d.scanning]);
-  if(box.dataset.sig!==sig){
-    box.dataset.sig=sig;
-    box.innerHTML=(d.devices&&d.devices.length)?d.devices.map(x=>
-      `<div class="cam" data-addr="${esc(x.address)}"><div class="top"><span><span class="dot off"></span><b class="dname">${esc(x.model_name)}</b><button type="button" class="sec dren" data-addr="${esc(x.address)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button> <span class="muted">${esc(x.model_name)} · ${esc(x.name)}<span class="sens"> · ${esc(x.address)}</span><span class="rssi"></span></span></span>
-      <span><button data-djistart="${esc(x.address)}">Verbinden &amp; streamen</button><button class="del" data-djistop="${esc(x.address)}" hidden>Stoppen</button></span></div>
-      <div class="add dset" data-addr="${esc(x.address)}"><select data-k="resolution"><option value="1080p">1080p</option><option value="720p">720p</option><option value="480p">480p</option></select><select data-k="fps"><option value="30">30 fps</option><option value="25">25 fps</option></select><label class="muted" style="flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;white-space:nowrap">Bitrate <input data-k="mbit" type="number" min="1" max="20" step="0.5" style="width:80px"> Mbit/s</label><select data-k="stabilization"><option value="off">Stab. aus</option><option value="rockSteady">RockSteady</option><option value="rockSteadyPlus">RockSteady+</option><option value="horizonBalancing">Horizont</option><option value="horizonSteady">HorizonSteady</option></select></div>
-      <div class="ph djst"></div></div>`).join(""):(d.scanning?"":'<div class="muted" style="margin-top:8px">Noch keine DJI-Kamera gefunden. Kamera einschalten, Bluetooth aktivieren, nahe an die Box legen und suchen.</div>');
+  $("d_scan").disabled=!!d.scanning; $("d_scan").textContent=d.scanning?"Suche läuft …":"Nach DJI-Kameras suchen";
+  // Die Karten nur neu aufbauen, wenn sich die Kameras oder Verbindungen ändern (sonst wird das Tippen unterbrochen)
+  const sig=JSON.stringify([(d.cameras||[]).map(c=>c.addr+"|"+(c.saved||[]).join(",")+"|"+c.wifi_ifname+"|"+(c.locked?1:0)),(d.wifi_options||[]).map(o=>[o.ifname,o.ssid,o.type,o.ip,o.secret_missing])]);
+  if(sig!==djiStruct&&!box.contains(document.activeElement)){
+    djiStruct=sig;
+    box.innerHTML=(d.cameras||[]).length?d.cameras.map(djiCardHtml).join(""):'<div class="muted" style="margin-top:8px">Noch keine DJI-Kamera eingerichtet. Kamera einschalten, Bluetooth aktivieren, nahe an die Box legen und suchen.</div>';
   }
-  for(const x of (d.devices||[])){
-    const row=box.querySelector(`.cam[data-addr="${x.address}"]`); if(!row) continue;
-    const s=sess(x), busy=act(s);
-    const cam=camsByKey[djiKey(x.address)];
-    row.querySelector(".dname").textContent=cam?cam.name:x.model_name;      // selbst vergebener Name, sonst Modell
-    row.querySelector(".dren").hidden=!cam;                                   // Umbenennen geht, sobald die Kamera angelegt ist
-    row.querySelector(".dot").className="dot "+(s.state==="streaming"?"":(busy?"unk":"off"));
-    row.querySelector(".rssi").textContent=x.rssi!=null?" · "+x.rssi+" dBm":"";
-    const st=row.querySelector("[data-djistart]"), sp=row.querySelector("[data-djistop]");
-    st.hidden=busy||!!x.offline; sp.hidden=!busy;
-    const cfg=(d.settings||{})[x.address.toUpperCase()]||d.defaults||{};
-    const ctl=row.querySelector(".dset");
-    if(!ctl.contains(document.activeElement) && !ctl.dataset.busy){
-      ctl.querySelector('[data-k="resolution"]').value=cfg.resolution||"1080p";
-      ctl.querySelector('[data-k="fps"]').value=String(cfg.fps||30);
-      ctl.querySelector('[data-k="mbit"]').value=((cfg.bitrate_kbps||6000)/1000);
-      ctl.querySelector('[data-k="stabilization"]').value=cfg.stabilization||"off";
-    }
-    const line=row.querySelector(".djst");
-    line.textContent=s.state&&s.state!=="idle"?((DJI_STATE[s.state]||s.state)+(s.message?": "+s.message:"")):(x.offline?"Ausgeschaltet oder außer Reichweite. Einschalten und \u201eNach DJI-Kameras suchen\u201c drücken. Einstellungen bleiben änderbar.":"");
-    line.style.color=s.state==="failed"?"var(--crit)":"";
-  }
-  $("djiwifistate").textContent=d.wifi&&d.wifi.saved?`Gespeichert: ${d.wifi.ssid} (Passwort wird nie angezeigt)`:"Noch keine WLAN-Daten gespeichert.";
-  if(d.wifi&&d.wifi.ssid&&!$("d_ssid").value&&document.activeElement!==$("d_ssid")) $("d_ssid").value=d.wifi.ssid;
-  $("djisession").textContent="";
+  djiDynamic();
+  $("djiscan").innerHTML=(d.scan||[]).map(r=>`<div class="dscan"><div>${esc(r.name)} <span class="muted">${esc(r.model)} · ${esc(r.addr)} · ${esc(r.rssi)} dBm</span></div>${r.paired?'<span class="muted">hinzugefügt</span>':`<button type="button" class="d-add" data-addr="${esc(r.addr)}" data-name="${esc(r.name)}" data-model="${esc(r.model)}" data-kind="${esc(r.kind)}">Hinzufügen</button>`}</div>`).join("");
 }
-const djiKey=a=>"dji-"+a.replace(/:/g,"").toLowerCase().slice(-6);
-$("djilist").addEventListener("click",async e=>{
-  const b=e.target.closest&&e.target.closest(".dren"); if(!b) return;
-  const cam=camsByKey[djiKey(b.dataset.addr)]; if(cam) await renameCam(cam.id,cam.name);
+let djiBusyLoad=false;
+async function djiLoad(){ if(djiBusyLoad) return; djiBusyLoad=true; try{ const r=await fetch("/api/dji"); if(r.ok) djiRender(await r.json()); }catch(e){} djiBusyLoad=false; }
+async function djiCmd(body){
+  try{ const r=await fetch("/api/dji/cmd",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({})); if(!r.ok){ $("djierr").textContent=j.error||"Fehler"; return false; } $("djierr").textContent=""; return true;
+  }catch(e){ $("djierr").textContent="Keine Verbindung zur Box"; return false; }
+}
+function djiUpdate(addr,ch){          // Änderungen kurz sammeln und gemeinsam senden
+  const p=djiPend[addr]||(djiPend[addr]={ch:{}}); Object.assign(p.ch,ch); clearTimeout(p.t);
+  p.t=setTimeout(async()=>{ const c=p.ch; delete djiPend[addr]; if(await djiCmd(Object.assign({cmd:"update",addr},c))) tick(); djiLoad(); },400);
+}
+setInterval(()=>{ if(!document.hidden) djiDynamic(); },1000);
+(function djiFastLoop(){ const busy=djiData.available&&((djiData.scanning)||(djiData.cameras||[]).some(c=>DJI_BUSY.includes(c.state)));   // während des Verbindens jede Sekunde nachsehen
+  Promise.resolve(busy&&!document.hidden?djiLoad():null).finally(()=>setTimeout(djiFastLoop,1000)); })();
+$("djicams").addEventListener("toggle",e=>{ const d=e.target, card=d.closest&&d.closest(".dcam"); if(!card||!d.dataset||!d.dataset.sec) return;
+  (djiOpen[card.dataset.addr]=djiOpen[card.dataset.addr]||{})[d.dataset.sec]=d.open;
+  try{ localStorage.setItem("pbDjiOpen",JSON.stringify(djiOpen)); }catch(x){} },true);
+const djiAddr=e=>{ const c=e.target.closest&&e.target.closest(".dcam"); return c?c.dataset.addr:null; };
+$("djicams").addEventListener("change",e=>{
+  const addr=djiAddr(e); if(!addr) return; const t=e.target, card=t.closest(".dcam"), cl=t.classList;
+  if(cl.contains("d-wifi")){
+    const other=(djiData.wifi_options||[]).some(o=>o.ifname===t.value&&(o.type==="other"||o.secret_missing));
+    card.querySelector(".d-manual").hidden=!(t.value==="manual"||other); card.querySelector(".d-iprow").hidden=other;
+    djiUpdate(addr,{wifi_ifname:t.value});
+  } else if(cl.contains("d-saved")){ if(t.value){ card.querySelector(".d-ssid").value=t.value; card.querySelector(".d-pw").value="";
+      djiCmd({cmd:"use_saved",addr,ssid:t.value}).then(()=>djiLoad()); } }
+  else if(cl.contains("d-res")) djiUpdate(addr,{resolution:t.value});
+  else if(cl.contains("d-fps")) djiUpdate(addr,{fps:parseInt(t.value)});
+  else if(cl.contains("d-stab")) djiUpdate(addr,{stabilization:t.value});
+  else if(cl.contains("d-auto")) djiCmd({cmd:"update",addr,autoconnect:t.checked}).then(()=>djiLoad());      // nur der Schalter: eine laufende Verbindung bleibt
 });
-$("djilist").addEventListener("change",async e=>{
-  const ctl=e.target.closest&&e.target.closest(".dset"); if(!ctl) return;
-  const v=k=>ctl.querySelector(`[data-k="${k}"]`).value;
-  const body={address:ctl.dataset.addr,resolution:v("resolution"),fps:+v("fps"),bitrate_kbps:Math.round(parseFloat(v("mbit"))*1000),stabilization:v("stabilization")};
-  ctl.dataset.busy="1";
-  const r=await fetch("/api/dji/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  delete ctl.dataset.busy;
-  if(!r.ok){ $("djierr").textContent=(await r.json()).error; } else { $("djierr").textContent=""; }
-  tick();
+$("djicams").addEventListener("input",e=>{
+  const addr=djiAddr(e); if(!addr) return; const t=e.target, cl=t.classList;
+  if(cl.contains("d-br")){ const v=parseFloat(t.value); if(v>=0.5&&v<=16) djiUpdate(addr,{bitrate:Math.round(v*1000)}); }
+  else if(cl.contains("d-name")){ if(t.value.trim()) djiUpdate(addr,{name:t.value.trim()}); }
+  else if(cl.contains("d-ssid")) djiUpdate(addr,{ssid:t.value});
+  else if(cl.contains("d-pw")) djiUpdate(addr,{password:t.value});
+  else if(cl.contains("d-ip")) djiUpdate(addr,{ip:t.value});
 });
-$("d_scan").onclick=async()=>{ $("djierr").textContent=""; const r=await fetch("/api/dji/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); if(!r.ok) $("djierr").textContent=(await r.json()).error; tick(); };
-$("djiwifi").addEventListener("submit",async e=>{ e.preventDefault(); $("djierr").textContent="";
-  const r=await fetch("/api/dji/wifi",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ssid:$("d_ssid").value,password:$("d_pw").value})});
-  if(!r.ok) $("djierr").textContent=(await r.json()).error; else $("d_pw").value=""; tick(); });
-$("djilist").addEventListener("click",async e=>{
-  const st=e.target.dataset&&e.target.dataset.djistart;
-  if(e.target.dataset&&e.target.dataset.djistop){ await fetch("/api/dji/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:e.target.dataset.djistop})}); tick(); return; }
-  if(!st) return; $("djierr").textContent="";
-  const r=await fetch("/api/dji/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:st})});
-  if(!r.ok) $("djierr").textContent=(await r.json()).error; tick(); });
+$("djicams").addEventListener("click",async e=>{
+  const addr=djiAddr(e); if(!addr) return; const cl=e.target.classList;
+  if(cl.contains("d-remove")){ if(confirm("Diese Kamera entfernen? Der Eintrag in der Kameraliste bleibt und lässt sich dort löschen.")&&await djiCmd({cmd:"remove",addr})) { djiStruct=""; tick(); } }
+  else if(cl.contains("d-saveddel")){ const sel=e.target.closest(".d-savedrow").querySelector(".d-saved");
+    if(sel.value&&confirm("Dieses gespeicherte Netz löschen?")) await djiCmd({cmd:"delete_saved",addr,ssid:sel.value}); }
+  else if(cl.contains("d-connect")) await djiCmd({cmd:"connect",addr});
+  else if(cl.contains("d-reconnect")) await djiCmd({cmd:"reconnect",addr});
+  else if(cl.contains("d-disconnect")) await djiCmd({cmd:"disconnect",addr});
+  else return;
+  djiLoad();
+});
+$("djiscan").addEventListener("click",async e=>{ const b=e.target.closest&&e.target.closest(".d-add"); if(!b) return;
+  if(await djiCmd({cmd:"add",addr:b.dataset.addr,name:b.dataset.name,model:b.dataset.model,kind:b.dataset.kind})){ djiStruct=""; tick(); } djiLoad(); });
+$("d_scan").onclick=async()=>{ await djiCmd({cmd:"scan"}); djiLoad(); };
 
 let netBusy=false;
 async function netRender(){
@@ -1143,7 +1218,7 @@ async function tick(){
     setRates(m.net);
     renderCams(m.cameras); renderCamLights(m.cameras);
     if(due("net","c_cams",15000)) netRender();
-    if(due("dji","c_cams",20000)){ try{ const dr=await fetch("/api/dji"); if(dr.ok) djiRender(await dr.json()); }catch(e){} }
+    if(due("dji","c_cams",20000)) await djiLoad();
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
     $("livehealth").innerHTML=m.alerts.length?m.alerts.map(a=>`<span class="${a.level}">${a.text}</span>`).join(" · "):'<span class="ok">● Alles im grünen Bereich</span>';
     $("alerts").innerHTML=m.alerts.length?m.alerts.map(a=>`<div class="alert ${a.level}">${a.text}</div>`).join(""):"";

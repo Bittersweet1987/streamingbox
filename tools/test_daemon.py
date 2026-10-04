@@ -1,126 +1,13 @@
-"""Tests für den Wächter des Kamera-Dienstes (dji_daemon.py) und die Verbindungssperre (dji.py). Ohne Bluetooth."""
-import json
+"""Tests für die Bluetooth-Sticks und -Adapter (dji.py): Erkennung über /sys, Hinweise, Zuordnung Stick und Adapter. Ohne Bluetooth."""
 import os
 import sys
 import tempfile
-import threading
-import time
-import types
 import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-sys.modules.setdefault("dbus", types.ModuleType("dbus"))
 import dji  # noqa: E402
-import dji_daemon as dd  # noqa: E402
-
-PARAMS = {"model": "osmoAction4", "ssid": "x", "password": "y", "url": "rtmp://10.0.0.1:1935/publish/dji-aaaaaa",
-          "res": "1080p", "fps": 30, "kbps": 10000, "codec": "AVC", "stab": "off"}
-
-
-class FakeDji:
-    def __init__(self):
-        self.sessions, self.started, self.stopped = {}, [], []
-
-    def status(self):
-        return {"sessions": {k: {"state": v} for k, v in self.sessions.items()}, "devices": []}
-
-    def start(self, addr, *a):
-        self.started.append(addr)
-        self.sessions[addr] = "connecting"
-
-    def stop(self, addr=None):
-        self.stopped.append(addr)
-
-
-class Supervisor(unittest.TestCase):
-    def make(self, cams=("AA:AA", "BB:BB"), iface_up=True):
-        self.tmp = tempfile.mkdtemp()
-        json.dump({"iface": "eth9"}, open(os.path.join(self.tmp, "camera-net.json"), "w"))
-        self.fake = FakeDji()
-        dm = dd.Daemon(self.tmp, self.fake)
-        dm.desired = {c: dict(PARAMS, url=f"rtmp://10.0.0.1:1935/publish/dji-{c[:2].lower()}") for c in cams}
-        dm.ipfn = lambda: "10.0.0.1"
-        self.up = [iface_up]
-        p1 = mock.patch.object(dd, "iface_ip", lambda name: "10.0.0.1" if self.up[0] else None)
-        p2 = mock.patch.object(dd, "publishing_keys", lambda: set())
-        p3 = mock.patch.object(dd.time, "sleep", lambda s: None)
-        for p in (p1, p2, p3):
-            p.start()
-            self.addCleanup(p.stop)
-        for c in cams:
-            self.fake.sessions[c] = "failed"
-        return dm
-
-    def test_one_new_connection_per_round(self):
-        dm = self.make()
-        dm.supervise_once(100)
-        self.assertEqual(self.fake.started, ["AA:AA"])            # nur eine Kamera
-        self.fake.sessions["AA:AA"] = "connecting"
-        dm.supervise_once(105)
-        self.assertEqual(self.fake.started, ["AA:AA", "BB:BB"])   # die nächste im folgenden Durchlauf
-
-    def test_no_attempts_while_network_is_down(self):
-        dm = self.make(iface_up=False)
-        for t in range(100, 400, 5):
-            dm.supervise_once(t)
-        self.assertEqual(self.fake.started, [])
-        self.assertEqual(dm.tries, {})                             # Wartezeiten wurden nicht verbraucht
-
-    def test_network_return_resets_backoff_and_waits(self):
-        dm = self.make(cams=("AA:AA",))
-        dm.tries["AA:AA"] = (5, 10 ** 9)                           # lange Wartezeit aufgelaufen
-        self.up[0] = False
-        dm.supervise_once(100)                                     # Router weg
-        self.up[0] = True
-        dm.supervise_once(110)                                     # Router wieder da: zurücksetzen, noch warten
-        self.assertEqual(self.fake.started, [])
-        dm.supervise_once(110 + dd.NET_SETTLE - 1)
-        self.assertEqual(self.fake.started, [])
-        dm.supervise_once(110 + dd.NET_SETTLE + 1)
-        self.assertEqual(self.fake.started, ["AA:AA"])
-
-    def test_normal_backoff_still_grows(self):
-        dm = self.make(cams=("AA:AA",))
-        dm.supervise_once(100)
-        self.fake.sessions["AA:AA"] = "failed"
-        dm.supervise_once(105)                                     # noch in der Wartezeit (10 s)
-        self.assertEqual(len(self.fake.started), 1)
-        dm.supervise_once(111)
-        self.assertEqual(len(self.fake.started), 2)
-        self.assertEqual(dm.tries["AA:AA"][0], 2)
-
-
-class ConnectionLock(unittest.TestCase):
-    def make(self):
-        d = dji.Dji.__new__(dji.Dji)
-        d._conn_lock = threading.Lock()
-        d._set = lambda *a, **k: None
-        return d
-
-    def test_second_camera_waits_for_the_first(self):
-        d = self.make()
-        order = []
-        stop = threading.Event()
-        with mock.patch.object(dji.time, "sleep", lambda s: None):
-            d._acquire_conn("A", stop)
-            order.append("A holt")
-            t = threading.Thread(target=lambda: (d._acquire_conn("B", threading.Event()), order.append("B holt")))
-            t.start()
-            time.sleep(0.8)
-            self.assertEqual(order, ["A holt"])                    # B wartet noch
-            d._release_conn()
-            t.join(3)
-        self.assertEqual(order, ["A holt", "B holt"])
-
-    def test_waiting_camera_can_be_stopped(self):
-        d = self.make()
-        d._conn_lock.acquire()
-        stop = threading.Event()
-        stop.set()
-        with self.assertRaises(RuntimeError):
-            d._acquire_conn("B", stop)
 
 
 class BluetoothSticks(unittest.TestCase):
@@ -201,44 +88,47 @@ class BluetoothSticks(unittest.TestCase):
         self.assertEqual(dji.usb_id_for_hci("hci1", bt), "")                    # eingebaut: kein USB-Gerät darüber
         self.assertEqual(dji.usb_id_for_hci("hci9", bt), "")                    # gibt es nicht
 
-    def test_status_carries_adapters_and_problems(self):
-        d = dji.Dji.__new__(dji.Dji)
-        d.lock = threading.Lock()
-        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
-        d.adapter_paths = lambda: ["/org/bluez/hci0"]
-        # Wie auf der echten Box: BlueZ nennt die Standardkennung (Linux Foundation), nicht den Stick
-        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
-        root = self.usb([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
-                         ("5-1.2", "33fa", "0010", "BARROT Bluetooth 5.4 Adapter", ("e0", "01", "01"), None)])
-        bt = self.bt_tree(root, [("hci0", "5-1.4")])
+    BLUEZ_DEFAULT = "usb:v1D6Bp0246d0540"       # was BlueZ auf der echten Box meldet: die Standardkennung, nicht die des Sticks
+
+    def bluez(self, modalias=None):
+        return {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": modalias or self.BLUEZ_DEFAULT, "Address": "AA:BB",
+                                                           "Powered": True}},
+                "/org/bluez/hci0/dev_X": {"org.bluez.Device1": {"Address": "CC:DD"}}}
+
+    def info(self, usb_devs, adapters, objs=None):
+        root = self.usb(usb_devs)
+        bt = self.bt_tree(root, adapters)
         with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
-            st = d.status()
+            return dji.adapter_info(objs if objs is not None else self.bluez())
+
+    def test_status_carries_adapters_and_problems(self):
+        st = self.info([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb"),
+                        ("5-1.2", "33fa", "0010", "BARROT Bluetooth 5.4 Adapter", ("e0", "01", "01"), None)], [("hci0", "5-1.4")])
         self.assertEqual(st["adapters"][0]["usb_id"], "0b05:190e")
         self.assertEqual([p["id"] for p in st["adapter_problems"]], ["33fa:0010"])      # der laufende ASUS ist KEIN Problem
 
     def test_working_stick_gives_no_warning_even_with_the_bluez_default_id(self):
-        d = dji.Dji.__new__(dji.Dji)
-        d.lock = threading.Lock()
-        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
-        d.adapter_paths = lambda: ["/org/bluez/hci0"]
-        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
-        root = self.usb([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb")])
-        bt = self.bt_tree(root, [("hci0", "5-1.4")])
-        with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
-            st = d.status()
+        st = self.info([("5-1.4", "0b05", "190e", "ASUS USB-BT500", ("e0", "01", "01"), "btusb")], [("hci0", "5-1.4")])
         self.assertEqual(st["adapter_problems"], [])
 
     def test_modalias_default_id_is_never_taken_for_the_stick(self):
-        d = dji.Dji.__new__(dji.Dji)
-        d.lock = threading.Lock()
-        d.scanning, d.scan_error, d.devices, d.sessions = False, "", [], {}
-        d.adapter_paths = lambda: ["/org/bluez/hci0"]
-        d.objects = lambda: {"/org/bluez/hci0": {"org.bluez.Adapter1": {"Modalias": "usb:v1D6Bp0246d0540", "Address": "AA:BB", "Powered": True}}}
-        root = self.usb([])
-        bt = self.bt_tree(root, [("hci0", None)])
-        with mock.patch.object(dji, "SYSFS_USB", root), mock.patch.object(dji, "SYSFS_BT", bt):
-            st = d.status()
+        st = self.info([], [("hci0", None)])
         self.assertEqual(st["adapters"][0]["usb_id"], "")                         # eingebaut
+
+    def test_unreadable_bluez_gives_no_adapters_but_still_names_a_missing_adapter(self):
+        st = self.info([("5-1.4", "2357", "0604", "TP-Link UB500 Adapter", ("e0", "01", "01"), "btusb")], [], objs={})
+        self.assertEqual(st["adapters"], [])
+        self.assertIn("2357:0604", st["adapter_problems"][0]["id"])
+
+    def test_driver_status_is_passed_on(self):
+        import json
+        d = tempfile.mkdtemp()
+        f = os.path.join(d, "status.json")
+        with open(f, "w") as fh:
+            json.dump({"state": "ok", "message": "Treiber geladen"}, fh)
+        with mock.patch.object(dji, "BTDRIVER_STATUS", f):
+            st = self.info([], [])
+        self.assertEqual(st["driver"], {"state": "ok", "message": "Treiber geladen"})
 
 
 if __name__ == "__main__":
