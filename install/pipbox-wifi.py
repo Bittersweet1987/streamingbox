@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Root-Helfer für WLAN-Verbindungen (läuft nur über pipbox-wifi.path).
 
-Liest aus der Auslösedatei eine feste Aktion (scan, connect, forget, disconnect, hotspot_start, hotspot_stop, hotspot_save) mit streng geprüften
+Liest aus der Auslösedatei eine feste Aktion (scan, connect, forget, disconnect, hotspot_start, hotspot_stop, hotspot_save, export_wifi, import_wifi) mit streng geprüften
 Werten (WLAN-Karte, Netzname, Passwort) und führt sie mit nmcli aus. Das Passwort eines WLANs, mit dem sich die Box verbindet, wird nie
 als Befehlsargument übergeben (nur über stdin an nmcli) und nie ins Protokoll geschrieben; die Auslösedatei wird vor der Ausführung gelöscht.
 Die Karte des Kameranetzes (camera-net.json) und Karten ohne WLAN werden abgelehnt.
+
+Sichern und Einspielen der gespeicherten Netze (Issue #20): "export_wifi" liest die Profile und, nur auf Wunsch, ihre Passwörter und legt die Liste für die
+Oberfläche in wifi-export.json (Benutzer pipbox, 0600, wird dort sofort gelesen und gelöscht). "import_wifi" legt Profile aus einer Liste an. Einzige Ausnahme von
+"Passwörter nie als Befehlsargument": nmcli kennt zum Anlegen eines Profils ohne Verbindung nur die Befehlszeile; das Passwort steht dort für den Bruchteil einer
+Sekunde (sichtbar für root und den Dienstbenutzer) und wird in keiner Meldung wiederholt.
 
 Hotspot: Ein Stick wird mit einem NetworkManager-Profil "pipbox-hotspot-<Karte>" zum Zugangspunkt (WPA2, Adressvergabe und Weitergabe durch
 NetworkManager, "shared"). Das Passwort eines Hotspots ist zum Weitergeben an Kameras und Handys gedacht und liegt deshalb in
@@ -24,7 +29,9 @@ REQ = f"{STATE}/wifi-request"
 RUN = "/run/pipbox-wifi"
 STATUS = f"{RUN}/status.json"
 IFACE_RE = re.compile(r"^[a-z][a-z0-9]{1,14}$")
-ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save")
+ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save", "export_wifi", "import_wifi")
+EXPORT_FILE = f"{STATE}/wifi-export.json"
+MARK_RE = re.compile(r"^[0-9a-f]{16}$")
 HS_PREFIX = "pipbox-hotspot-"
 HOTSPOT_FILE = f"{STATE}/hotspot.json"
 HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}       # erlaubte Kanäle (0 = automatisch); 5 GHz nur ohne Radarpflicht (DFS)
@@ -498,6 +505,151 @@ def do_hotspot_stop(req):
     return "Hotspot beendet. Die Karte verbindet sich wieder mit einem gespeicherten Netz, wenn eines in Reichweite ist."
 
 
+# ------------------------------------------------------------------ Gespeicherte Netze sichern und einspielen (Issue #20)
+
+def unescape_terse(v):
+    """nmcli -t maskiert ':' und '\\' im Wert mit '\\'."""
+    out, esc = "", False
+    for ch in v:
+        if esc:
+            out += ch
+            esc = False
+        elif ch == "\\":
+            esc = True
+        else:
+            out += ch
+    return out
+
+
+def profile_props(name, fields, secrets=False):
+    """Eigenschaften eines Profils {Feld: Wert} (die Passwörter nur mit secrets=True)."""
+    args = (["-s"] if secrets else []) + ["-t", "-f", ",".join(fields), "con", "show", "id", name]
+    r = nm(*args, timeout=20)
+    out = {}
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            k, _, v = line.partition(":")
+            if k in fields:
+                out[k] = unescape_terse(v)
+    return out
+
+
+def read_saved_profile(name, secrets):
+    """Ein gespeichertes WLAN-Profil lesen: ({ssid, hidden, open, security, password}, None) oder (None, Grund, Name des Netzes)."""
+    p = profile_props(name, ["802-11-wireless.ssid", "802-11-wireless.mode", "802-11-wireless.hidden", "802-11-wireless-security.key-mgmt",
+                             "802-11-wireless-security.psk-flags"])
+    ssid = p.get("802-11-wireless.ssid") or name
+    if p.get("802-11-wireless.mode", "infrastructure") not in ("infrastructure", ""):
+        return None, "kein Client-Profil", ssid
+    km = p.get("802-11-wireless-security.key-mgmt", "")
+    if km not in ("", "wpa-psk", "sae"):
+        return None, "Unternehmens-WLAN oder WEP", ssid
+    try:
+        check_ssid(ssid)
+    except ValueError:
+        return None, "Netzname ungültig", ssid
+    net = {"ssid": ssid, "hidden": p.get("802-11-wireless.hidden", "no").lower() == "yes", "open": km == "", "security": km or "none", "password": ""}
+    if km:
+        m = re.match(r"\s*(\d+)", p.get("802-11-wireless-security.psk-flags", "0") or "0")
+        if m and int(m.group(1)) & 3:                       # 1 = nur für den Benutzer im Programm, 2 = nicht gespeichert: das Passwort liegt nicht im Profil
+            return None, "Passwort nicht gespeichert", ssid
+        if secrets:                                          # das Passwort selbst nur auf ausdrücklichen Wunsch lesen
+            pw = profile_props(name, ["802-11-wireless-security.psk"], secrets=True).get("802-11-wireless-security.psk", "")
+            if not pw:
+                return None, "Passwort nicht gespeichert", ssid
+            try:
+                check_password(pw)
+            except ValueError:
+                return None, "Passwort nicht übertragbar", ssid
+            net["password"] = pw
+    return net, None, ssid
+
+
+def write_export(data):
+    """Die Liste für die Oberfläche ablegen: Besitzer pipbox, 0600, nie einem untergeschobenen Verweis folgen (der Ordner gehört dem Benutzer pipbox)."""
+    for path in (EXPORT_FILE + ".tmp", EXPORT_FILE):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    tmp = EXPORT_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            u = pwd.getpwnam("pipbox")
+            os.fchown(fd, u.pw_uid, u.pw_gid)
+        except (KeyError, PermissionError):
+            pass
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, EXPORT_FILE)
+
+
+def do_export_wifi(req):
+    secrets = req.get("secrets") is True
+    nets, skipped, seen = [], [], set()
+    for name in saved_wifi():
+        net, why, ssid = read_saved_profile(name, secrets)
+        if net is None:
+            skipped.append({"ssid": ssid, "why": why})
+        elif net["ssid"] not in seen:
+            seen.add(net["ssid"])
+            nets.append(net)
+    write_export({"networks": nets, "skipped": skipped})
+    return f"{len(nets)} WLAN-Netze gelesen" + (f", {len(skipped)} nicht übertragbar" if skipped else "")
+
+
+def do_import_wifi(req):
+    nets = req.get("networks")
+    if not isinstance(nets, list) or not 1 <= len(nets) <= 50:
+        raise ValueError("Liste der Netze ungültig (1 bis 50)")
+    clean = []
+    for n in nets:
+        if not isinstance(n, dict):
+            raise ValueError("Liste der Netze ungültig")
+        ssid, pw = n.get("ssid"), n.get("password", "")
+        check_ssid(ssid)
+        check_not_hotspot_name(ssid)
+        check_password(pw)
+        sec = n.get("security", "wpa-psk")
+        if sec not in ("wpa-psk", "sae", "none"):
+            raise ValueError("Sicherheitsart ungültig")
+        open_net = n.get("open") is True or sec == "none"
+        if open_net and pw:
+            raise ValueError("Ein offenes Netz hat kein Passwort")
+        if not open_net and not pw:
+            raise ValueError("Ein gesichertes Netz braucht ein Passwort")
+        clean.append((ssid, pw, "none" if open_net else sec, n.get("hidden") is True))
+    added, skipped = 0, []
+    for ssid, pw, sec, hidden in clean:
+        try:
+            if ssid in saved_wifi():
+                check_not_camera_profile(ssid)
+                nm("con", "delete", "id", ssid)                  # gleichnamiges Profil wird ersetzt
+            args = ["con", "add", "type", "wifi", "con-name", ssid, "ifname", "*", "ssid", ssid,
+                    "connection.autoconnect", "yes", "ipv4.route-metric", "600"]
+            if hidden:
+                args += ["802-11-wireless.hidden", "yes"]
+            if sec != "none":
+                args += ["wifi-sec.key-mgmt", sec, "wifi-sec.psk", pw]
+            r = nm(*args, timeout=30)
+            if r.returncode != 0:
+                msg = ((r.stderr or r.stdout).strip().replace(pw, "***") if pw else (r.stderr or r.stdout).strip())[:100]
+                raise RuntimeError(msg or "nmcli meldet einen Fehler")
+            added += 1
+        except (ValueError, RuntimeError) as e:
+            skipped.append(f"„{ssid}“ ({str(e)[:80]})")
+    if not added and skipped:
+        raise RuntimeError("Kein Netz eingespielt: " + "; ".join(skipped[:5]))
+    return f"{added} WLAN-Netze eingespielt" + ((", ausgelassen: " + "; ".join(skipped[:5])) if skipped else "")
+
+
 def read_req(path, limit=4096):
     """Anfragedatei im Ordner des Benutzers pipbox lesen, ohne Verweisen (Symlinks) zu folgen und nur bis zur Höchstgröße."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -511,7 +663,7 @@ def read_req(path, limit=4096):
 
 def main():
     try:
-        req = json.loads(read_req(REQ, 8192))
+        req = json.loads(read_req(REQ, 65536))
     except (OSError, ValueError):
         req = None
     try:
@@ -522,7 +674,8 @@ def main():
         write_status(state="error", message="Ungültige Anfrage")
         return 1
     action = req["action"]
-    write_status(state="working", message="Wird ausgeführt …", action=action)
+    mark = req.get("mark") if isinstance(req.get("mark"), str) and MARK_RE.match(req["mark"]) else ""
+    write_status(state="working", message="Wird ausgeführt …", action=action, mark=mark)
     try:
         if action == "scan":
             msg = do_scan(req.get("iface"))
@@ -536,6 +689,10 @@ def main():
             msg = do_hotspot_stop(req)
         elif action == "hotspot_save":
             msg = do_hotspot_save(req)
+        elif action == "export_wifi":
+            msg = do_export_wifi(req)
+        elif action == "import_wifi":
+            msg = do_import_wifi(req)
         else:
             msg = do_disconnect(req)
         write_status(state="done", message=msg, saved=saved_wifi())

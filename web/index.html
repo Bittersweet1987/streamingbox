@@ -70,6 +70,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .wform{display:grid;grid-template-columns:minmax(130px,.7fr) 1.4fr 1.4fr;gap:10px;align-items:end;margin-top:10px}
 .wform label{display:flex;flex-direction:column;gap:4px;min-width:0}
 .wform select,.wform input{width:100%;height:38px;box-sizing:border-box}
+.bkform{grid-template-columns:1fr 1fr}
+.bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
 @media(max-width:620px){.wform{grid-template-columns:1fr}}
 .wstat{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);margin-top:8px}
 .wstat .wdot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.wstat.ok .wdot{background:var(--ok)}
@@ -493,6 +495,23 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <label class="logopt"><input type="radio" name="logmode" value="sparsam"> <b>Sparsam</b>: Protokolle nur im Arbeitsspeicher. Schont die Speicherkarte. Nach einem Absturz oder Stromausfall bleibt <b>keine Spur</b>.</label>
     <label class="logopt"><input type="radio" name="logmode" value="ausfuehrlich"> <b>Ausführlich</b>: Protokolle dauerhaft auf der Karte (Journal höchstens 30 MB und 7 Tage, Zustandsprotokoll höchstens 4 MB, alle 10 Sekunden). Für die Fehlersuche, zum Beispiel wenn sich die Box von selbst ausschaltet.</label>
     <div id="logmsg" class="ph"></div>
+  </details>
+  <details class="card wide" id="c_bk"><summary><span class="sumh">Einstellungen sichern</span></summary>
+    <div class="sech">Sichern</div>
+    <label class="logopt"><input type="checkbox" id="bk_secrets" checked> <b>Passwörter mitnehmen</b> (WLAN, Hotspot, DJI, Stream-ID). Dann immer mit einem Passwort verschlüsselt.</label>
+    <div class="wform bkform">
+      <label class="muted"><span id="bk_pwlab">Passwort zum Verschlüsseln (mindestens 8 Zeichen)</span><input type="password" id="bk_pw" autocomplete="new-password" maxlength="128"></label>
+      <label class="muted">Passwort wiederholen<input type="password" id="bk_pw2" autocomplete="new-password" maxlength="128"></label>
+    </div>
+    <div class="actions"><button id="bk_export" type="button">Datei herunterladen</button></div>
+    <div id="bk_msg" class="ph" role="status"></div>
+    <div class="sech">Einspielen</div>
+    <div class="ph" style="margin-top:0">Datei wählen, Teile auswählen. Nur ohne Sendung. Der Stand davor wird gesichert.</div>
+    <div class="actions"><input type="file" id="bk_file" accept=".json,application/json"></div>
+    <div id="bk_ipwrow" class="wform bkform" hidden><label class="muted">Passwort der Datei<input type="password" id="bk_ipw" autocomplete="off" maxlength="128"></label><div class="actions"><button id="bk_open" type="button" class="sec">Öffnen</button></div></div>
+    <div id="bk_plan" class="bkplan" hidden></div>
+    <div id="bk_imsg" class="ph bkres" role="status"></div>
+    <div class="actions"><button id="bk_restore" type="button" class="sec" hidden>Letzten Stand zurückholen</button> <button id="bk_reload" type="button" class="sec" hidden>Seite neu laden</button></div>
   </details>
   <details class="card wide" id="c_dev"><summary><span class="sumh">Entwickler</span><span id="dev_badge" class="badge">…</span></summary>
     <div id="dev_state" class="wstat"><span class="wdot"></span><span class="wgrow" id="dev_text">Wird geladen …</span></div>
@@ -1809,6 +1828,84 @@ document.querySelectorAll('input[name="logmode"]').forEach(r=>r.addEventListener
 }));
 $("c_logs").addEventListener("toggle",()=>{ if($("c_logs").open) logLoad(); });
 logLoad();
+
+// ---- Einstellungen sichern und einspielen (Karte "Einstellungen sichern", Issue #20) ----
+let bkDoc=null, bkInfo=null, bkSending=false, bkPw="";
+const BK_MIN=8;
+function bkPwHint(){ const on=$("bk_secrets").checked; $("bk_pwlab").textContent=on?"Passwort zum Verschlüsseln (mind. "+BK_MIN+" Zeichen)":"Passwort (leer = unverschlüsselt)"; }
+$("bk_secrets").addEventListener("change",bkPwHint);
+async function bkExport(){
+  const sec=$("bk_secrets").checked, pw=$("bk_pw").value, pw2=$("bk_pw2").value, msg=$("bk_msg"), btn=$("bk_export");
+  if(pw!==pw2){ msg.textContent="Die beiden Passwörter sind nicht gleich."; return; }
+  if((sec||pw)&&pw.length<BK_MIN){ msg.textContent=sec?"Mit Passwörtern bitte ein Passwort eingeben (mind. "+BK_MIN+" Zeichen).":"Mindestens "+BK_MIN+" Zeichen (oder leer lassen)."; return; }
+  btn.disabled=true; msg.textContent="Wird gesammelt und verschlüsselt …";
+  try{
+    const r=await srtlaCall("POST","/api/settings/export",{secrets:sec,password:pw||undefined});
+    const blob=new Blob([JSON.stringify(r.document,null,1)],{type:"application/json"}), now=new Date();
+    const name="irl4you-einstellungen-"+now.getFullYear()+pad2(now.getMonth()+1)+pad2(now.getDate())+"-"+pad2(now.getHours())+pad2(now.getMinutes())+".json";
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),20000);
+    $("bk_pw").value=""; $("bk_pw2").value="";
+    msg.textContent="Heruntergeladen: "+name+" ("+Math.max(1,Math.round(blob.size/1024))+" KB). "
+      +(r.encrypted?"Verschlüsselt. Das Passwort wird nirgends gespeichert.":"Unverschlüsselt, ohne Passwörter.")
+      +((r.notes||[]).length?" Hinweis: "+r.notes.join("; "):"");
+  }catch(x){ msg.textContent="Fehler: "+x.message; }
+  btn.disabled=false;
+}
+$("bk_export").addEventListener("click",bkExport);
+function bkReset(){ bkDoc=null; bkInfo=null; bkPw=""; $("bk_plan").hidden=true; setHtml($("bk_plan"),""); $("bk_ipwrow").hidden=true; $("bk_ipw").value=""; }
+$("bk_file").addEventListener("change",async e=>{
+  const f=e.target.files&&e.target.files[0]; bkReset(); $("bk_imsg").textContent=""; $("bk_reload").hidden=true; if(!f) return;
+  if(f.size>300000){ $("bk_imsg").textContent="Datei zu groß."; return; }
+  try{ bkDoc=JSON.parse(await f.text()); }catch(x){ bkDoc=null; $("bk_imsg").textContent="Keine Sicherung (kein JSON)."; return; }
+  if(bkDoc&&bkDoc.encrypted===true){ $("bk_ipwrow").hidden=false; $("bk_imsg").textContent="Verschlüsselt: bitte Passwort eingeben."; $("bk_ipw").focus(); return; }
+  bkPreview();
+});
+async function bkPreview(){
+  const pw=$("bk_ipw").value; $("bk_imsg").textContent="Wird geprüft …";
+  try{ bkInfo=await srtlaCall("POST","/api/settings/preview",{document:bkDoc,password:pw||undefined}); }
+  catch(x){ $("bk_imsg").textContent=x.message; return; }
+  bkPw=pw; $("bk_ipwrow").hidden=true; $("bk_ipw").value=""; $("bk_imsg").textContent="";
+  const r=bkInfo, when=r.created?new Date(r.created):null, ts=when&&!isNaN(when)?when.toLocaleString("de-DE",{dateStyle:"medium",timeStyle:"short"}):"";
+  const rows=r.sections.map(x=>x.ok
+    ?`<label class="logopt"><input type="checkbox" data-sec="${esc(x.id)}" checked> <b>${esc(x.label)}</b> <span class="muted">(${x.count})</span>${x.note?` <span class="ph">${esc(x.note)}</span>`:""}</label>`
+    :`<div class="logopt bkbad"><b>${esc(x.label)}</b>: nicht lesbar, wird ausgelassen. <span class="ph">${esc(x.note)}</span></div>`).join("");
+  setHtml($("bk_plan"),`<div class="wstat ok"><span class="wdot"></span><span class="wgrow">Sicherung${ts?" vom <b>"+esc(ts)+"</b>":""}${r.box_version?" (Version "+esc(r.box_version)+")":""}, ${r.encrypted?"verschlüsselt":"nicht verschlüsselt"}, ${r.secrets?"mit Passwörtern":"ohne Passwörter"}</span></div>
+    <div class="sech">Einspielen (ersetzt die jetzigen Einstellungen)</div>${rows}
+    <div class="actions"><button id="bk_go" type="button" class="warnbtn"${bkSending?" disabled":""}>Ausgewählte Teile einspielen</button></div>`);
+  $("bk_plan").hidden=false;
+  if(bkSending) $("bk_imsg").textContent="Es wird gesendet. Bitte erst beenden.";
+}
+$("bk_open").addEventListener("click",bkPreview);
+$("bk_ipw").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); bkPreview(); } });
+function bkResults(r){
+  setHtml($("bk_imsg"),(r.results||[]).map(x=>`<div class="${x.ok?"bkok":"bkbad"}">${x.ok?"✓":"✗"} <b>${esc(x.label)}</b>: ${esc(x.message)}</div>`).join(""));
+  $("bk_reload").hidden=false;
+  [typeof srtlaLoad==="function"&&srtlaLoad,typeof pipeLoad==="function"&&pipeLoad,typeof wifiLoad==="function"&&wifiLoad,typeof djiLoad==="function"&&djiLoad].forEach(f=>{ try{ f&&f(); }catch(e){} });
+}
+document.addEventListener("click",async e=>{
+  if(e.target.id==="bk_go"){
+    const secs=[...document.querySelectorAll("#bk_plan input[data-sec]:checked")].map(i=>i.dataset.sec);
+    if(!secs.length){ $("bk_imsg").textContent="Bitte mindestens einen Teil wählen."; return; }
+    if(!confirm("Die gewählten Teile ersetzen die jetzigen Einstellungen. Der Stand davor wird gesichert.\n\nEinspielen?")) return;
+    e.target.disabled=true; $("bk_imsg").textContent="Wird eingespielt …";
+    try{ const r=await srtlaCall("POST","/api/settings/import",{document:bkDoc,password:bkPw||undefined,sections:secs}); bkResults(r); bkReset(); $("bk_file").value=""; }
+    catch(x){ $("bk_imsg").textContent="Fehler: "+x.message; e.target.disabled=false; }
+    bkLoad();
+  }
+});
+$("bk_restore").addEventListener("click",async()=>{
+  if(!confirm("Stand vor dem letzten Einspielen zurückholen? Die jetzigen Einstellungen werden ersetzt.")) return;
+  $("bk_imsg").textContent="Wird zurückgeholt …";
+  try{ bkResults(await srtlaCall("POST","/api/settings/restore",{})); }catch(x){ $("bk_imsg").textContent="Fehler: "+x.message; }
+  bkLoad();
+});
+$("bk_reload").addEventListener("click",()=>location.reload());
+async function bkLoad(){
+  try{ const d=await srtlaCall("GET","/api/settings"); bkSending=!!d.sending; $("bk_restore").hidden=!d.has_backup; const go=$("bk_go"); if(go) go.disabled=bkSending; }catch(e){}
+}
+$("c_bk").addEventListener("toggle",()=>{ if($("c_bk").open) bkLoad(); });
+bkPwHint();
 
 // ---- Entwickler: SSH-Zugang ein- und ausschalten und Passwort (Karte "Entwickler") ----
 let devData=null, devTimer=null, devPwShown=false;

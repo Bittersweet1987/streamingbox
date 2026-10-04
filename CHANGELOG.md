@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.79 (Beta)
+- Neu (Issue #20): **Einstellungen sichern und einspielen** (Karte "Einstellungen sichern"), zum Beispiel nach dem Neu-Aufspielen der SD-Karte.
+  - Dabei: Kameras, Bildaufbau, SRTLA-Server, automatischer Start, Namen der Sticks, DJI-Kameras (Einstellungen), Hotspots, gespeicherte WLAN-Netze. Nie dabei: Passwort der Oberfläche, SSH, Schlüssel. Nicht übertragbar: Bluetooth-Kopplung der DJI-Kameras, Unternehmens-WLANs.
+  - "Passwörter mitnehmen" ist vorgewählt. Eine Datei mit Passwörtern ist **immer mit einem Passwort verschlüsselt** (AES-256, PBKDF2-HMAC-SHA256, HMAC-SHA256, nur Standardbibliothek; gegen FIPS 197, NIST SP 800-38A und `openssl` geprüft).
+  - Einspielen: Teile wählen, jeder Teil wird streng geprüft, nur ohne Sendung. Der Stand davor wird gesichert und lässt sich zurückholen.
+  - WLAN-Netze über den Root-Helfer (`export_wifi`, `import_wifi`). Beim Einspielen steht das Passwort kurz in der `nmcli`-Befehlszeile.
+  - **Nicht auf einer echten Box geprüft:** Anlegen der WLAN-Profile, Einspielen der DJI-Kameras.
+- Tests: `test_settings` (65), `test_wifi_transfer` (20), `test_settings_ui` (12).
+
 ## 0.9.78 (Beta)
 - Neu (Issue #19): **Fußleiste am Handy mit Kamera- und Ton-Knöpfen.** Bei der Art "Bild in Bild" steht in der festen Fußleiste (Breite bis 620 Pixel) in **einer Reihe**: "Live"/"Stop" links, daneben ein Knopf je Kamera im Bild und der Ton-Knopf. Mit der Art "eine Kamera" bleibt es bei "Live"/"Stop" allein. Die Knöpfe sind wie in der BELABOX-Oberfläche von Bittersweet1987 angeordnet (nur die Größen, kein Code übernommen).
   - **Kamera-Knopf** (Name = erstes Wort des Kameranamens, "Osmo Action 4" wird "Osmo"; heißen zwei gleich, kommt das nächste Wort dazu): **kurzer Druck blendet das kleine Bild aus oder ein** (blaues Symbol mit Strich = ausgeblendet; das Hauptbild lässt sich nicht ausblenden), **langer Druck macht die Kamera zum Hauptbild** (blauer Rahmen = Hauptbild). Das Symbol ist grün, wenn die Kamera gerade sendet, sonst weiß. Die Knöpfe bleiben in der Reihenfolge der Kameraliste stehen und springen beim Tausch nicht. Beim Tausch wird das kleine Bild der bisherigen Hauptkamera sichtbar, auch wenn dort vorher ein ausgeblendetes Bild stand ("ausgeblendet" gehört zur Kamera).
