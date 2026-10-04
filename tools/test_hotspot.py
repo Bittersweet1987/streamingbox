@@ -522,7 +522,11 @@ class CameraSide(unittest.TestCase):
         self.assertEqual(dd.hotspot_password("wlan1", "Box Netz"), "")
 
     def test_daemon_points_at_its_state_folder(self):
+        import asyncio
         d = tempfile.mkdtemp()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)                                  # Python 3.9: asyncio.Lock() braucht eine Schleife; asyncio.run() in früheren Tests hat sie entfernt
+        self.addCleanup(loop.close)
         dd.Daemon(d)
         self.assertEqual(dd.HOTSPOT_FILE, os.path.join(d, "hotspot.json"))
 

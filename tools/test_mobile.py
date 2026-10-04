@@ -47,9 +47,33 @@ class MobileFooter(unittest.TestCase):
         self.assertNotIn("(mit Rückfrage)", PAGE)                                         # Tooltips stimmen wieder
 
     def test_page_leaves_room_for_the_footer_and_the_toast(self):
-        self.assertIn("body{padding-bottom:var(--mfh,calc(76px + env(safe-area-inset-bottom)))}", PAGE)   # --mfh: gemessene Höhe der Fußleiste
-        self.assertIn(".toast{bottom:calc(var(--mfh,76px) + 16px)}", PAGE)
+        self.assertIn("body{padding-bottom:calc(var(--mfh,72px) + 20px + env(safe-area-inset-bottom))}", PAGE)   # --mfh: gemessene Höhe der Fußleiste
+        self.assertIn(".toast{bottom:calc(var(--mfh,72px) + 28px + env(safe-area-inset-bottom))}", PAGE)
         self.assertIn('setProperty("--mfh"', PAGE)
+        self.assertIn('new ResizeObserver(sizeFoot).observe($("mfoot"))', PAGE)           # die Höhe wird nachgemessen, wenn die Übersetzung den Text umbricht
+
+    def test_header_and_footer_are_as_wide_as_the_cards(self):
+        self.assertRegex(PAGE, r"main\{max-width:980px;margin:0 auto;padding:16px;")        # Karten: 16 px Rand links und rechts
+        head = re.search(r"\nheader\{display:flex[^\n]*", PAGE).group(0)
+        self.assertIn("max-width:calc(980px - 32px);width:calc(100% - 32px)", head)         # auch am Rechner nicht breiter als die Karten
+        self.assertNotRegex(head, r"[0-9]+px [0-9]+px [0-9]+px [1-9][0-9]*px var\(--shade\)")   # kein Schatten mit Ausdehnung zur Seite (Spreizung > 0)
+        self.assertIn("-4px var(--shade)", head)                                          # Schatten nur nach unten, hell dezenter als dunkel
+        self.assertRegex(PAGE, r':root\[data-theme="light"\]\{[^}]*--shade:rgba\(15,23,42,\.16\)')
+        foot = PAGE[PAGE.index("#mfoot{display:flex;position:fixed"):]
+        foot = foot[:foot.index("}")]
+        self.assertNotRegex(foot, r"-?[0-9]+px -?[0-9]+px [0-9]+px [1-9][0-9]*px var\(--shade\)")
+        phone = PAGE[PAGE.index("@media(max-width:620px){\n  header{flex-wrap:nowrap"):]
+        self.assertIn("main{padding-left:8px;padding-right:8px}", phone)                  # schmaler Rand am Handy
+        self.assertIn("header{flex-wrap:nowrap;padding:6px 10px;gap:6px;width:calc(100% - 16px)}", phone)
+
+    def test_footer_is_rounded_and_inset_like_the_header(self):
+        i = PAGE.index("#mfoot{display:flex;position:fixed")
+        rule = PAGE[i:PAGE.index("}", i)]
+        self.assertIn("left:8px;right:8px", rule)                                         # gleiche Breite wie die Karten (main hat am Handy 8 px Rand)
+        self.assertIn("border-radius:14px", rule)                                         # gleiche Rundung wie Karten und Kopfleiste
+        self.assertIn("bottom:calc(8px + env(safe-area-inset-bottom))", rule)             # kleiner Abstand nach unten, nicht unter der Navigationsleiste
+        self.assertNotIn("border-top", rule)                                              # ringsum ein Rand statt nur oben
+        self.assertIn("border:1px solid var(--line)", rule)
 
 
 JSC = next((p for p in (shutil.which("jsc"), "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc") if p and os.path.exists(p)), None)

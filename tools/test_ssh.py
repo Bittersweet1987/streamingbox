@@ -618,7 +618,7 @@ class FilesAndPage(unittest.TestCase):
         self.assertNotIn("<p", html)
         toggle = js.split('$("dev_toggle").addEventListener')[1].split('$("dev_pw").addEventListener')[0]
         self.assertNotIn("confirm(", toggle)                                             # kein Popup beim Einschalten
-        self.assertIn('"SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"")', js)
+        self.assertIn('(d.active?"SSH aktiv":"SSH ist ausgeschaltet")+(d.user?" · "+`Benutzer: „${d.user}“`:"")', js)      # ganze Sätze, damit sie übersetzt werden können
         self.assertIn('d.active?"SSH ausschalten":"SSH einschalten"', js)               # ein Knopf an derselben Stelle
         self.assertIn('t.className=d.active?"dangerbtn":"warnbtn"', js)                  # "SSH ausschalten" ist rot (Rückmeldung zu #18)
         self.assertIn(".dangerbtn{background:var(--crit)", page)

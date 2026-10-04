@@ -1349,9 +1349,9 @@ class HeaderControls(unittest.TestCase):
         self.assertGreater(h.index('id="djicams"'), dji)        # der DJI-Teil (Adapter, Kameras, Suche) bleibt unter seiner Überschrift
         self.assertNotIn("Bereich „DJI-Kameras“ gewählt", h)    # der Hinweis oben verweist auf "Hauptverbindung"
 
-    def test_data_badge_no_longer_says_live(self):
-        self.assertNotIn('mode.textContent=m.demo?"Demo-Werte":"live"', self.html)
-        self.assertIn('"Demo-Werte":"verbunden"', self.html)
+    def test_header_has_no_connection_badge(self):
+        self.assertNotIn('id="mode"', self.html)                # "verbunden" sagte nichts, was die Live-Karte nicht schon zeigt
+        self.assertNotIn('$("mode")', self.html)
 
     def test_logout_moved_from_the_header_to_the_power_card(self):
         self.assertNotIn('id="logout"', self.header)
