@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.82 (Beta)
+- Geändert (Issue #21): Das "i" steht nicht mehr im zugeklappten Kartenkopf, sondern **erst in der aufgeklappten Karte** (eigene Zeile oben). Das Menü bleibt aufgeräumt.
+
 ## 0.9.81 (Beta)
 - Neu (Issue #19): **Kamera deaktivieren** per Doppeltipp auf den Kamera-Knopf in der Fußleiste (nochmal doppelt tippen aktiviert sie wieder). Eine deaktivierte Kamera springt bei Ausfall des Hauptbildes **nicht als Ersatz** ein; als kleines Bild bleibt sie, solange sie sendet. Sie wird blass und gestrichelt gezeigt, nie grün. Das Hauptbild lässt sich nicht deaktivieren; macht man eine deaktivierte Kamera von Hand zum Hauptbild, ist sie wieder aktiv.
   - Sendet nur noch eine deaktivierte Kamera, wartet die Sendung, bis eine aktive wieder sendet (Meldung "Keine aktive Kamera sendet"). Ohne laufende Sendung wird nur gespeichert, während der Sendung gilt es sofort ohne Neustart.

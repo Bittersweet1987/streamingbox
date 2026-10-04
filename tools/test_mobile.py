@@ -275,10 +275,18 @@ class HelpTextMarkup(unittest.TestCase):
         self.assertIn('const HLP_SEL=".card .ph:not([id]):not([role])";', PAGE)             # Meldungen haben eine Kennung oder role="status"
 
     def test_only_on_phones(self):
-        self.assertRegex(PAGE, r"\.ibtn\{display:none\}")                                      # am Rechner kein "i", alle Texte sichtbar
+        self.assertRegex(PAGE, r"\.ibtn,\.ibrow\{display:none\}")                              # am Rechner kein "i", alle Texte sichtbar
         phone = re.search(r"@media\(max-width:620px\)\{\.wform\{grid-template-columns:1fr\}.*?\.hlp:not\(\.open\)\{display:none\}\}", PAGE, re.S)
         self.assertIsNotNone(phone)
         self.assertIn(".ibtn{display:inline-block", phone.group(0))
+
+    def test_the_card_header_stays_clean_and_the_i_sits_inside_the_open_card(self):
+        i = PAGE.index("const card=head.tagName===\"SUMMARY\";")
+        block = PAGE[i:PAGE.index("b._hlp.push(ph)", i)]
+        self.assertIn('r.className="ibrow"', block)
+        self.assertIn('head.insertAdjacentElement("afterend",r)', block)                      # eigene Zeile unter dem Kartenkopf, nicht im Kopf
+        self.assertNotIn("sumh", block)                                                      # nichts mehr im Kartennamen
+        self.assertIn(".ibrow{display:block", PAGE)
 
     def test_the_i_button_does_not_fold_the_card_and_is_labelled(self):
         i = PAGE.index('document.addEventListener("click",e=>{\n    const b=e.target.closest&&e.target.closest(".ibtn")')
