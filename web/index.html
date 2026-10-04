@@ -225,7 +225,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 pre{white-space:pre-wrap;word-break:break-all;font-size:11px;color:var(--muted);max-height:220px;overflow:auto;margin:8px 0 0}
 .upd-line{display:flex;justify-content:space-between;padding:3px 0}
 .livehealth{font-size:12px;margin-top:8px;opacity:.85}.livehealth .ok{color:var(--ok)}.livehealth .warn{color:var(--warn)}.livehealth .crit,.livehealth .err{color:var(--crit)}
-details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block;cursor:pointer}.pwshow.copied{border-color:var(--ok)}.pwshow.copied::after,.pwshow.copyfail::after{font-family:inherit;font-size:13px;font-weight:400;letter-spacing:0}.pwshow.copied::after{content:"  ✓ kopiert";color:var(--ok)}.pwshow.copyfail::after{content:"  markiert: bitte Strg/Cmd+C";color:var(--warn)}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
+details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.wcard{margin-bottom:6px}.hsrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 2px 18px}.hsrow .muted{font-size:13px}
+.hsw{min-width:64px;font-weight:700}.hsw.on{background:var(--ok);border-color:var(--ok);color:#06210f}
+.hspanel{margin:6px 0 10px 18px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block;cursor:pointer}.pwshow.copied{border-color:var(--ok)}.pwshow.copied::after,.pwshow.copyfail::after{font-family:inherit;font-size:13px;font-weight:400;letter-spacing:0}.pwshow.copied::after{content:"  ✓ kopiert";color:var(--ok)}.pwshow.copyfail::after{content:"  markiert: bitte Strg/Cmd+C";color:var(--warn)}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
 .foot a{color:var(--muted);text-decoration:underline}.footlinks{margin-top:6px}
 .pending{margin-top:10px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:13px}.pending button{margin-left:8px;padding:4px 10px}
 dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn);border-radius:12px;max-width:min(420px,90vw);padding:18px}dialog#rdlg::backdrop{background:rgba(0,0,0,.6)}
@@ -388,6 +391,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <div class="sens"><div class="sech">WLAN-Verbindungen (z. B. Handy-Hotspot, auch zum Senden nutzbar)</div><div id="wificard">
     <div class="ph" style="margin-top:0">Verbindet die Box mit einem WLAN, zum Beispiel dem Hotspot eines Handys. Danach in der Zeile der WLAN-Karte „Zum Senden verwenden“ ankreuzen (wird sofort gespeichert). Das Passwort wird nur an das Netzwerk-Programm der Box übergeben und nicht gespeichert.</div>
     <div id="wifidev"></div>
+    <div id="hsmsg" class="ph" style="margin:6px 0" role="status"></div>
     <div class="wform">
       <label class="muted">WLAN-Karte<select id="w_if"></select></label>
       <label class="muted">Netzname (SSID)<input id="w_ssid" maxlength="32" autocomplete="off"></label>
@@ -398,19 +402,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="wifimsg" class="ph" style="margin:8px 0" role="status"></div>
     <div id="wifinets" class="ph"></div>
     <div id="wifisaved" class="ph"></div>
-    <div class="sech" style="margin-top:16px">WLAN-Hotspot (Stick als Zugangspunkt der Box)</div>
-    <div class="ph" style="margin-top:0">Macht aus einem WLAN-Stick ein eigenes WLAN der Box, zum Beispiel für DJI-Kameras oder ein Handy. Der Stick ist dann nicht mehr mit einem anderen WLAN verbunden. Danach bei der Kamera unter „Verbindung der Kamera“ den Hotspot wählen: Name und Passwort übernimmt die Box selbst. Ein laufender Hotspot startet nach einem Neustart der Box von selbst wieder, bis du ihn beendest. Er hat keinen Weg ins Internet und ist deshalb kein Netz zum Senden.</div>
-    <div id="hsdev"></div>
-    <div class="wform">
-      <label class="muted">WLAN-Karte<select id="h_if"></select></label>
-      <label class="muted">Name des Hotspots<input id="h_ssid" maxlength="32" autocomplete="off" placeholder="IRL4YOU-BOX"></label>
-      <label class="muted">Passwort (8 bis 63 Zeichen)<input id="h_pw" type="password" maxlength="63" autocomplete="new-password" placeholder="leer = gespeichertes Passwort"></label>
-      <label class="muted">Band<select id="h_band"><option value="bg">2,4 GHz (reicht weiter)</option><option value="a">5 GHz (schneller, weniger Störungen)</option></select></label>
-      <label class="muted">Kanal<select id="h_ch"></select></label>
-    </div>
-    <div class="actions"><button id="h_start" type="button">Hotspot starten</button> <button id="h_stop" type="button" class="sec">Hotspot beenden</button> <button id="h_gen" type="button" class="sec" title="Zufälliges Passwort eintragen (noch nicht gespeichert)">Passwort erzeugen</button> <button id="h_show" type="button" class="sec" title="Name und Passwort des gespeicherten Hotspots dieser Karte anzeigen">Passwort anzeigen</button></div>
-    <div id="hmsg" class="ph" style="margin:8px 0" role="status"></div>
-    <div id="h_pw_out" class="ph sens" role="status"></div>
   </div></div>
     <div class="sech">Bluetooth (für DJI-Kameras)</div>
     <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
@@ -951,12 +942,7 @@ async function wifiLoad(){
     if(usable.some(c=>c.iface===cur)) sel.value=cur;
   }
   const ups=((srtlaData&&srtlaData.settings)||{}).uplinks||[];
-  const hsText=c=>`Hotspot <b>${esc(c.hotspot.ssid)}</b> läuft · ${esc(c.ip)}`;
-  $("wifidev").innerHTML=d.cards.length?d.cards.map(c=>c.camera_net?`<div class="wstat${hsOn0(c)?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b>${devInfo(c)} · Kameranetz${hsOn0(c)?" · "+hsText(c):""} (hier nicht änderbar)</span></div>`:
-    hsOn0(c)?`<div class="wstat ok"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b>${devInfo(c)} · ${hsText(c)}</span></div>`:
-    `<div class="wstat${c.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(c.iface)}</b>${devInfo(c)} · ${c.ip?`verbunden${c.ssid?" mit <b>"+esc(c.ssid)+"</b>":""} · ${esc(c.ip)}${c.signal!=null?" · Signal "+c.signal+" %":""}`:"nicht verbunden"}</span>`+
-    (c.ip?`<label title="Sendet die Box auch über dieses Netz. Danach Sendekette neu starten."><input type="checkbox" data-wup="${esc(c.iface)}"${ups.includes(c.iface)?" checked":""}> Zum Senden verwenden</label>`:"")+`</div>`).join(""):'<div class="ph">Keine WLAN-Karte gefunden.</div>';
-  hsRender(d);
+  renderWifiDev(d);
   const sig=d.cards.map(c=>c.iface+":"+c.ip).join("|");
   if(wifiSig!==null&&sig!==wifiSig) srtlaLoad();          // neue Verbindung: Liste der Sendewege unten aktualisieren
   wifiSig=sig;
@@ -969,70 +955,108 @@ async function wifiLoad(){
   wifiPwHint();
   const hsAct=String(d.action||"").startsWith("hotspot_");                    // Meldung des letzten Auftrags dort zeigen, wo er ausgelöst wurde
   $("wifimsg").textContent=d.helper_installed?(hsAct?"":(d.message||"")):"Der WLAN-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
-  if(!hsShown) $("hmsg").textContent=d.helper_installed?(hsAct?(d.message||""):""):"Der WLAN-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
-  $("w_scan").disabled=$("w_connect").disabled=$("w_disc").disabled=$("h_start").disabled=$("h_stop").disabled=!d.helper_installed||d.state==="working";
-  if(d.state==="working"){ (hsAct?$("hmsg"):$("wifimsg")).textContent="Läuft …"; hsShown=false; clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); }
+  $("hsmsg").textContent=!d.helper_installed?"":(hsAct?(d.state==="working"?"Läuft …":(d.message||"")):hsMsg);
+  for(const k of Object.keys(hsSaving)){                                       // gespeicherte Einstellungen: Feld schließen, bei Fehler offen lassen
+    if(d.state==="done"&&d.action==="hotspot_save"){ hsOpen[k]=false; delete hsDraft[k]; delete hsSaving[k]; renderWifiDev(d,true); }
+    else if(d.state==="error"){ delete hsSaving[k]; }
+  }
+  $("w_scan").disabled=$("w_connect").disabled=$("w_disc").disabled=!d.helper_installed||d.state==="working";
+  if(d.state==="working"){ (hsAct?$("hsmsg"):$("wifimsg")).textContent="Läuft …"; clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); }
 }
-// ---- WLAN-Hotspot ----
-let hsShown=false, hsFilled={};          // hsShown: die Meldung zeigt gerade ein angezeigtes Passwort und wird nicht überschrieben
+// ---- WLAN-Karten und Hotspot: je Stick "Hotspot-Modus" (An/Aus) und "Einstellen" (Issue #16) ----
 const HS_CH={bg:[0,1,2,3,4,5,6,7,8,9,10,11,12,13],a:[0,36,40,44,48]};
-function hsFillCh(keep){
-  const band=$("h_band").value, sel=$("h_ch"), cur=keep!==undefined?String(keep):sel.value;
-  sel.innerHTML=HS_CH[band].map(n=>`<option value="${n}">${n?"Kanal "+n:"automatisch"}</option>`).join("");
-  sel.value=HS_CH[band].map(String).includes(cur)?cur:"0";
-}
-function hsRender(d){
-  const caps=d.cards.filter(c=>c.ap!==false), sel=$("h_if"), cur=sel.value, usable=caps.filter(c=>!c.camera_net);
-  if(document.activeElement!==sel){
-    sel.innerHTML=usable.map(c=>`<option value="${esc(c.iface)}">${esc(c.iface)}${(c.label||c.name)?" · "+esc(c.label||c.name):""}${hsOn0(c)?" · Hotspot läuft":""}</option>`).join("")||'<option value="">keine geeignete WLAN-Karte</option>';
-    if(usable.some(c=>c.iface===cur)) sel.value=cur;
-  }
-  const c=usable.find(x=>x.iface===sel.value);
-  if(c&&!hsFilled[c.iface]&&document.activeElement.id!=="h_ssid"){            // gespeicherte Einstellungen einmal je Karte in die Felder übernehmen
-    hsFilled[c.iface]=true;
-    $("h_ssid").value=c.hotspot?c.hotspot.ssid:($("h_ssid").value||"IRL4YOU-BOX");
-    $("h_band").value=c.hotspot&&c.hotspot.band==="a"?"a":"bg"; hsFillCh(c.hotspot?c.hotspot.channel:0);
-  }
-  if(!$("h_ch").options.length) hsFillCh(0);
-  [...$("h_band").options].forEach(o=>{ o.disabled=o.value==="a"&&!!c&&c.band5===false; });
-  $("hsdev").innerHTML=d.cards.filter(x=>x.hotspot).map(x=>`<div class="wstat${hsOn0(x)?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(x.iface)}</b> · Hotspot <b>${esc(x.hotspot.ssid)}</b> · ${x.hotspot.band==="a"?"5":"2,4"} GHz${x.hotspot.channel?", Kanal "+x.hotspot.channel:""} · ${hsOn0(x)?"läuft ("+esc(x.ip)+")":"beendet"}</span></div>`).join("");
-  $("h_stop").hidden=!(c&&c.hotspot);
-  $("h_show").hidden=!(c&&c.hotspot);
-  $("h_start").textContent=c&&hsOn0(c)?"Hotspot neu starten":"Hotspot starten";
-}
 const hsOn0=c=>!!(c.hotspot&&c.hotspot.running);
-$("h_band").addEventListener("change",()=>hsFillCh());
-$("h_if").addEventListener("change",()=>{ hsFilled={}; hsRender(wifiData); });
-$("h_gen").addEventListener("click",()=>{
-  const al="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789", a=new Uint32Array(12); crypto.getRandomValues(a);
-  $("h_pw").value=[...a].map(n=>al[n%al.length]).join(""); $("h_pw").type="text";
-  $("hmsg").textContent="Neues Passwort eingetragen. Erst mit „Hotspot starten“ gilt es; bitte notieren oder bei der Kamera eintragen.";
-  $("h_pw_out").innerHTML='<div class="muted">Neues Passwort (noch nicht gespeichert)</div><div class="pwshow">'+esc($("h_pw").value)+'</div>';
-});
-$("h_show").addEventListener("click",async()=>{
-  $("h_pw_out").textContent="";
-  try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent($("h_if").value)); $("hmsg").textContent="";
-       $("h_pw_out").innerHTML='<div class="muted">Hotspot „'+esc(r.ssid)+'“, Passwort (ein Klick kopiert es)</div><div class="pwshow">'+esc(r.password)+'</div>'; }
-  catch(x){ $("hmsg").textContent=x.message; }
-});
-$("h_start").addEventListener("click",async()=>{
-  const c=((wifiData&&wifiData.cards)||[]).find(x=>x.iface===$("h_if").value);
-  if(!c){ $("hmsg").textContent="Keine WLAN-Karte gewählt."; return; }
-  const body={action:"hotspot_start",iface:c.iface,ssid:$("h_ssid").value.trim()||"IRL4YOU-BOX",password:$("h_pw").value,band:$("h_band").value,channel:parseInt($("h_ch").value,10)||0};
-  if(c.ip&&!hsOn0(c)){
+let hsOpen={}, hsDraft={}, hsPwText={}, hsSaving={}, hsMsg="";
+function devRow(c,ups){                                    // Zeile einer WLAN-Karte: Name, Verbindung, "Zum Senden verwenden"
+  const head=`<b>${esc(c.iface)}</b>${devInfo(c)}`;
+  if(c.camera_net) return `<div class="wstat${hsOn0(c)?" ok":""}"><span class="wdot"></span><span class="wgrow">${head} · Kameranetz${hsOn0(c)?" · Hotspot <b>"+esc(c.hotspot.ssid)+"</b> läuft · "+esc(c.ip):""} (hier nicht änderbar)</span></div>`;
+  if(hsOn0(c)) return `<div class="wstat ok"><span class="wdot"></span><span class="wgrow">${head} · Hotspot <b>${esc(c.hotspot.ssid)}</b> läuft · ${esc(c.ip)}</span></div>`;
+  return `<div class="wstat${c.ip?" ok":""}"><span class="wdot"></span><span class="wgrow">${head} · ${c.ip?`verbunden${c.ssid?" mit <b>"+esc(c.ssid)+"</b>":""} · ${esc(c.ip)}${c.signal!=null?" · Signal "+c.signal+" %":""}`:"nicht verbunden"}</span>`+
+    (c.ip?`<label title="Sendet die Box auch über dieses Netz. Danach Sendekette neu starten."><input type="checkbox" data-wup="${esc(c.iface)}"${ups.includes(c.iface)?" checked":""}> Zum Senden verwenden</label>`:"")+`</div>`;
+}
+function hsDefaults(c){ const h=c.hotspot; return {ssid:h?h.ssid:"IRL4YOU-BOX",pw:"",band:h&&h.band==="a"?"a":"bg",ch:h?(h.channel||0):0}; }
+function hsPanel(c,busy){
+  const dr=hsDraft[c.iface]||(hsDraft[c.iface]=hsDefaults(c)), chs=HS_CH[dr.band]||HS_CH.bg, off=busy?" disabled":"";
+  return `<div class="hspanel" data-iface="${esc(c.iface)}"><div class="wform">
+    <label class="muted">Name des Hotspots<input class="hs-ssid" maxlength="32" autocomplete="off" value="${esc(dr.ssid)}"></label>
+    <label class="muted">Passwort (8 bis 63 Zeichen)<input class="hs-pw-in" maxlength="63" autocomplete="off" value="${esc(dr.pw)}" placeholder="${c.hotspot?"leer = gespeichertes Passwort":""}"></label>
+    <label class="muted">Band<select class="hs-band"><option value="bg"${dr.band==="bg"?" selected":""}>2,4 GHz (reicht weiter)</option><option value="a"${dr.band==="a"?" selected":""}${c.band5===false?" disabled":""}>5 GHz (schneller, weniger Störungen)</option></select></label>
+    <label class="muted">Kanal<select class="hs-ch">${chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?"Kanal "+n:"automatisch"}</option>`).join("")}</select></label>
+  </div><div class="actions"><button type="button" class="hs-save"${off}>Speichern</button> <button type="button" class="sec hs-gen">Passwort erzeugen</button> <button type="button" class="sec hs-close">Schließen</button></div></div>`;
+}
+function hsControls(c,busy){                                // Zeile "Hotspot-Modus" unter der Karte (nicht bei Karten ohne Zugangspunkt-Betrieb)
+  if(c.ap===false) return "";
+  const on=hsOn0(c), pw=hsPwText[c.iface], off=busy?" disabled":"";
+  const label=`<span class="muted" title="Macht aus dem Stick ein eigenes WLAN der Box, zum Beispiel für DJI-Kameras oder ein Handy. Der Stick ist dann nicht mehr mit einem anderen WLAN verbunden.">Hotspot-Modus</span>`;
+  const show=`<button type="button" class="sec hs-show">${pw?"Passwort ausblenden":"Passwort anzeigen"}</button>`;
+  const pwRow=pw?`<div class="hsrow"><div class="pwshow" title="Klicken kopiert das Passwort">${esc(pw)}</div></div>`:"";
+  if(c.camera_net) return on?`<div class="hsrow">${label} <b>An</b> ${show}</div>${pwRow}`:"";
+  return `<div class="hsrow">${label}<button type="button" class="hs-toggle hsw${on?" on":" sec"}" role="switch" aria-checked="${on}" title="${on?"Hotspot ausschalten":"Hotspot einschalten"}"${off}>${on?"An":"Aus"}</button>`+
+    (on?show:`<button type="button" class="sec hs-edit"${hsOpen[c.iface]?" disabled":""}${off}>Einstellen</button>`)+`</div>`+(on?pwRow:(hsOpen[c.iface]?hsPanel(c,busy):""));
+}
+function renderWifiDev(d,force){
+  const ups=((srtlaData&&srtlaData.settings)||{}).uplinks||[], busy=!d.helper_installed||d.state==="working";
+  const html=d.cards.length?d.cards.map(c=>`<div class="wcard" data-iface="${esc(c.iface)}">${devRow(c,ups)}${hsControls(c,busy)}</div>`).join(""):'<div class="ph">Keine WLAN-Karte gefunden.</div>';
+  const el=$("wifidev"), a=document.activeElement;
+  if(!force&&a&&el.contains(a)&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;      // nie ersetzen, während getippt wird
+  if(el._html!==html){ el.innerHTML=html; el._html=html; }
+}
+function hsCard(iface){ return ((wifiData&&wifiData.cards)||[]).find(x=>x.iface===iface); }
+function setHsMsg(t){ hsMsg=t; $("hsmsg").textContent=t; }
+async function hsPost(body,wait){
+  setHsMsg(wait);
+  try{ await srtlaCall("POST","/api/wifi",body); }catch(x){ setHsMsg(x.message); return false; }
+  clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
+  return true;
+}
+async function hsToggle(iface){
+  const c=hsCard(iface); if(!c) return;
+  if(hsOn0(c)){ delete hsPwText[iface]; await hsPost({action:"hotspot_stop",iface},"Hotspot wird beendet …"); return; }
+  if(!c.hotspot){                                           // noch nie eingestellt: erst Name und Passwort festlegen
+    hsOpen[iface]=true; setHsMsg("Bitte zuerst „Einstellen“: Name und Passwort festlegen, dann einschalten."); renderWifiDev(wifiData,true); return;
+  }
+  const body={action:"hotspot_start",iface};
+  if(c.ip){
     if(!confirm("Die WLAN-Karte "+c.iface+" ist gerade mit "+(c.ssid?"„"+c.ssid+"“":"einem WLAN")+" verbunden. Der Hotspot beendet diese Verbindung."+
-                "\n\nHast du die Oberfläche über dieses WLAN geöffnet, bricht sie ab. Du erreichst sie danach über den Hotspot (Adresse meist 10.42.0.1) oder über ein anderes Netz.\n\nHotspot starten?")) return;
+                "\n\nHast du die Oberfläche über dieses WLAN geöffnet, bricht sie ab. Du erreichst sie danach über den Hotspot (Adresse meist 10.42.0.1) oder über ein anderes Netz.\n\nHotspot einschalten?")) return;
     body.confirm=true;
   }
-  hsShown=false; $("h_pw_out").textContent=""; $("hmsg").textContent="Hotspot wird gestartet …";
-  try{ await srtlaCall("POST","/api/wifi",body); }catch(x){ $("hmsg").textContent=x.message; return; }
-  $("h_pw").value=""; $("h_pw").type="password";
-  clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
+  await hsPost(body,"Hotspot wird gestartet …");
+}
+async function hsSave(iface){
+  const dr=hsDraft[iface]; if(!dr) return;
+  if(await hsPost({action:"hotspot_save",iface,ssid:(dr.ssid||"").trim(),password:dr.pw||"",band:dr.band,channel:parseInt(dr.ch,10)||0},"Speichere die Einstellungen …")) hsSaving[iface]=true;
+}
+async function hsShow(iface){
+  if(hsPwText[iface]){ delete hsPwText[iface]; renderWifiDev(wifiData,true); return; }
+  try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent(iface)); hsPwText[iface]=r.password; setHsMsg(""); }
+  catch(x){ setHsMsg(x.message); }
+  renderWifiDev(wifiData,true);
+}
+$("wifidev").addEventListener("click",e=>{
+  const t=e.target.closest&&e.target.closest("button"); if(!t) return;
+  const card=t.closest(".wcard"); if(!card) return; const iface=card.dataset.iface;
+  if(t.classList.contains("hs-toggle")) hsToggle(iface);
+  else if(t.classList.contains("hs-edit")){ hsOpen[iface]=true; hsDraft[iface]=hsDefaults(hsCard(iface)||{}); setHsMsg(""); renderWifiDev(wifiData,true); }
+  else if(t.classList.contains("hs-close")){ hsOpen[iface]=false; delete hsDraft[iface]; renderWifiDev(wifiData,true); }
+  else if(t.classList.contains("hs-save")) hsSave(iface);
+  else if(t.classList.contains("hs-show")) hsShow(iface);
+  else if(t.classList.contains("hs-gen")){
+    const al="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789", a=new Uint32Array(12); crypto.getRandomValues(a);
+    const dr=hsDraft[iface]||(hsDraft[iface]=hsDefaults(hsCard(iface)||{})); dr.pw=[...a].map(n=>al[n%al.length]).join("");
+    const inp=card.querySelector(".hs-pw-in"); if(inp) inp.value=dr.pw;
+    setHsMsg("Neues Passwort eingetragen. Mit „Speichern“ wird es übernommen; bitte notieren.");
+  }
 });
-$("h_stop").addEventListener("click",async()=>{
-  hsShown=false; $("h_pw_out").textContent=""; $("hmsg").textContent="Hotspot wird beendet …";
-  try{ await srtlaCall("POST","/api/wifi",{action:"hotspot_stop",iface:$("h_if").value}); }catch(x){ $("hmsg").textContent=x.message; return; }
-  clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
+$("wifidev").addEventListener("input",e=>{                  // Eingaben im Feld "Einstellen" merken (die Anzeige wird währenddessen nicht neu aufgebaut)
+  const card=e.target.closest&&e.target.closest(".wcard"); const dr=card&&hsDraft[card.dataset.iface]; if(!dr) return;
+  const c=e.target.classList;
+  if(c.contains("hs-ssid")) dr.ssid=e.target.value; else if(c.contains("hs-pw-in")) dr.pw=e.target.value;
+  else if(c.contains("hs-band")){
+    dr.band=e.target.value; const sel=card.querySelector(".hs-ch"), chs=HS_CH[dr.band]||HS_CH.bg;
+    if(!chs.includes(+dr.ch)) dr.ch=0;
+    sel.innerHTML=chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?"Kanal "+n:"automatisch"}</option>`).join("");
+  }else if(c.contains("hs-ch")) dr.ch=parseInt(e.target.value,10)||0;
 });
 function wifiPwHint(){
   const saved=((wifiData&&wifiData.saved)||[]).includes($("w_ssid").value);
@@ -1066,7 +1090,7 @@ $("wificard").addEventListener("click",e=>{
   if(a.dataset.ssid!==undefined){ $("w_ssid").value=a.dataset.ssid; wifiPwHint(); }
   if(a.dataset.forget!==undefined) wifiDo({action:"forget",ssid:a.dataset.forget},"Wird vergessen …");
 });
-wifiLoad(); setInterval(()=>{ if(due("wifi","netcard",60000)&&!["w_if","w_ssid","w_pw","h_if","h_ssid","h_pw","h_band","h_ch"].includes(document.activeElement.id)) wifiLoad(); },10000);
+wifiLoad(); setInterval(()=>{ if(due("wifi","netcard",60000)&&!["w_if","w_ssid","w_pw"].includes(document.activeElement.id)) wifiLoad(); },10000);
 
 const FREE_ID="5";
 let posFree={1:{x:500,y:500},2:{x:500,y:500},3:{x:500,y:500}};

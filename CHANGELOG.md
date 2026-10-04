@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.73 (Beta)
+- Geändert (Issue #16, Rückmeldung des Melders): **Der Hotspot wird jetzt je WLAN-Stick bedient.** Der große Abschnitt "WLAN-Hotspot" mit Kartenauswahl ist weg. Unter jeder WLAN-Karte steht stattdessen eine Zeile **"Hotspot-Modus"** mit einem Schalter **"Aus" / "An"** und, nur im Zustand "Aus", dem Knopf **"Einstellen"**.
+  - **"Einstellen"** öffnet die Einstellungen (Name, Passwort, Band, Kanal, "Passwort erzeugen") direkt im Feld dieses Sticks; **"Speichern"** merkt sie, ohne den Hotspot zu starten (neue Aktion `hotspot_save` im Helfer). Läuft der Hotspot, geht das nicht (erst ausschalten, dann einstellen). Eingaben gehen nicht verloren, wenn sich die Anzeige im Hintergrund aktualisiert.
+  - **Der Schalter "An"** startet den Hotspot mit den gespeicherten Einstellungen (die Oberfläche schickt nur die Karte, Name und Passwort kommen aus der gespeicherten Datei). Wurde der Stick noch nie eingestellt, öffnet der Schalter das Feld "Einstellen" und bittet um Name und Passwort, statt ohne Passwort zu starten. Ist die Karte mit einem WLAN verbunden, fragt die Oberfläche vorher nach (diese Verbindung endet), wie bisher.
+  - **"Aus"** beendet den Hotspot (und schaltet den automatischen Start nach einem Neustart ab, wie bisher). **Neue Sticks stehen immer auf "Aus".** Karten, die keinen Zugangspunkt-Betrieb können, bekommen keinen Schalter. Läuft der Hotspot, gibt es **"Passwort anzeigen"** / **"Passwort ausblenden"** (groß, Klick kopiert). Die Karte des Kameranetzes zeigt nur "An" und das Passwort, sie lässt sich dort nicht ändern.
+  - Der Hinweistext zum Hotspot steht jetzt als Tooltip am Wort "Hotspot-Modus".
+- Tests: `tools/test_hotspot.py` auf 55 Tests (Speichern ohne Einschalten, gespeichertes Passwort bei leerem Feld, Ablehnung während der Hotspot läuft, Start mit gespeicherten Werten, Bestätigung bei verbundener Karte, Seite: Schalter je Stick, Einstellen nur im Zustand Aus, alter Abschnitt entfernt).
+
 ## 0.9.72 (Beta)
 - Geändert (Issue #18, Rückmeldung des Melders): **Karte "Entwickler" überarbeitet.**
   - **Ein Knopf zum Umschalten:** "SSH einschalten" wird nach dem Klick an derselben Stelle zu "SSH ausschalten" (vorher gab es zwei Knöpfe, einer davon grau).

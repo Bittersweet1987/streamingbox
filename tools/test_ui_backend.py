@@ -1264,8 +1264,9 @@ class HeaderControls(unittest.TestCase):
 
     def test_wlan_cards_show_the_name_of_the_stick(self):
         """Issue #6: Die Namen der WLAN-Sticks (z. B. 802.11ac NIC) stehen in der Übersicht und in der Auswahl der WLAN-Karte."""
-        self.assertIn("${devInfo(c)} · Kameranetz", self.html)
-        self.assertIn("<b>${esc(c.iface)}</b>${devInfo(c)} · ${c.ip?", self.html)
+        self.assertIn("const head=`<b>${esc(c.iface)}</b>${devInfo(c)}`", self.html)          # Name des Sticks steht in jeder Zeile (Zeilen der Karten: devRow)
+        self.assertIn("${head} · Kameranetz", self.html)
+        self.assertIn("${head} · ${c.ip?", self.html)
         self.assertIn('${(c.label||c.name)?" · "+esc(c.label||c.name):(c.ip?" · "+esc(c.ip):"")}', self.html)
 
     def test_wifi_cards_carry_name_vendor_usb_id_and_driver(self):

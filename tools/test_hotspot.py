@@ -211,8 +211,56 @@ class HelperHotspot(unittest.TestCase):
             self.assertEqual(H2.wifi_caps("wlan1"), {"ap": False, "2ghz": False, "5ghz": False})
 
     def test_actions_list(self):
-        self.assertIn("hotspot_start", H.ACTIONS)
-        self.assertIn("hotspot_stop", H.ACTIONS)
+        for a in ("hotspot_start", "hotspot_stop", "hotspot_save"):
+            self.assertIn(a, H.ACTIONS)
+
+    def save(self, req=None, nm=None, active=False):
+        nm = nm or FakeNm()
+        with mock.patch.object(H, "nm", nm), mock.patch.object(H, "hotspot_active", lambda i: active):
+            return nm, H.do_hotspot_save(dict(self.REQ, action="hotspot_save", **(req or {})))
+
+    def test_save_stores_the_settings_without_touching_networkmanager(self):
+        nm, msg = self.save()
+        self.assertEqual(nm.calls, [])                                                    # kein Profil, kein Einschalten
+        self.assertEqual(json.load(open(self.hs))["wlan1"], {"ssid": "Box Netz", "password": "geheim1234", "band": "bg", "channel": 6})
+        self.assertEqual(stat.S_IMODE(os.stat(self.hs).st_mode), 0o600)
+        self.assertNotIn("geheim1234", msg)
+
+    def test_save_keeps_the_saved_password_when_the_field_is_empty(self):
+        self.save()
+        self.save({"password": "", "ssid": "Neuer Name", "band": "a", "channel": 40})
+        self.assertEqual(json.load(open(self.hs))["wlan1"], {"ssid": "Neuer Name", "password": "geheim1234", "band": "a", "channel": 40})
+
+    def test_save_is_refused_while_the_hotspot_runs_and_for_bad_values(self):
+        with self.assertRaises(ValueError) as e:
+            self.save(active=True)
+        self.assertIn("läuft", str(e.exception))
+        self.assertFalse(os.path.exists(self.hs))
+        for bad in ({"ssid": ""}, {"password": "kurz"}, {"band": "ac"}, {"channel": 99}, {"password": ""}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                self.save(bad)
+        self.assertFalse(os.path.exists(self.hs))
+
+    def test_save_checks_what_the_card_can(self):
+        with mock.patch.object(H, "wifi_caps", lambda i: {"ap": False, "2ghz": True, "5ghz": False}):
+            with self.assertRaises(ValueError):
+                self.save()
+        with mock.patch.object(H, "wifi_caps", lambda i: {"ap": True, "2ghz": True, "5ghz": False}):
+            with self.assertRaises(ValueError):
+                self.save({"band": "a", "channel": 0})
+
+    def test_start_after_save_with_empty_password_uses_the_saved_one(self):
+        self.save()
+        nm, _ = self.start({"password": ""})
+        add = nm.find("con", "add")[0]
+        self.assertEqual(add[add.index("wifi-sec.psk") + 1], "geheim1234")
+
+    def test_save_never_follows_a_planted_link(self):
+        victim = os.path.join(self.d, "wichtig")
+        open(victim, "w").write("unberührt")
+        os.symlink(victim, self.hs)
+        self.save()
+        self.assertEqual(open(victim).read(), "unberührt")
 
 
 class FakeSrtla:
@@ -341,6 +389,79 @@ class ServerHotspot(unittest.TestCase):
         w.request(dict(self.REQ, password=""))
         self.assertEqual(self.sent(d)["password"], "")                             # der Helfer nimmt dann das gespeicherte
 
+    def saved_file(self, d, iface="wlan1", **kw):
+        with open(os.path.join(d, "hotspot.json"), "w") as f:
+            json.dump({iface: dict({"ssid": "Gespeichert", "password": "gespeichert99", "band": "a", "channel": 40}, **kw)}, f)
+
+    def test_save_request_goes_to_the_helper_without_starting(self):
+        w, d = self.make()
+        w.request({"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234", "band": "bg", "channel": 6})
+        self.assertEqual(self.sent(d), {"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234", "band": "bg", "channel": 6})
+        self.assertEqual(w.srtla.set, [])                                                   # Speichern ändert die Sendewege nicht
+
+    def test_save_needs_no_confirmation_even_on_a_connected_card(self):
+        w, d = self.make([dict(self.CARD, ip="10.0.0.5", ssid="Heim")])
+        w.request({"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234", "band": "bg", "channel": 0})
+        self.assertTrue(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_save_is_refused_while_the_hotspot_runs(self):
+        w, d = self.make([dict(self.CARD, ip="10.42.0.1", hotspot={"ssid": "Box", "running": True, "band": "bg", "channel": 0})])
+        with self.assertRaises(ValueError) as e:
+            w.request({"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234"})
+        self.assertIn("ausschalten", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_save_validates_like_start(self):
+        w, d = self.make()
+        for bad in ({"ssid": ""}, {"ssid": " x"}, {"password": "kurz"}, {"password": ""}, {"band": "ac"}, {"channel": 99}, {"iface": "wlan9"}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                w.request(dict({"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234", "band": "bg", "channel": 0}, **bad))
+        self.assertFalse(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_start_without_values_uses_the_saved_settings(self):
+        w, d = self.make()
+        self.saved_file(d)
+        w.request({"action": "hotspot_start", "iface": "wlan1"})
+        self.assertEqual(self.sent(d), {"action": "hotspot_start", "iface": "wlan1", "ssid": "Gespeichert", "password": "", "band": "a", "channel": 40})
+        self.assertNotIn("gespeichert99", open(os.path.join(d, "wifi-request")).read())      # das gespeicherte Passwort holt sich der Helfer selbst
+
+    def test_start_without_saved_settings_asks_to_set_them_up_first(self):
+        w, d = self.make()
+        with self.assertRaises(ValueError) as e:
+            w.request({"action": "hotspot_start", "iface": "wlan1"})
+        self.assertIn("Einstellen", str(e.exception))
+        self.saved_file(d, password="")                                                     # ohne Passwort gilt es nicht als eingestellt
+        with self.assertRaises(ValueError):
+            w.request({"action": "hotspot_start", "iface": "wlan1"})
+        self.assertFalse(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_start_from_saved_settings_still_needs_confirmation_on_a_connected_card(self):
+        w, d = self.make([dict(self.CARD, ip="10.0.0.5", ssid="Heim")])
+        self.saved_file(d)
+        with self.assertRaises(ValueError) as e:
+            w.request({"action": "hotspot_start", "iface": "wlan1"})
+        self.assertIn("Bestätigung", str(e.exception))
+        w.request({"action": "hotspot_start", "iface": "wlan1", "confirm": True})
+        self.assertTrue(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_start_from_saved_settings_leaves_the_sending_networks_like_before(self):
+        w, d = self.make()
+        self.saved_file(d)
+        w.request({"action": "hotspot_start", "iface": "wlan1"})
+        self.assertEqual(w.srtla.set[0][0], {"uplinks": ["eth0"]})
+
+    def test_demo_flow_with_save_then_switch(self):
+        w = server.Wifi(tempfile.mkdtemp(), True, mock.Mock(iface="eth2"), None, None)
+        with self.assertRaises(ValueError):
+            w.request({"action": "hotspot_start", "iface": "wlan1"})                          # nie eingestellt
+        w.request({"action": "hotspot_save", "iface": "wlan1", "ssid": "Box", "password": "geheim1234", "band": "bg", "channel": 6})
+        c = [c for c in w.status()["cards"] if c["iface"] == "wlan1"][0]
+        self.assertEqual((c["hotspot"]["ssid"], c["hotspot"]["running"], c["ip"]), ("Box", False, ""))        # gespeichert, aber aus
+        w.request({"action": "hotspot_start", "iface": "wlan1"})
+        c = [c for c in w.status()["cards"] if c["iface"] == "wlan1"][0]
+        self.assertTrue(c["hotspot"]["running"])
+        self.assertEqual(w.hotspot_secret("wlan1")["password"], "geheim1234")
+
     def test_demo_flow(self):
         w = server.Wifi(tempfile.mkdtemp(), True, mock.Mock(iface="eth2"), None, None)
         st = w.status()
@@ -423,10 +544,23 @@ class LogsAndPage(unittest.TestCase):
 
     def test_page(self):
         page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
-        for needle in ('id="h_start"', 'id="h_stop"', 'id="h_pw"', 'id="h_pw_out"', "/api/wifi/hotspot", "hotspot_start", "hotspot_stop", "Verbindungen zum Senden (Upload)",
-                       "WLAN-Verbindungen (z. B. Handy-Hotspot", "Upload (Verbindungen zum Senden)", "WLAN-Hotspot (Stick als Zugangspunkt der Box)"):
+        for needle in ("Hotspot-Modus", "hs-toggle", "hs-edit", "hs-save", "hs-show", "Einstellen", "Passwort ausblenden", "/api/wifi/hotspot",
+                       "hotspot_start", "hotspot_stop", "hotspot_save", "Verbindungen zum Senden (Upload)", "WLAN-Verbindungen (z. B. Handy-Hotspot"):
             self.assertIn(needle, page)
-        self.assertNotIn("Netze zum Senden", page.replace("Nur die Netze zum Senden anzeigen", ""))        # nur noch im Kommentar
+        for gone in ('id="h_start"', 'id="h_stop"', 'id="h_if"', 'id="h_pw"', 'id="h_pw_out"', "WLAN-Hotspot (Stick als Zugangspunkt der Box)"):
+            self.assertNotIn(gone, page)                                                  # alter Abschnitt ist durch den Schalter je Stick ersetzt
+        self.assertNotIn("Netze zum Senden", page.replace("Nur die Netze zum Senden anzeigen", ""))
+
+    def test_switch_per_stick_follows_the_issue(self):
+        page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+        js = page[page.index("function hsControls("):page.index("function renderWifiDev(")]
+        self.assertIn('${on?"An":"Aus"}', js)                                           # Schalter zeigt An oder Aus
+        self.assertIn('class="sec hs-edit"', js)                                          # "Einstellen" nur im Zustand Aus
+        self.assertLess(js.index("hs-toggle"), js.index("hs-edit"))
+        self.assertIn("c.ap===false", js)                                                 # Sticks ohne Zugangspunkt-Betrieb bekommen keinen Schalter
+        toggle = page[page.index("async function hsToggle("):page.index("async function hsSave(")]
+        self.assertIn("if(!c.hotspot)", toggle)                                           # noch nie eingestellt: erst "Einstellen", nie ohne Passwort starten
+        self.assertIn('{action:"hotspot_start",iface}', toggle)                           # Einschalten schickt nur die Karte: Werte kommen aus den gespeicherten
 
 
 if __name__ == "__main__":

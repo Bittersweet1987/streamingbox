@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Root-Helfer für WLAN-Verbindungen (läuft nur über pipbox-wifi.path).
 
-Liest aus der Auslösedatei eine feste Aktion (scan, connect, forget, disconnect, hotspot_start, hotspot_stop) mit streng geprüften
+Liest aus der Auslösedatei eine feste Aktion (scan, connect, forget, disconnect, hotspot_start, hotspot_stop, hotspot_save) mit streng geprüften
 Werten (WLAN-Karte, Netzname, Passwort) und führt sie mit nmcli aus. Das Passwort eines WLANs, mit dem sich die Box verbindet, wird nie
 als Befehlsargument übergeben (nur über stdin an nmcli) und nie ins Protokoll geschrieben; die Auslösedatei wird vor der Ausführung gelöscht.
 Die Karte des Kameranetzes (camera-net.json) und Karten ohne WLAN werden abgelehnt.
@@ -24,7 +24,7 @@ REQ = f"{STATE}/wifi-request"
 RUN = "/run/pipbox-wifi"
 STATUS = f"{RUN}/status.json"
 IFACE_RE = re.compile(r"^[a-z][a-z0-9]{1,14}$")
-ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop")
+ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save")
 HS_PREFIX = "pipbox-hotspot-"
 HOTSPOT_FILE = f"{STATE}/hotspot.json"
 HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}       # erlaubte Kanäle (0 = automatisch); 5 GHz nur ohne Radarpflicht (DFS)
@@ -307,16 +307,13 @@ def check_hotspot_password(pw):
         raise ValueError("Passwort: 8 bis 63 Zeichen (nur ASCII)")
 
 
-def do_hotspot_start(req):
-    iface = req.get("iface")
-    check_iface(iface)
+def hs_values(req, saved):
+    """Name, Passwort, Band und Kanal eines Hotspots aus der Anfrage prüfen. Ein leeres Passwort heißt: das gespeicherte behalten."""
     ssid = req.get("ssid")
     check_hotspot_ssid(ssid)
-    saved = hs_load().get(iface)
-    saved = saved if isinstance(saved, dict) else {}
     pw = req.get("password", "")
     if pw == "":
-        pw = str(saved.get("password", ""))                      # leer = das gespeicherte Passwort behalten
+        pw = str(saved.get("password", ""))
     check_hotspot_password(pw)
     band = req.get("band", "bg")
     if band not in HS_BANDS:
@@ -324,6 +321,10 @@ def do_hotspot_start(req):
     ch = req.get("channel", 0)
     if isinstance(ch, bool) or not isinstance(ch, int) or (ch != 0 and ch not in HS_BANDS[band]):
         raise ValueError("Kanal ungültig für dieses Band")
+    return ssid, pw, band, ch
+
+
+def hs_check_caps(iface, band):
     caps = wifi_caps(iface)
     if not caps["ap"]:
         raise ValueError("Diese WLAN-Karte kann keinen Hotspot aufbauen (kein Zugangspunkt-Betrieb)")
@@ -331,6 +332,32 @@ def do_hotspot_start(req):
         raise ValueError("Diese WLAN-Karte kann kein 5 GHz")
     if band == "bg" and not caps["2ghz"] and caps["5ghz"]:
         raise ValueError("Diese WLAN-Karte kann nur 5 GHz")
+
+
+def do_hotspot_save(req):
+    """Einstellungen des Hotspots speichern, ohne ihn zu starten (Knopf "Einstellen"). Läuft er gerade, geht das nicht: Die gespeicherten Werte
+    gehören zum laufenden Profil (der Kamera-Dienst liest das Passwort daraus)."""
+    iface = req.get("iface")
+    check_iface(iface)
+    if hotspot_active(iface):
+        raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten")
+    saved = hs_load().get(iface)
+    saved = saved if isinstance(saved, dict) else {}
+    ssid, pw, band, ch = hs_values(req, saved)
+    hs_check_caps(iface, band)
+    data = hs_load()
+    data[iface] = {"ssid": ssid, "password": pw, "band": band, "channel": ch}
+    hs_store(data)
+    return f"Hotspot-Einstellungen für {iface} gespeichert"
+
+
+def do_hotspot_start(req):
+    iface = req.get("iface")
+    check_iface(iface)
+    saved = hs_load().get(iface)
+    saved = saved if isinstance(saved, dict) else {}
+    ssid, pw, band, ch = hs_values(req, saved)
+    hs_check_caps(iface, band)
     name = hs_name(iface)
     if name in [p[0] for p in connection_names()]:
         nm("con", "delete", "id", name)                          # Profil neu anlegen, damit nichts Altes (Kanal, Passwort) zurückbleibt
@@ -406,6 +433,8 @@ def main():
             msg = do_hotspot_start(req)
         elif action == "hotspot_stop":
             msg = do_hotspot_stop(req)
+        elif action == "hotspot_save":
+            msg = do_hotspot_save(req)
         else:
             msg = do_disconnect(req)
         write_status(state="done", message=msg, saved=saved_wifi())

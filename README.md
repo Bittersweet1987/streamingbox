@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.72 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.73 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -105,8 +105,9 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Entwickler** (Karte "Entwickler"): SSH-Zugang mit einem Knopf ein- und ausschalten, das SSH-Passwort anzeigen und zurücksetzen, wie in der Original-Oberfläche
   der BELABOX. Der Schalter startet und beendet nur den SSH-Dienst; beim ersten Einschalten wird bei Bedarf ein zufälliges Passwort erzeugt. Schlüssel und
   Einstellungen von SSH bleiben unberührt.
-- **WLAN-Hotspot** (Karte "Verbindungen"): macht aus einem WLAN-Stick ein eigenes WLAN der Box (Name, Passwort, 2,4 oder 5 GHz, Kanal), zum Beispiel für
-  DJI-Kameras oder ein Handy. Die Kamera übernimmt Name und Passwort selbst. Mit NetworkManager umgesetzt; **mit echtem Stick und Kamera noch nicht geprüft**.
+- **WLAN-Hotspot** (Karte "Verbindungen", unter jeder WLAN-Karte): Schalter "Hotspot-Modus" An/Aus und "Einstellen" (Name, Passwort, 2,4 oder 5 GHz, Kanal). Macht
+  aus dem Stick ein eigenes WLAN der Box, zum Beispiel für DJI-Kameras oder ein Handy; die Kamera übernimmt Name und Passwort selbst. Mit NetworkManager umgesetzt;
+  **mit echtem Stick und Kamera noch nicht geprüft**.
 - **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
   oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
   trotzdem kurz durchsehen).

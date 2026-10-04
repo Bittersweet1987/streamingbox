@@ -2128,7 +2128,7 @@ class Wifi:
     verbindet, liegt nur dort und wird nie gespeichert oder ausgegeben; nmcli legt das Profil an. Das Passwort des eigenen Hotspots ist
     zum Weitergeben an Kameras und Handys gedacht und liegt in hotspot.json (Benutzer pipbox, 0600)."""
     STATUS = "/run/pipbox-wifi/status.json"
-    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop")
+    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save")
     HS_PREFIX = "pipbox-hotspot-"
     HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}
 
@@ -2229,13 +2229,13 @@ class Wifi:
                 c = {"iface": iface, "ip": ip, "camera_net": False, "up": bool(ip), "ssid": ssid, "signal": 80 if ip else None,
                      "name": "802.11ac NIC", "vendor": "Realtek", "usb_id": usb, "driver": "rtl8821cu", "ap": True, "band24": True, "band5": True}
                 h = self.fake_hs.get(iface)
-                if h:
+                if h and h.get("running", True):
                     c.update(ip="10.42.0.1", ssid="", signal=None, up=True)
                 c["hotspot"] = {"ssid": h["ssid"], "band": h["band"], "channel": h["channel"], "running": h.get("running", True)} if h else None
                 self._name(c)
                 cards.append(c)
             return {"helper_installed": True, "cards": cards,
-                    "state": "idle", "message": self.fake_msg[1], "action": self.fake_msg[0], "scan": {"iface": "wlan0", "nets": [
+                    "state": "done" if self.fake_msg[0] else "idle", "message": self.fake_msg[1], "action": self.fake_msg[0], "scan": {"iface": "wlan0", "nets": [
                         {"ssid": "Demo-Hotspot", "signal": 80, "security": "WPA2", "in_use": False},
                         {"ssid": "Mein Handy", "signal": 62, "security": "WPA2 WPA3", "in_use": False},
                         {"ssid": "Gast", "signal": 31, "security": "offen", "in_use": False}]}, "saved": []}
@@ -2249,13 +2249,22 @@ class Wifi:
                 "saved": h.get("saved") or [], "time": h.get("time", 0)}
 
     def _hotspot_request(self, d, st, card):
-        """Prüft Starten und Beenden eines Hotspots; gibt die Anfrage für den Helfer zurück."""
+        """Prüft Starten, Beenden und Speichern der Einstellungen eines Hotspots; gibt die Anfrage für den Helfer zurück. Fehlen bei "hotspot_start"
+        Name und Co., gelten die gespeicherten Einstellungen dieser Karte (Schalter "Hotspot-Modus")."""
         action, iface = d.get("action"), card["iface"]
         req = {"action": action, "iface": iface}
+        running = bool((card.get("hotspot") or {}).get("running"))
+        saved = self.hotspots().get(iface) or {}
         if action == "hotspot_stop":
             if not (card.get("hotspot") or {}):
                 raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
             return req
+        if action == "hotspot_save" and running:
+            raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann einstellen")
+        if action == "hotspot_start" and d.get("ssid") is None:
+            if not saved.get("ssid") or not saved.get("password"):
+                raise ValueError("Bitte zuerst „Einstellen“: Name und Passwort des Hotspots festlegen")
+            d = dict(d, ssid=saved["ssid"], password="", band=saved.get("band", "bg"), channel=saved.get("channel", 0))
         ssid = d.get("ssid")
         if (not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32 or ssid != ssid.strip()
                 or any(ord(ch) < 32 or ord(ch) == 127 for ch in ssid) or ssid.startswith(self.HS_PREFIX)):
@@ -2264,7 +2273,7 @@ class Wifi:
         if not isinstance(pw, str):
             raise ValueError("Passwort ungültig")
         if pw == "":
-            if not (self.hotspots().get(iface) or {}).get("password"):
+            if not saved.get("password"):
                 raise ValueError("Bitte ein Passwort vergeben (8 bis 63 Zeichen)")
         elif not 8 <= len(pw) <= 63 or any(not 32 <= ord(ch) < 127 for ch in pw):
             raise ValueError("Passwort: 8 bis 63 Zeichen, nur Buchstaben, Ziffern und Satzzeichen ohne Umlaute")
@@ -2278,8 +2287,7 @@ class Wifi:
             raise ValueError("Diese WLAN-Karte kann keinen Hotspot aufbauen")
         if band == "a" and card.get("band5") is False:
             raise ValueError("Diese WLAN-Karte kann kein 5 GHz")
-        running = bool((card.get("hotspot") or {}).get("running"))
-        if card.get("ip") and not running and d.get("confirm") is not True:
+        if action == "hotspot_start" and card.get("ip") and not running and d.get("confirm") is not True:
             raise ValueError("Bestätigung fehlt: Die Karte ist gerade mit einem WLAN verbunden, diese Verbindung wird beendet")
         req.update(ssid=ssid, password=pw, band=band, channel=ch)
         return req
@@ -2321,10 +2329,11 @@ class Wifi:
         if action == "hotspot_start":
             self._leave_uplinks(iface)
         if self.demo:
-            if action == "hotspot_start":
+            if action in ("hotspot_start", "hotspot_save"):
+                run = action == "hotspot_start"
                 self.fake_hs[iface] = {"ssid": req["ssid"], "password": req["password"] or (self.fake_hs.get(iface) or {}).get("password", ""),
-                                       "band": req["band"], "channel": req["channel"], "running": True}
-                self.fake_msg = (action, "Hotspot „%s“ läuft auf %s (Vorschau)" % (req["ssid"], iface))
+                                       "band": req["band"], "channel": req["channel"], "running": run}
+                self.fake_msg = (action, ("Hotspot „%s“ läuft auf %s (Vorschau)" % (req["ssid"], iface)) if run else "Hotspot-Einstellungen gespeichert (Vorschau)")
             elif action == "hotspot_stop" and iface in self.fake_hs:
                 self.fake_hs[iface]["running"] = False
                 self.fake_msg = (action, "Hotspot beendet (Vorschau)")
