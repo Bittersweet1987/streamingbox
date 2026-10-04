@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.20 (Beta)
+- Geändert: Der "Sendemodus" (Knopf im Kopf der Seite und in der Live-Karte, blendet Adressen, Namen und Protokolle aus) heißt jetzt "Streammodus". Die Einstellung im Browser bleibt erhalten.
+
 ## 0.9.19 (Beta)
 - Behoben: **Ein Aussetzer einer kleinen Kamera beendete die ganze Sendung.** Der Stall-Wächter von belacoder las die Position der gesamten Pipeline
   (das Maximum aller Senken, auch der kleinen Kameras mit den rohen Zeitstempeln ihrer Kamera-Sitzung) und beendete den Encoder, wenn die älteste kleine
