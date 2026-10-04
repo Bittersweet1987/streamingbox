@@ -263,6 +263,29 @@ class SeamlessSwapSender(PrepareWithFailover):
         eff, used = ps.effective_cfg(s.fo.cfg, {"cam-p", "cam-m"})
         self.assertEqual((eff["main"], eff["pip"], eff["main_delay_ms"], eff["pip_delay_ms"]), ("cam-p", "cam-m", 120, 1500))
 
+    def test_sync_does_not_make_the_automatic_switch_restart_the_encoder(self):
+        """Fehler aus dem ersten Test mit echten Kameras: Nach dem Tausch hielt die Automatik die neue Reihenfolge für eine neue Anordnung
+        und startete den Encoder 3 s später neu."""
+        *_, plan = self.start()
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        s.sync_cfg()
+        live = {"cam-m", "cam-p", "cam-q"}
+        self.assertIsNone(s.fo.step(1000, live))                   # vor dem Tausch: nichts zu tun
+        import json
+        json.dump(dict(CFG, swap_cams=2, main="cam-p", pip="cam-m", main_delay_ms=120, pip_delay_ms=1500),
+                  open(os.path.join(self.state, "pipeline.json"), "w"))
+        os.utime(os.path.join(self.state, "pipeline.json"), (time.time() + 9, time.time() + 9))
+        self.assertTrue(s.sync_cfg())
+        self.assertEqual(s.layout, ("cam-p", "cam-m", "cam-q"))
+        for t in range(1001, 1400, 2):                             # die Schleife läuft alle 2 s weiter: nie eine neue Anordnung
+            self.assertIsNone(s.fo.step(t, live), t)
+        # ein echter Ausfall danach schaltet weiter um, und das Hauptbild bleibt cam-p
+        gone = {"cam-p", "cam-q"}
+        out = None
+        for t in range(2000, 2100):
+            out = s.fo.step(t, gone) or out
+        self.assertEqual(out, ("cam-p", "cam-q"))
+
     def test_sync_ignores_other_cameras(self):
         *_, plan = self.start()
         s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)

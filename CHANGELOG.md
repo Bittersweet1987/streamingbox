@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.40 (Beta)
+- Behoben: **Nach einem Tausch ohne Unterbrechung startete die automatische Umschaltung den Encoder etwa 3 Sekunden später doch neu** (gefunden im ersten Test mit echten Kameras: Einbruch im Upload nach dem Wechsel der Kamera). Die Sendekette führte ihre Einstellung nach dem Tausch zwar nach,
+  die Reihenfolge der genutzten Kameras (die Anordnung) aber nicht; die Automatik hielt die neue Reihenfolge für eine neue Anordnung. Jetzt folgt auch die Anordnung der neuen Reihenfolge, der Tausch bleibt ohne Neustart.
+- Tests: Regressionstest, der nach dem Tausch die Schleife der Automatik laufen lässt und eine neue Anordnung ausschließt, und der danach einen echten Ausfall prüft.
+- Neu: Das Einspielen räumt einmalig die Testquellen `tst-a` bis `tst-d` aus der Kameraliste (eine frühere Version hat sie automatisch als Kamera aufgenommen, weil sie bei Tests an die Box gesendet wurden). Der Dienst steht dabei still; andere Kameras bleiben unberührt, auch solche mit ähnlichem Schlüssel.
+  Wer Testquellen an die Box sendet, nimmt Schlüssel mit `test-` am Anfang: Die werden gar nicht erst als Kamera aufgenommen.
+
 ## 0.9.39 (Beta)
 - Neu (experimentell, standardmäßig aus): **Hauptbild tauschen ohne Unterbrechung.** Im Bildaufbau wählt "Hauptbild tauschen ohne Unterbrechung" die Tauschgruppe: *aus* (wie bisher: der Encoder startet neu, etwa 5 Sekunden ohne Bild), *Hauptbild und erstes kleines Bild* oder
   *alle Kameras*. Ist die Gruppe gewählt, bekommt jede ihrer Kameras zwei Zweige (groß für das Hauptbild, klein für das Bild-in-Bild), das ergibt bei vier Kameras im Bild 6 statt 4 Dekodierungen (bei *alle Kameras* 8). Ein neuer Umschalter im Baustein

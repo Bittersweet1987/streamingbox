@@ -2,6 +2,7 @@
 für die RTMP-Leerlaufgrenze (install/pipbox-nginx-guard.sh). Ohne Kameras, ohne Box; braucht nur sh."""
 import contextlib
 import io
+import json
 import os
 import signal
 import stat
@@ -218,6 +219,37 @@ class InstallScript(unittest.TestCase):
         self.assertIn("/etc/apt/apt.conf.d/99pipbox-nginx", s)
         self.assertEqual(s.count("rm -f /etc/apt/apt.conf.d/99pipbox-nginx"), 1)       # Deinstallation entfernt den Haken
         self.assertNotIn("sed -i '/drop_idle_publisher", s)                           # keine zweite Kopie der Logik
+
+    def test_install_script_is_valid_shell(self):
+        r = subprocess.run(["sh", "-n", os.path.join(ROOT, "install", "install.sh")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_cleanup_removes_only_the_development_test_cameras(self):
+        s = rd(os.path.join(ROOT, "install", "install.sh"))
+        code = s.split("python3 - <<'PY' || true\n", 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cameras.json")
+            cams = [{"id": "1", "name": "Action 4", "key": "dji-f04fe2", "role": "main"},
+                    {"id": "2", "name": "Kamera tst-a", "key": "tst-a", "role": "extra"},
+                    {"id": "3", "name": "Kamera tst-d", "key": "tst-d", "role": "extra"},
+                    {"id": "4", "name": "Meine Kamera", "key": "tst-e", "role": "extra"},
+                    {"id": "5", "name": "Test", "key": "test-x", "role": "extra"}]
+            with open(path, "w") as f:
+                json.dump(cams, f)
+            os.chmod(path, 0o600)
+            r = subprocess.run([sys.executable, "-c", code.replace("/var/lib/pipbox/cameras.json", path)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("entfernt: 2", r.stdout)
+            with open(path) as f:
+                self.assertEqual([c["key"] for c in json.load(f)], ["dji-f04fe2", "tst-e", "test-x"])
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            r = subprocess.run([sys.executable, "-c", code.replace("/var/lib/pipbox/cameras.json", path)], capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stdout), (0, ""))                      # zweiter Lauf: nichts mehr zu tun
+            with open(path, "w") as f:
+                f.write("kein json")
+            r = subprocess.run([sys.executable, "-c", code.replace("/var/lib/pipbox/cameras.json", path)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0)                                         # kaputte Datei: Hinweis, kein Abbruch
+            self.assertIn("nicht bereinigt", r.stdout)
 
     def test_apt_hook_is_harmless_without_the_script(self):
         hook = rd(os.path.join(ROOT, "install", "99pipbox-nginx"))

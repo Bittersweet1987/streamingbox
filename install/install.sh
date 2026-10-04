@@ -33,6 +33,28 @@ case "${1:-install}" in
     mkdir -p /var/lib/pipbox
     chown -R pipbox:pipbox /var/lib/pipbox
     chmod 700 /var/lib/pipbox
+    # Einmalige Aufräumung: Testquellen aus der Entwicklung (Schlüssel tst-a bis tst-d), die eine frühere Version automatisch als Kamera
+    # aufgenommen hat, kommen wieder aus der Kameraliste. Der Dienst steht hier still. Andere Kameras bleiben unberührt.
+    if [ -f /var/lib/pipbox/cameras.json ]; then
+      python3 - <<'PY' || true
+import json, os, re
+p = "/var/lib/pipbox/cameras.json"
+try:
+    cams = json.load(open(p))
+    keep = [c for c in cams if not re.fullmatch(r"tst-[a-d]", str(c.get("key", "")))]
+    if len(keep) != len(cams):
+        tmp = p + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(keep, f, indent=1)
+        st = os.stat(p)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, st.st_mode & 0o777)
+        os.replace(tmp, p)
+        print("Testkameras aus der Kameraliste entfernt:", len(cams) - len(keep))
+except Exception as e:
+    print("Hinweis: Die Kameraliste wurde nicht bereinigt:", e)
+PY
+    fi
     install -d /opt/pipbox/web
     # Bluetooth-Dienst nur neu starten, wenn sich seine Dateien ändern (sonst reißen die Kameras ab)
     dji_changed=0

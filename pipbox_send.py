@@ -544,6 +544,12 @@ class Sender:
             return False                          # andere Kameras: das regelt der normale Neustart
         self.plan["cfg"] = new
         self.fo.cfg, self.fo.keys = new, configured_keys(new)
+        # Die Reihenfolge der genutzten Kameras (Anordnung) folgt der neuen Einstellung. Sonst hielte die automatische Umschaltung die
+        # geänderte Reihenfolge beim nächsten Durchlauf für eine neue Anordnung und startete den Encoder neu (gemessen: 3 s nach dem Tausch).
+        def ordered(layout):
+            return tuple(k for k in self.fo.keys if k in set(layout))[:4]
+        self.fo.layout = ordered(self.fo.layout)
+        self.layout = ordered(self.layout)
         return True
 
     def wait_links_ready(self, timeout=20):
