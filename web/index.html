@@ -98,6 +98,7 @@ details.card[open]>summary{margin-bottom:10px}
 .seg button:hover{border-color:var(--accent)}
 .seg button.on{background:var(--bar);border-color:var(--bar);color:#0f172a;font-weight:600;cursor:default}
 .seg button .dot{margin-right:8px}
+.seg button.on .dot{box-shadow:0 0 0 2px #0f172a}
 .statbox .row{padding:2px 0}
 .hdr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .foldd{display:inline-flex;gap:6px}
@@ -813,7 +814,7 @@ async function pipeLoad(){
     const order=(pipCams||[]).map(x=>x.key).filter(k=>inPic.includes(k)), byKey=Object.fromEntries((pipCams||[]).map(x=>[x.key,x]));
     bar.hidden=!(c.type==="pip"&&c.main&&inPic.length>1);
     setHtml($("swapbtns"),order.map(k=>{ const cam=byKey[k]||{}, on=k===c.main;
-      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)"}">${on?"":`<span class="dot${cam.state==="live"?"":" off"}"></span>`}${esc(cam.name||k)}</button>`; }).join("")); }
+      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)"}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
   let info=c.main?`Gespeichert: ${c.type==="pip"?"Bild-in-Bild":"eine Kamera"}, Hauptbild ${c.main}${c.type==="pip"?", kleines Bild "+c.pip+(c.pip2?(c.pip3?", ":" und ")+c.pip2:"")+(c.pip3?" und "+c.pip3:""):""}.`:"Noch keine Pipeline gespeichert.";

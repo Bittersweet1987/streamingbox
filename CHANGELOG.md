@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.37 (Beta)
+- Geändert: Auch die gewählte Hauptkamera hat in der Auswahl des Hauptbilds den Punkt vor dem Namen (grün = sendet, rot = fehlt), mit einem dunklen Rand, damit er auf der hellen Füllung gut zu sehen ist.
+
 ## 0.9.36 (Beta)
 - Geändert: Die Knöpfe für die Auswahl des Hauptbilds haben jetzt dieselbe Eckenrundung wie alle anderen Knöpfe und Eingabefelder (8 Pixel statt vollständig rund), dieselbe Rahmenfarbe wie die zweiten Knöpfe und für die gewählte Kamera dieselbe Füllfarbe wie
   die Hauptknöpfe (zum Beispiel "Live gehen"). Karten bleiben bei 14, Kästen in der Karte "Status" bei 10 Pixeln.
