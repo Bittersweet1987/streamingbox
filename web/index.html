@@ -24,7 +24,6 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
-.clight{display:flex;align-items:center;margin:4px 0}
 #alerts{display:grid;gap:8px}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
 .alert.crit{border-color:var(--crit)}
@@ -92,6 +91,8 @@ details.card[open]>summary{margin-bottom:10px}
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:12px;margin-top:12px}
 .statbox{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
 .statbox .sech{margin:0 0 8px}
+.statbox .big{font-size:24px;line-height:1.1}
+.statbox .row{padding:2px 0}
 .hdr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .foldd{display:inline-flex;gap:6px}
 .foldm{display:none}.smic{display:none;font-size:16px;line-height:1}
@@ -153,12 +154,12 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="alerts"></div>
     <div class="statgrid">
       <div class="statbox"><div class="sech">System</div>
-    <div class="row"><span class="muted">CPU</span><span class="muted"><span id="cpumax"></span> · <span id="temp">–</span> °C</span></div>
-    <div class="row"><span class="big"><span id="cpu">–</span><span class="unit"> %</span></span></div>
+    <div class="row" style="padding-bottom:0"><span class="muted">CPU</span><span class="muted"><span id="cpumax"></span> · <span id="temp">–</span> °C</span></div>
+    <div class="row" style="padding-top:0"><span class="big"><span id="cpu">–</span><span class="unit"> %</span></span></div>
     <div class="bar"><i id="cpubar" style="width:0"></i></div>
     <div class="muted" id="fanline" hidden title="Ansteuerung des Lüfters, keine gemessene Drehzahl (die Box hat keinen Drehzahlanschluss am Lüfter)">Lüfter: <span id="fan">–</span> % (Ansteuerung)</div>
-    <div class="row" style="margin-top:10px"><span class="muted">Arbeitsspeicher</span><span class="muted">frei <span id="memfree">–</span></span></div>
-    <div class="row"><span class="big"><span id="mem">–</span><span class="unit"> % belegt</span></span></div>
+    <div class="row" style="margin-top:4px;padding-bottom:0"><span class="muted">Arbeitsspeicher</span><span class="muted">frei <span id="memfree">–</span></span></div>
+    <div class="row" style="padding-top:0"><span class="big"><span id="mem">–</span><span class="unit"> % belegt</span></span></div>
     <div class="bar"><i id="membar" style="width:0"></i></div>
   </div>
       <div class="statbox"><div class="sech">Kameras</div><div id="camlights"></div></div>
@@ -388,7 +389,7 @@ let camsByKey={};
 const camDotCls=c=>"dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
 const camDotTitle=c=>c.state!=="live"?(c.state==="unknown"?"Status unbekannt":"Kein Signal"):(c.pic==="an"?"Sendet und ist im Bild":(c.pic==="wartet"?`Sendet, kommt in ${c.pic_wait} s ins Bild`:(c.pic==="aus"?"Sendet, ist noch nicht im Bild":"Sendet")));
 function renderCamLights(list){
-  setHtml($("camlights"),list.length?list.map(c=>`<div class="clight"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span><span>${esc(c.name)}</span><span class="muted" style="margin-left:auto">${c.state==="live"?fmt(c.mbit)+" Mbit/s":"–"}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
+  setHtml($("camlights"),list.length?list.map(c=>`<div class="row"><span><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span><span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 function renderCams(list){
   const box=$("cams");
