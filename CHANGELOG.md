@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.31 (Beta)
+- Geändert: Abstände in der Karte "Status". Zwischen dem Kartenkopf und den Kästen sind es jetzt 10 statt 22 Pixel (eine leere Meldungsfläche belegt keinen Platz mehr), zwischen der Überschrift eines Kastens und seiner
+  ersten Zeile 4 statt 8 Pixel. Im Kasten "System" ist der Abstand über der Überschrift und unter dem unteren Balken gleich (je 11 Pixel).
+
 ## 0.9.30 (Beta)
 - Neu: **Ampel für die Sendewege** im Kasten "Upload" der Karte "Status". Der Punkt vor jedem Netz zeigt: **grün** = der Weg trägt Pakete, **gelb** = verbunden, aber in Reserve (Laufzeit zu hoch oder zu unruhig, der Sender nutzt ihn kaum),
   **rot** = nicht verbunden oder kein Netz (zum Beispiel ein ausgefallenes WLAN), **grau** = keine Sendung. Beim Darüberfahren steht die Laufzeit. Die Daten stammen aus der Datei, die der Sender ohnehin alle paar Sekunden schreibt;

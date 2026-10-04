@@ -25,6 +25,7 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
 #alerts{display:grid;gap:8px}
+#alerts:empty{display:none}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
 .alert.crit{border-color:var(--crit)}
 .alert.ok{border-color:var(--ok);color:var(--muted)}
@@ -88,9 +89,9 @@ details.card>summary .sumh{font-size:12px;text-transform:uppercase;letter-spacin
 details.card>summary .sumh::before{content:"\25B8  ";}
 details.card[open]>summary .sumh::before{content:"\25BE  ";}
 details.card[open]>summary{margin-bottom:10px}
-.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:12px;margin-top:12px}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:12px;margin-top:4px}
 .statbox{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg)}
-.statbox .sech{margin:0 0 8px}
+.statbox .sech{margin:0 0 4px}
 .statbox .big{font-size:24px;line-height:1.1}
 .statbox .row{padding:2px 0}
 .hdr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
