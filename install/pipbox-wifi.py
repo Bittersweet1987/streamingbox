@@ -190,11 +190,17 @@ SCAN_POLL = 1.5       # Abstand der Abfragen (Sekunden)
 SCAN_RESCAN_EVERY = 10   # bleibt die Liste leer, wird der Suchlauf alle so viele Sekunden noch einmal angestoßen (NetworkManager lehnt zu frühe ab: egal)
 
 
-def rescan(iface):
-    try:
-        nm("dev", "wifi", "rescan", "ifname", iface, timeout=20)     # ein Fehler ("Suchlauf gerade nicht erlaubt") ist hier kein Problem: die Liste wird trotzdem gelesen
-    except subprocess.TimeoutExpired:
-        pass
+def rescan(iface, log=None):
+    """Suchlauf anstoßen: wie die Original-Oberfläche für alle Karten (ohne ifname) und danach gezielt für diese Karte. Ein Fehler ("Suchlauf gerade
+    nicht erlaubt") ist hier kein Problem, die Liste wird trotzdem gelesen; die Meldungen werden für die technischen Angaben gemerkt."""
+    for args in (("dev", "wifi", "rescan"), ("dev", "wifi", "rescan", "ifname", iface)):
+        try:
+            r = nm(*args, timeout=20)
+            if log is not None:
+                log.append("%s: %s" % (" ".join(args), ((r.stderr or r.stdout).strip()[:140] or "Fehler") if r.returncode else "ok"))
+        except subprocess.TimeoutExpired:
+            if log is not None:
+                log.append("%s: Zeitüberschreitung" % " ".join(args))
 
 
 def sorted_nets(best):
@@ -207,7 +213,7 @@ DIAG_SKIP = {"GENERAL.DBUS-PATH", "GENERAL.UDI", "GENERAL.CON-UUID", "GENERAL.CO
 MAC_RE = re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){2})(?:[:-][0-9A-Fa-f]{2}){3}\b")
 
 
-def scan_diagnostics(iface):
+def scan_diagnostics(iface, rescan_log=None):
     """Technische Angaben zur Karte für den Fall, dass kein Netz gefunden wird (erscheinen in der Oberfläche und im Protokoll-Download): Zustand der
     Karte laut NetworkManager, Funk (rfkill), Fähigkeiten, Zahl der Funkstationen insgesamt und Meldungen des Treibers. MAC-Adressen sind gekürzt."""
     lines = []
@@ -225,6 +231,11 @@ def scan_diagnostics(iface):
         if l.split(":", 1)[0] not in DIAG_SKIP:
             lines.append(l)
     lines.append("Funk: " + " | ".join(x for x in run("nmcli", "-t", "radio", "all").splitlines() if x))
+    for l in list(dict.fromkeys(rescan_log or []))[:6]:                # was NetworkManager zu den Suchläufen gesagt hat
+        lines.append("Suchlauf angefordert: " + l)
+    cfg = list(dict.fromkeys(l.strip() for l in run("NetworkManager", "--print-config").splitlines() if re.match(r"\s*wifi\.", l)))
+    if cfg:
+        lines.append("NetworkManager-Einstellungen: " + " | ".join(cfg[:8]))
     rf = run("rfkill", "list").strip()
     if rf:
         lines.append("rfkill: " + " ".join(rf.split())[:200])
@@ -232,6 +243,10 @@ def scan_diagnostics(iface):
     mine = [l for l in all_aps if l.rsplit(":", 1)[-1] == iface]
     hidden = [l for l in mine if l.startswith(":") or l.split(":", 1)[0] == ""]
     lines.append("Funkstationen laut NetworkManager: %d insgesamt, %d auf %s (davon %d ohne Namen)" % (len(all_aps), len(mine), iface, len(hidden)))
+    jl = [l for l in run("journalctl", "-u", "NetworkManager", "-u", "wpa_supplicant", "--no-pager", "-o", "short-iso", "-n", "800", timeout=15).splitlines()
+          if re.search(r"\b%s\b" % re.escape(iface), l)][-10:]
+    lines += ["NetworkManager: " + re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<IP>", re.sub(r"'[^']{1,48}'", "'…'", l.split(" ", 3)[-1] if l.count(" ") >= 3 else l)) for l in jl]
+    # (Namen in Hochkommas und Adressen sind gekürzt, damit die Angaben ohne Nachdenken weitergegeben werden können)
     try:
         drv = os.path.basename(os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
     except OSError:
@@ -251,7 +266,8 @@ def do_scan(iface):
     auch jetzt leer, werden technische Angaben zur Karte mitgeliefert."""
     check_client_iface(iface)
     nm("radio", "wifi", "on")
-    rescan(iface)
+    log = []
+    rescan(iface, log)
     start = time.time()
     nets, last_new, next_rescan = {}, None, start + SCAN_RESCAN_EVERY
     while True:
@@ -269,13 +285,13 @@ def do_scan(iface):
         if now - start >= SCAN_WAIT:
             break
         if not nets and now >= next_rescan:
-            rescan(iface)
+            rescan(iface, log)
             next_rescan = now + SCAN_RESCAN_EVERY
         time.sleep(SCAN_POLL)
     result = sorted_nets(nets)
     scan = {"iface": iface, "nets": result, "scanned": int(time.time())}
     if not result:
-        scan["debug"] = scan_diagnostics(iface)
+        scan["debug"] = scan_diagnostics(iface, log)
     write_status(scan=scan)
     if not result:
         return ("Keine Netze gefunden. Manche Sticks brauchen einen zweiten Suchlauf: bitte noch einmal „Netze suchen“ drücken. "

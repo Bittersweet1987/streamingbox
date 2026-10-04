@@ -263,6 +263,8 @@ def wifi_cards():
                 pass
             out.append("%s (Treiber %s):\n%s" % (dev, drv or "unbekannt", "\n".join(info)))
     out.append("Funk:\n" + run(["nmcli", "-t", "radio", "all"], 8) + run(["rfkill", "list"], 8))
+    out.append("NetworkManager-Einstellungen zum WLAN:\n" + "\n".join(dict.fromkeys(
+        l.strip() for l in run(["NetworkManager", "--print-config"], 10).splitlines() if re.match(r"\s*wifi\.", l))))
     out.append("Gefundene Funkstationen (ohne neuen Suchlauf):\n" +
                run(["nmcli", "-f", "IN-USE,SSID,BSSID,CHAN,FREQ,SIGNAL,SECURITY,DEVICE", "dev", "wifi", "list", "--rescan", "no"], 10))
     return "\n".join(out)

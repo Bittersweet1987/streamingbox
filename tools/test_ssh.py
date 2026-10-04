@@ -620,6 +620,8 @@ class FilesAndPage(unittest.TestCase):
         self.assertNotIn("confirm(", toggle)                                             # kein Popup beim Einschalten
         self.assertIn('"SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"")', js)
         self.assertIn('d.active?"SSH ausschalten":"SSH einschalten"', js)               # ein Knopf an derselben Stelle
+        self.assertIn('t.className=d.active?"dangerbtn":"warnbtn"', js)                  # "SSH ausschalten" ist rot (Rückmeldung zu #18)
+        self.assertIn(".dangerbtn{background:var(--crit)", page)
         self.assertEqual(html.count("<button"), 3)                                       # Umschalter, Passwort anzeigen/ausblenden, zurücksetzen
         self.assertIn("devPwShown", js)                                                  # Passwort wieder ausblenden
         self.assertIn("confirm(", js.split('$("dev_reset").addEventListener')[1])        # beim Zurücksetzen bleibt die Rückfrage

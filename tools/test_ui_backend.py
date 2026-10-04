@@ -328,7 +328,7 @@ class HelperChecks(unittest.TestCase):
         with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "check_iface", lambda i: None), \
                 mock.patch.object(self.h, "hotspot_active", lambda i: False), \
                 mock.patch.object(self.h.time, "sleep", lambda s: None), mock.patch.object(self.h, "write_status", ws), \
-                mock.patch.object(self.h, "scan_diagnostics", lambda i: ["Karte: %s:wifi:disconnected:" % i]), \
+                mock.patch.object(self.h, "scan_diagnostics", lambda i, log=None: ["Karte: %s:wifi:disconnected:" % i] + ["Suchlauf angefordert: " + l for l in (log or [])[:1]]), \
                 mock.patch.object(self.h, "SCAN_WAIT", 12), mock.patch.object(self.h, "SCAN_MIN", minimum), \
                 mock.patch.object(self.h, "SCAN_RESCAN_EVERY", rescan_every):
             clock = iter(range(0, 1000))
@@ -375,10 +375,16 @@ class HelperChecks(unittest.TestCase):
     def test_empty_scan_carries_technical_details(self):
         calls, status, msg = self.scan(reads=[""])
         self.assertEqual(status["scan"]["nets"], [])
-        self.assertEqual(status["scan"]["debug"], ["Karte: wlan1:wifi:disconnected:"])
+        self.assertEqual(status["scan"]["debug"], ["Karte: wlan1:wifi:disconnected:", "Suchlauf angefordert: dev wifi rescan: ok"])
         self.assertIn("technische Angaben", msg)
         calls, status, msg = self.scan(reads=[self.NETS])
         self.assertNotIn("debug", status["scan"])                                                   # mit Treffern keine Angaben
+
+    def test_scan_asks_like_the_original_for_all_cards_and_then_for_this_one_and_keeps_the_answers(self):
+        calls, status, msg = self.scan(rescan_rc=1, reads=[""])
+        first = [c for c in calls if c[:3] == ("dev", "wifi", "rescan")][:2]
+        self.assertEqual(first, [("dev", "wifi", "rescan"), ("dev", "wifi", "rescan", "ifname", "wlan1")])
+        self.assertTrue(status["scan"]["debug"][1].startswith("Suchlauf angefordert: dev wifi rescan: "))      # die Meldung von NetworkManager steht in den Angaben
 
     def test_diagnostics_shorten_mac_addresses_and_survive_missing_tools(self):
         out = self.h.scan_diagnostics("wlan9")                                                      # hier gibt es weder nmcli noch die Karte

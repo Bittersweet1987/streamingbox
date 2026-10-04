@@ -225,7 +225,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 pre{white-space:pre-wrap;word-break:break-all;font-size:11px;color:var(--muted);max-height:220px;overflow:auto;margin:8px 0 0}
 .upd-line{display:flex;justify-content:space-between;padding:3px 0}
 .livehealth{font-size:12px;margin-top:8px;opacity:.85}.livehealth .ok{color:var(--ok)}.livehealth .warn{color:var(--warn)}.livehealth .crit,.livehealth .err{color:var(--crit)}
-details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.wcard{margin-bottom:6px}.hsrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 2px 18px}.hsrow .muted{font-size:13px}
+details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.dangerbtn{background:var(--crit);border-color:var(--crit);color:#fff}.wcard{margin-bottom:6px}.hsrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 2px 18px}.hsrow .muted{font-size:13px}
 .hsw{min-width:64px;font-weight:700}.hsw.on{background:var(--ok);border-color:var(--ok);color:#06210f}
 .hspanel{margin:6px 0 10px 18px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
 .pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block;cursor:pointer}.pwshow.copied{border-color:var(--ok)}.pwshow.copied::after,.pwshow.copyfail::after{font-family:inherit;font-size:13px;font-weight:400;letter-spacing:0}.pwshow.copied::after{content:"  ✓ kopiert";color:var(--ok)}.pwshow.copyfail::after{content:"  markiert: bitte Strg/Cmd+C";color:var(--warn)}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
@@ -1738,7 +1738,7 @@ async function devLoad(){
   $("dev_state").className="wstat"+(d.active?" ok":"");
   $("dev_text").textContent=!d.available?"Auf dieser Box gibt es keinen SSH-Dienst.":
     "SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"");
-  const t=$("dev_toggle"); t.textContent=d.active?"SSH ausschalten":"SSH einschalten"; t.className=d.active?"sec":"warnbtn";       // ein Knopf an derselben Stelle
+  const t=$("dev_toggle"); t.textContent=d.active?"SSH ausschalten":"SSH einschalten"; t.className=d.active?"dangerbtn":"warnbtn";       // ein Knopf an derselben Stelle
   t.disabled=!usable||!d.available; $("dev_reset").disabled=!usable||!d.can_reset; $("dev_reset").hidden=!d.can_reset;
   $("dev_pw").disabled=!d.helper_installed; devPwButton();
   if(!d.helper_installed) $("dev_msg").textContent="Der Helfer ist noch nicht installiert. Er kommt mit dem nächsten Software-Update (oder install.sh erneut ausführen).";

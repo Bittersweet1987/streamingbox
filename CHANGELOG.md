@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.77 (Beta)
+- Geändert (Issue #18, Rückmeldung): **"SSH ausschalten" ist jetzt rot** (wie "Stop" bei der Sendung). Das Einschalten bleibt gelb.
+- Geändert (Issue #8, die technischen Angaben des Melders ausgewertet): Beim TP-Link Archer T2U Nano (Treiber `rtl88XXau`, `wlan1`) zeigten die Angaben: Die Karte ist von NetworkManager verwaltet, Firmware in Ordnung, Funk an, kann Zugangspunkt sowie 2,4 und 5 GHz, **aber NetworkManager kennt 15 Funkstationen insgesamt und 0 auf `wlan1`** (Zustand "disconnected", Grund "Device disconnected by user or client"). Die Karte sieht also selbst nichts; die Anzeige ist nicht schuld. Zufällige MAC-Adressen beim Suchen sind auf der Box schon abgeschaltet (`wifi.scan-rand-mac-address=no`). Damit ich die Ursache weiter eingrenze:
+  - **Suchlauf wie in der Original-Oberfläche:** Zuerst für alle Karten (`nmcli device wifi rescan`, so macht es das Original), danach gezielt für diese Karte. Vorher nur gezielt.
+  - **Technische Angaben ergänzt:** Was NetworkManager auf die beiden Suchlauf-Anforderungen geantwortet hat (ein Fehler wie "Scanning not allowed" fiel bisher unter den Tisch), die WLAN-Einstellungen von NetworkManager (`wifi.scan-rand-mac-address`, `wifi.powersave`) und die letzten Meldungen von NetworkManager und wpa_supplicant zu dieser Karte (Namen in Hochkommas und IP-Adressen gekürzt). Dieselben Einstellungen stehen im Abschnitt "WLAN-Karten" des Protokoll-Downloads.
+- Tests: Suchlauf fragt zuerst alle Karten und dann diese Karte und merkt die Antworten; "SSH ausschalten" ist rot.
+
 ## 0.9.76 (Beta)
 - Behoben: **Eine neue Version war auf der Box bis zu sechs Stunden unsichtbar** (Rückmeldung: "Er findet auf der Box die 75 nicht"). Die Karte "Software-Update" fragt GitHub von selbst nur alle sechs Stunden und merkt sich die Antwort. Wer kurz vor einer neuen Version nachgefragt hatte, sah sie nicht, bis er "Nach Updates suchen" drückte. Das Archiv der Version war in Ordnung (auch gegen die Prüfung des Update-Helfers getestet), es lag nur am Zwischenspeicher der Box.
   - **Jetzt:** Wer die Seite öffnet oder die Karte "Software-Update" aufklappt, bekommt eine Antwort, die **nicht älter als fünf Minuten** ist (ältere werden erneuert). Die Abfrage im Hintergrund bleibt bei sechs Stunden, und während einer Übertragung wird weiterhin nicht nachgefragt (kein Mobilfunk-Verkehr ohne Grund). Der Knopf "Nach Updates suchen" erzwingt die Abfrage wie bisher.
