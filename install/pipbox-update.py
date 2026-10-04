@@ -31,6 +31,8 @@ REBOOT_PKGS = ("l4t", "belabox-linux-", "belabox-network-config")
 MIN_FREE = 1536 * 1024 * 1024
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
 APT_LOCK = ["-o", "DPkg::Lock::Timeout=300"]
+DPKG_UPDATES = "/var/lib/dpkg/updates"
+DPKG_LOCKS = ("/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock")
 
 
 def now():
@@ -117,6 +119,67 @@ def run_apt(args, progress=None):
     return p.wait(), "".join(out)
 
 
+def dpkg_interrupted():
+    """Hat ein früherer Paketlauf nicht zu Ende gearbeitet (Strom weg, Neustart, abgebrochenes Update)? Dann weigert sich apt mit
+    "dpkg was interrupted". Erkennbar an Resten in /var/lib/dpkg/updates oder halb eingerichteten Paketen laut dpkg --audit."""
+    try:
+        if any(not n.startswith(".") for n in os.listdir(DPKG_UPDATES)):
+            return True
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True, errors="replace", timeout=60, env=ENV)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def dpkg_busy():
+    """Hält gerade ein anderer Prozess die Paketsperre (zum Beispiel eine automatische Aktualisierung)? Dann nichts anfassen."""
+    for path in DPKG_LOCKS:
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o640)
+        except OSError:
+            continue
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        finally:
+            os.close(fd)                 # das Schließen gibt die Sperre wieder frei
+    return False
+
+
+def repair_dpkg():
+    """Einen unterbrochenen Paketlauf zu Ende führen, so wie es apt verlangt (dpkg --configure -a, danach apt-get -f install).
+    Läuft gerade ein anderer Paketvorgang, geschieht nichts. True bei Erfolg."""
+    if dpkg_busy():
+        log("Es läuft ein anderer Paketvorgang, der unterbrochene Paketstand wird nicht angefasst.")
+        return False
+    log("$ dpkg --configure -a (unterbrochener Paketlauf)")
+    try:
+        p = subprocess.run(["dpkg", "--configure", "-a", "--force-confdef", "--force-confold"], env=ENV, capture_output=True,
+                           text=True, errors="replace", timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"dpkg --configure -a: {e}")
+        return False
+    log((p.stdout or "") + (p.stderr or ""))
+    if p.returncode != 0:
+        return False
+    rc, _ = run_apt(["-f", "install", "-y"] + APT_LOCK)
+    return rc == 0
+
+
+def friendly_error(tail):
+    """Verständliche Meldung für die häufigsten Fehler von apt; sonst die letzten Zeilen."""
+    if "dpkg was interrupted" in tail:
+        return ("Ein früherer Paketlauf wurde unterbrochen und ließ sich nicht selbst abschließen. Bitte in einer Konsole auf der Box "
+                "ausführen: sudo dpkg --configure -a (danach: sudo apt-get -f install) und das Update dann wiederholen.")
+    if "Could not get lock" in tail or "Unable to acquire the dpkg frontend lock" in tail or "Waiting for cache lock" in tail:
+        return "Ein anderer Paketvorgang läuft gerade (zum Beispiel eine automatische Aktualisierung). Bitte in einigen Minuten noch einmal versuchen."
+    return "Update fehlgeschlagen: " + tail
+
+
 def parse_list(text, heading):
     m = re.search(re.escape(heading) + r"\n((?:  .*\n?)+)", text)
     return m.group(1).split() if m else []
@@ -194,6 +257,16 @@ def do_run():
         save_status(state="refused", finished=now(),
                     message=f"Zu wenig freier Speicher ({free // 2**20} MiB, nötig 1536 MiB).")
         return
+    if dpkg_interrupted():
+        if dpkg_busy():                  # die Reste gehören dann zu einem Paketvorgang, der gerade läuft
+            save_status(state="failed", finished=now(), message=friendly_error("Could not get lock"))
+            return
+        save_status(state="running", mode="run", message="Ein früherer Paketlauf war unterbrochen, die Box schließt ihn zuerst ab …")
+        if not repair_dpkg():
+            save_status(state="failed", finished=now(), message=friendly_error("dpkg was interrupted"))
+            return
+        log("Unterbrochener Paketlauf abgeschlossen.")
+        save_status(message="")
     rc, _ = run_apt(["update", "--allow-releaseinfo-change"] + APT_LOCK)
     if rc != 0:
         save_status(state="failed", finished=now(),
@@ -245,8 +318,7 @@ def do_run():
                     reboot_boot_id=boot_id(), available=0, packages=[], belabox=[])
     else:
         tail = " ".join(out.strip().splitlines()[-3:])[:300]
-        save_status(state="failed", finished=now(), progress=progress,
-                    message="Update fehlgeschlagen: " + tail)
+        save_status(state="failed", finished=now(), progress=progress, message=friendly_error(tail))
 
 
 def do_reboot():

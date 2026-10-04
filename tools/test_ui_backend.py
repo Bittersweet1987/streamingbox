@@ -2,6 +2,7 @@
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -876,6 +877,99 @@ class AuthModes(unittest.TestCase):
             f.write("alt\n")
         server.Auth(os.path.join(d, "state"), cfg)
         self.assertFalse(os.path.exists(os.path.join(d, "state", "setup-code")))
+
+
+class UpdateHelperRepair(unittest.TestCase):
+    """System-Updates: ein unterbrochener Paketlauf (dpkg was interrupted) wird erkannt und vor dem Update abgeschlossen."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pbupdate_repair", os.path.join(os.path.dirname(HERE), "install", "pipbox-update.py"))
+        cls.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.m)
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.upd = os.path.join(self.d, "updates")
+        os.makedirs(self.upd)
+        self.status = {}
+        patches = [mock.patch.object(self.m, "DPKG_UPDATES", self.upd), mock.patch.object(self.m, "log", lambda line: None),
+                   mock.patch.object(self.m, "save_status", lambda **kw: self.status.update(kw)),
+                   mock.patch.object(self.m, "belacoder_running", lambda: False),
+                   mock.patch.object(self.m, "DPKG_LOCKS", (os.path.join(self.d, "lock"),))]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def audit(self, out="", rc=0):
+        return mock.patch.object(self.m.subprocess, "run", lambda *a, **k: mock.Mock(returncode=rc, stdout=out, stderr=""))
+
+    def test_leftovers_in_updates_mean_interrupted(self):
+        with self.audit(""):
+            self.assertFalse(self.m.dpkg_interrupted())
+            open(os.path.join(self.upd, "0001"), "w").close()
+            self.assertTrue(self.m.dpkg_interrupted())
+
+    def test_half_configured_packages_mean_interrupted(self):
+        with self.audit("The following packages are only half configured, probably due to problems\n tailscale"):
+            self.assertTrue(self.m.dpkg_interrupted())
+
+    def test_busy_lock_is_detected(self):
+        import fcntl
+        self.assertFalse(self.m.dpkg_busy())
+        fd = os.open(self.m.DPKG_LOCKS[0], os.O_RDWR | os.O_CREAT, 0o640)
+        try:
+            # eine Sperre eines anderen Prozesses: im selben Prozess würde lockf sie nur erneuern, darum in einem Kindprozess prüfen
+            code = ("import fcntl,os,sys\nfd=os.open(sys.argv[1],os.O_RDWR)\n"
+                    "try:\n fcntl.lockf(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('frei')\nexcept OSError:\n print('belegt')\n")
+            fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            r = subprocess.run([sys.executable, "-c", code, self.m.DPKG_LOCKS[0]], capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), "belegt")
+        finally:
+            os.close(fd)
+
+    def test_repair_runs_configure_then_fix_install(self):
+        calls = []
+        def fake_run(args, **kw):
+            calls.append(args)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(self.m.subprocess, "run", fake_run), mock.patch.object(self.m, "run_apt", lambda a, p=None: (calls.append(["apt-get"] + a) or (0, ""))):
+            self.assertTrue(self.m.repair_dpkg())
+        self.assertEqual(calls[0][:3], ["dpkg", "--configure", "-a"])
+        self.assertEqual(calls[1][:3], ["apt-get", "-f", "install"])
+
+    def test_repair_fails_cleanly(self):
+        with mock.patch.object(self.m.subprocess, "run", lambda *a, **k: mock.Mock(returncode=1, stdout="Fehler", stderr="")):
+            self.assertFalse(self.m.repair_dpkg())
+        with mock.patch.object(self.m, "dpkg_busy", lambda: True):
+            self.assertFalse(self.m.repair_dpkg())                     # anderer Paketvorgang: nichts anfassen
+
+    def test_friendly_messages(self):
+        f = self.m.friendly_error
+        self.assertIn("sudo dpkg --configure -a", f("E: dpkg was interrupted, you must manually run 'dpkg --configure -a'"))
+        self.assertIn("anderer Paketvorgang", f("E: Could not get lock /var/lib/dpkg/lock-frontend"))
+        self.assertEqual(f("E: irgendwas anderes"), "Update fehlgeschlagen: E: irgendwas anderes")
+
+    def test_run_repairs_before_updating_and_reports_failure(self):
+        open(os.path.join(self.upd, "0001"), "w").close()
+        order = []
+        with mock.patch.object(self.m.shutil, "disk_usage", lambda p: mock.Mock(free=10 * 2**30)), \
+                mock.patch.object(self.m, "dpkg_interrupted", lambda: True), mock.patch.object(self.m, "dpkg_busy", lambda: False), \
+                mock.patch.object(self.m, "repair_dpkg", lambda: order.append("repair") or False), \
+                mock.patch.object(self.m, "run_apt", lambda a, p=None: order.append("apt") or (0, "")):
+            self.m.do_run()
+        self.assertEqual(order, ["repair"])                             # bei Misserfolg kein apt
+        self.assertEqual(self.status["state"], "failed")
+        self.assertIn("sudo dpkg --configure -a", self.status["message"])
+
+    def test_run_does_not_touch_a_running_package_process(self):
+        with mock.patch.object(self.m.shutil, "disk_usage", lambda p: mock.Mock(free=10 * 2**30)), \
+                mock.patch.object(self.m, "dpkg_interrupted", lambda: True), mock.patch.object(self.m, "dpkg_busy", lambda: True), \
+                mock.patch.object(self.m, "repair_dpkg", lambda: self.fail("darf nicht reparieren")):
+            self.m.do_run()
+        self.assertEqual(self.status["state"], "failed")
+        self.assertIn("anderer Paketvorgang", self.status["message"])
 
 
 if __name__ == "__main__":

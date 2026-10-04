@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.42 (Beta)
+- Behoben: **System-Updates scheiterten nach einem unterbrochenen Paketlauf** mit "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem" (Meldung eines Nutzers; typisch nach Stromausfall, Neustart oder abgebrochenem Update mitten im Paketlauf).
+  Der Update-Helfer erkennt jetzt die Reste eines unterbrochenen Laufs (Dateien in `/var/lib/dpkg/updates` oder halb eingerichtete Pakete laut `dpkg --audit`), schließt ihn vor dem Update mit `dpkg --configure -a` und `apt-get -f install` ab und macht dann mit dem Update weiter.
+  Läuft gerade ein anderer Paketvorgang (zum Beispiel eine automatische Aktualisierung), fasst er nichts an und meldet das. Gelingt die Reparatur nicht, steht in der Oberfläche der Befehl für die Konsole statt der letzten apt-Zeilen; auch für "Could not get lock" gibt es jetzt eine verständliche Meldung.
+  Das Software-Update dieses Projekts (Karte "Software-Update") war davon nie betroffen.
+- Tests: Erkennung (Reste, halb eingerichtete Pakete, belegte Sperre), Reparaturablauf, Meldungen, `do_run` mit Reparatur und Abbruch.
+
 ## 0.9.41 (Beta)
 - Geändert: **Auf einer frischen BELABOX gibt es keinen Setup-Code und kein zweites Passwort mehr.** Die Oberfläche benutzt das Passwort der BELABOX (belaUI). Hat die BELABOX noch keins, steht auf der Anmeldeseite, dass es zuerst in der BELABOX-Oberfläche festgelegt werden muss;
   die Seite wartet darauf und zeigt die Anmeldung von selbst, sobald das Passwort da ist. Die Datei `/var/lib/pipbox/setup-code` wird auf einer BELABOX nicht mehr angelegt (eine alte wird beim Start gelöscht). Ein eigenes Passwort, das eine frühere Version gesetzt hat, bleibt gültig.
