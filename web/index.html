@@ -778,7 +778,7 @@ $("upddet").addEventListener("toggle",tick);
 
 // ---- DJI-Kameras: eine Karte je Kamera mit eigener Verbindung (Dienst: dji_daemon.py) ----
 const DJI_STATE={idle:["Getrennt",0],searching:["Sucht",1],connecting:["Verbindet",2],pairing:["Koppelt",3],preparing:["Bereitet vor",4],wifi:["WLAN wird übergeben",5],
-  configuring:["Stellt ein",6],starting:["Stream startet",6],streaming:["Streamt",0],stopping:["Beendet",0],error:["Fehler",0]};
+  configuring:["Stellt ein",6],starting:["Stream startet",6],streaming:["Streamt",0],status:["Nur Akku",0],stopping:["Beendet",0],error:["Fehler",0]};
 const DJI_BUSY=["searching","connecting","pairing","preparing","wifi","configuring","starting","stopping"];
 const DJI_STAB=[["off","Aus"],["rocksteady","RockSteady"],["rocksteadyplus","RockSteady+"],["horizonbalancing","HorizonBalancing"],["horizonsteady","HorizonSteady"]];
 let djiData={available:false,cameras:[],wifi_options:[],scan:[]}, djiStruct="", djiRecv=Date.now(), djiOpen={}, djiPend={};
@@ -802,6 +802,7 @@ function djiCardHtml(c){
     <div class="dsub muted">${esc(c.model||"")} <span class="ddetail"></span></div>
     <div class="actions"><button type="button" class="d-connect">Verbinden</button><button type="button" class="sec d-reconnect">Neu verbinden</button><button type="button" class="sec d-disconnect">Trennen</button></div>
     <div class="actions" style="justify-content:space-between;align-items:center"><label class="chk" style="margin:0"><input type="checkbox" class="d-auto"${c.autoconnect?" checked":""}> Automatisch verbinden und streamen</label><button type="button" class="del d-remove">Entfernen</button></div>
+    <label class="chk"><input type="checkbox" class="d-statusonly"${c.status_only?" checked":""}> Nur Akkustand lesen (Kamera sendet per HDMI)</label>
     <label class="f">Name<input class="d-name" maxlength="40" value="${esc(djiName(c))}"></label>
     <details class="dsec" data-sec="conn"${op("conn")}><summary>Verbindung <span class="muted dsum-conn"></span></summary>
       <label class="f">Verbindung der Kamera<select class="d-wifi"><option value="">– wählen –</option>${netOpts}${missing}<option value="manual"${c.wifi_ifname==="manual"?" selected":""}>Manuell (WLAN-Name, Passwort, Adresse)</option></select></label>
@@ -827,7 +828,7 @@ function djiDynamic(){
   const d=djiData, box=$("djicams");
   for(const c of (d.cameras||[])){
     const card=box.querySelector(`.dcam[data-addr="${c.addr}"]`); if(!card) continue;
-    let [txt,step]=DJI_STATE[c.state]||[c.state,0], col=c.state==="streaming"?"var(--ok)":c.state==="error"?"var(--crit)":c.state==="idle"?"var(--muted)":c.state==="pairing"?"var(--warn)":"var(--accent)";
+    let [txt,step]=DJI_STATE[c.state]||[c.state,0], col=c.state==="streaming"||c.state==="status"?"var(--ok)":c.state==="error"?"var(--crit)":c.state==="idle"?"var(--muted)":c.state==="pairing"?"var(--warn)":"var(--accent)";
     if(step) txt+=` (${step}/6)`;
     if((c.state==="idle"||c.state==="error")&&c.publishing){ txt="Stream läuft (ohne Bluetooth)"; col="var(--warn)"; }
     const e=card.querySelector(".dstate"); e.textContent=txt; e.style.color=col;
@@ -840,7 +841,9 @@ function djiDynamic(){
     if(c.state==="error"&&c.retry_in&&c.autoconnect) det+=(det?" – ":"")+"neuer Versuch in "+left+" s";
     const dt=card.querySelector(".ddetail"); dt.textContent=det?"· "+det:""; dt.style.color=c.state==="error"?"var(--crit)":"";
     const active=c.state!=="idle"||c.publishing;
-    card.querySelector(".d-connect").disabled=c.state==="streaming";
+    card.querySelector(".d-connect").disabled=c.state==="streaming"||c.state==="status";
+    const so=card.querySelector(".d-statusonly"); if(so!==document.activeElement) so.checked=!!c.status_only; so.disabled=!!c.locked;
+    card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });      // ohne Stream gibt es nichts zu verbinden und einzustellen
     card.querySelector(".d-disconnect").disabled=!active;
     card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel").forEach(f=>{ f.disabled=!!c.locked; });
     card.querySelector(".d-lockhint").hidden=!c.locked;
@@ -928,6 +931,7 @@ $("djicams").addEventListener("change",e=>{
   else if(cl.contains("d-res")) djiUpdate(addr,{resolution:t.value});
   else if(cl.contains("d-fps")) djiUpdate(addr,{fps:parseInt(t.value)});
   else if(cl.contains("d-stab")) djiUpdate(addr,{stabilization:t.value});
+  else if(cl.contains("d-statusonly")) djiCmd({cmd:"update",addr,status_only:t.checked}).then(()=>djiLoad());
   else if(cl.contains("d-auto")) djiCmd({cmd:"update",addr,autoconnect:t.checked}).then(()=>djiLoad());      // nur der Schalter: eine laufende Verbindung bleibt
 });
 $("djicams").addEventListener("input",e=>{
