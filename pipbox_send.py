@@ -149,6 +149,11 @@ class Failover:
         self.layout = tuple(layout)
         self.up, self.down = {}, {}
 
+    def wait_left(self, now):
+        """Sekunden, die eine sendende, aber noch nicht zugeschaltete Kamera noch warten muss: {Schlüssel: Sekunden}."""
+        need = UP_S if self.layout else UP_FIRST_S
+        return {k: max(0, int(need - (now - t) + 0.999)) for k, t in self.up.items() if k not in self.layout}
+
     def step(self, now, live, gone=False):
         """live: Menge der sendenden Kameras oder None (unbekannt). Gibt die neue Anordnung zurück, wenn sie sich ändert.
         gone=True: der Encoder ist gerade beendet worden; eine genutzte Kamera, die nicht sendet, fällt dann sofort weg
@@ -366,7 +371,8 @@ class Sender:
         if self.fo is not None:
             keys = configured_keys(self.plan["cfg"])
             data["failover"] = {"auto": True, "layout": list(self.layout), "configured": keys,
-                                "waiting": self.waiting, "degraded": self.waiting or set(self.layout) != set(keys)}
+                                "waiting": self.waiting, "degraded": self.waiting or set(self.layout) != set(keys),
+                                "wait": self.fo.wait_left(time.time())}
         if extra:
             data.update(extra)
         tmp = STATUS + ".tmp"

@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -222,6 +223,34 @@ class SenderSwitch(unittest.TestCase):
             import json
             st = json.load(open(os.path.join(d, "status.json")))
             self.assertTrue(st["failover"]["waiting"] and st["failover"]["degraded"])
+
+class WaitLeft(unittest.TestCase):
+    def test_returning_camera_counts_down_and_present_ones_are_absent(self):
+        fo = ps.Failover(CFG, ("cam-m", "cam-q"))
+        fo.step(0, {"cam-m", "cam-q"})
+        fo.step(100, {"cam-m", "cam-p", "cam-q"})            # cam-p kommt zurueck
+        self.assertEqual(fo.wait_left(100), {"cam-p": 60})
+        self.assertEqual(fo.wait_left(130), {"cam-p": 30})
+        self.assertEqual(fo.wait_left(500), {"cam-p": 0})
+        self.assertNotIn("cam-m", fo.wait_left(100))          # im Bild: keine Wartezeit
+        fo.step(110, {"cam-m", "cam-q"})                      # wieder weg: keine Wartezeit mehr
+        self.assertEqual(fo.wait_left(110), {})
+
+    def test_status_contains_wait(self):
+        import json
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"],
+                      {"cfg": CFG, "layout": ("cam-m", "cam-q"), "auto": True})
+        now = time.time()
+        s.fo.step(now - 100, {"cam-m", "cam-q"})
+        s.fo.step(now - 10, {"cam-m", "cam-p", "cam-q"})          # cam-p kam vor 10 s zurueck
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ps, "RUN", d), \
+                mock.patch.object(ps, "STATUS", os.path.join(d, "status.json")):
+            s.write_status()
+            with open(os.path.join(d, "status.json")) as f:
+                st = json.load(f)
+        self.assertIn("cam-p", st["failover"]["wait"])
+        self.assertTrue(0 < st["failover"]["wait"]["cam-p"] <= 60)
+
 
 class SenderNote(unittest.TestCase):
     def test_stall_messages(self):

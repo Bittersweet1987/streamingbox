@@ -535,6 +535,18 @@ class PendingSettings(unittest.TestCase):
                 mock.patch.object(sc, "reasons", return_value=[]), mock.patch.object(server, "belacoder_running", return_value=False):
             self.assertEqual(sc.status()["pending"], [])         # ältere Sendekette ohne Merkwerte: keine Aussage
 
+    def test_picture_state_per_camera(self):
+        d = tempfile.mkdtemp()
+        srt = server.SrtlaStore(os.path.join(d, "srtla.json"))
+        sc = server.SendControl(d, srt, store(), mock.Mock(), demo=False)
+        fo = {"layout": ["a", "c"], "configured": ["a", "b", "c", "d"], "wait": {"b": 40}}
+        with mock.patch.object(sc, "_active", return_value=True), mock.patch.object(sc, "_detail", return_value={"failover": fo}):
+            self.assertEqual(sc.picture(), {"a": ("an", 0), "b": ("wartet", 40), "c": ("an", 0), "d": ("aus", 0)})
+        with mock.patch.object(sc, "_active", return_value=False):
+            self.assertIsNone(sc.picture())
+        with mock.patch.object(sc, "_active", return_value=True), mock.patch.object(sc, "_detail", return_value={"state": "running"}):
+            self.assertIsNone(sc.picture())              # keine Automatik: keine Aussage
+
 
 if __name__ == "__main__":
     unittest.main()

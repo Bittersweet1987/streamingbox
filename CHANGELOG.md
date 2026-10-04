@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.21 (Beta)
+- Neu: **Die Kameraliste zeigt, ob eine Kamera im Bild ist.** Bisher hieß grün nur "sendet an den RTMP-Server". Fällt eine Kamera aus und kehrt zurück, nimmt
+  die Box sie erst nach 60 s stabilem Signal wieder ins Bild auf (damit eine wackelige Kamera nicht dauernd den Encoder neu startet). Jetzt steht hinter jeder
+  Kamera "im Bild", "wartet noch 40 s, dann im Bild" oder "nicht im Bild" (orange), solange gesendet wird und die automatische Umschaltung läuft. Die Sendekette meldet
+  dafür die verbleibende Wartezeit je Kamera in `status.json` (`failover.wait`).
+- Tests: Wartezeit der Umschaltung, Statusdatei, Zuordnung "im Bild/wartet/aus" je Kamera.
+
 ## 0.9.20 (Beta)
 - Geändert: Der "Sendemodus" (Knopf im Kopf der Seite und in der Live-Karte, blendet Adressen, Namen und Protokolle aus) heißt jetzt "Streammodus". Die Einstellung im Browser bleibt erhalten.
 

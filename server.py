@@ -790,6 +790,25 @@ class SendControl:
         except (OSError, ValueError):
             return {}
 
+    def picture(self):
+        """Welche eingestellte Kamera ist gerade im Bild? {Schlüssel: ("an"|"wartet"|"aus", Sekunden bis zur Aufnahme)}
+        oder None, wenn nicht gesendet wird oder keine Automatik läuft."""
+        if not self._active():
+            return None
+        fo = self._detail().get("failover")
+        if not fo:
+            return None
+        layout, wait = set(fo.get("layout") or []), fo.get("wait") or {}
+        out = {}
+        for k in fo.get("configured") or []:
+            if k in layout:
+                out[k] = ("an", 0)
+            elif k in wait:
+                out[k] = ("wartet", int(wait[k]))
+            else:
+                out[k] = ("aus", 0)
+        return out
+
     def reasons(self):
         r = []
         pub = self.srtla.public()
@@ -2130,6 +2149,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metrics":
             m = self.sampler.sample()
             m["cameras"] = self.cams.listing(self.host())
+            pic = self.send.picture()
+            for c in m["cameras"]:
+                p = pic.get(c["key"]) if pic else None
+                c["pic"], c["pic_wait"] = (p[0], p[1]) if p else (None, 0)
             for c in m["cameras"]:
                 if c.get("state") == "live" and not c.get("fps"):
                     f = self.djisvc.fps_for_key(c["key"])

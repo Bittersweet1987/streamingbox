@@ -405,7 +405,10 @@ function renderCams(list){
   for(const c of list){
     const row=box.querySelector(`.cam[data-cid="${c.id}"]`); if(!row) continue;
     row.querySelector(".dot").className="dot"+(c.state==="live"?"":(c.state==="unknown"?" unk":" off"));
-    row.querySelector(".dyn").textContent=c.state==="live"?`${c.fps?fmt(c.fps,0)+" fps"+" · ":""}${fmt(c.mbit)} Mbit/s`:(c.state==="unknown"?"Status unbekannt":"wartet auf Signal");
+    const picTx=c.pic==="an"?" · im Bild":(c.pic==="wartet"?` · wartet noch ${c.pic_wait} s, dann im Bild`:(c.pic==="aus"?(c.state==="live"?" · nicht im Bild":""):""));
+    const dyn=row.querySelector(".dyn");
+    dyn.textContent=(c.state==="live"?`${c.fps?fmt(c.fps,0)+" fps"+" · ":""}${fmt(c.mbit)} Mbit/s`:(c.state==="unknown"?"Status unbekannt":"wartet auf Signal"))+picTx;
+    dyn.style.color=(c.pic==="wartet"||c.pic==="aus")&&c.state==="live"?"var(--warn)":"";
   }
 }
 $("cams").addEventListener("click",async e=>{
