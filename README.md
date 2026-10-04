@@ -2,11 +2,11 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.30 (Beta).** Getestet auf einer Radxa ROCK 5B+ mit BELABOX-Image und DJI Osmo Action 4, Action 5 Pro und
-Action 6. Vier Kameras gleichzeitig (Hauptbild und drei kleine Bilder) liefen ohne Frame-Drops bei rund 13 Mbit/s; die
-Box war dabei zu etwa 70 % im Leerlauf. Noch kein Langzeittest über mehrere Stunden mit dem aktuellen Stand.
-Auf der Orange Pi 5 Plus (frisches BELABOX-Image) ist die Installation getestet und der Überlagerungs-Baustein mit künstlichen
-Testbildern geprüft, noch nicht mit Kameras.
+**Version 0.9.30 (Beta).** Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
+Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 13 Mbit/s, die Box war dabei zu rund 70 Prozent im
+Leerlauf (CPU im Mittel etwa 25 bis 30 Prozent, 35 bis 37 °C). Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
+ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN").
+Auf der Radxa ROCK 5B+ wurde nur ein älterer Stand getestet (0.9.10).
 
 Eigenständiges Zusatzpaket für eine BELABOX, **getrennt von der Original-Oberfläche**. Es ändert nur eine
 Einstellung des RTMP-Servers der BELABOX (Leerlaufgrenze für Kameras, mit Sicherung und Rückweg; ein kleiner apt-Haken stellt sie nach einem Update des BELABOX-Pakets wieder her) und sonst keine
@@ -15,7 +15,9 @@ vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
 
 ## Was geht
 
-- **Status:** Meldungen, CPU je Kern, Takt, Temperatur, RAM und Upload je verbundener Netzwerkkarte samt Summe (Ethernet, WLAN, USB-/Mobilfunk-Router).
+- **Status:** Drei Kästen nebeneinander. *System*: CPU (Gesamtwert und höchster Kern), Temperatur, Lüfter und Arbeitsspeicher. *Kameras*: je Kamera Name,
+  **Ampel** und aktuelle Eingangsbitrate. *Upload*: je verbundener Netzwerkkarte Datenrate samt **Ampel** und Summe (Ethernet, WLAN, USB-/Mobilfunk-Router). Warnungen
+  erscheinen darüber; sind keine da, bleibt der Platz leer.
 - **RTMP-Kameras:** neue Streams werden automatisch erkannt; Kameras lassen sich umbenennen, Rollen zuweisen.
 - **DJI-Kameras per Bluetooth** (Protokoll nach Moblin, MIT): Suche, Koppeln, WLAN und RTMP-Ziel übergeben, Start. Pro Kamera
   Auflösung, fps, Bitrate und Stabilisierung. Ein eigener Dienst (`pipbox-dji`) hält die Verbindungen, verbindet nach
@@ -24,7 +26,7 @@ vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
 - **SRTLA-Serverliste:** mehrere Server speichern und per Auswahl umschalten (Stream-ID wird nie angezeigt).
 - **Pipeline:** eine Kamera oder Bild-in-Bild mit bis zu drei kleinen Bildern (vier Kameras), Ecke und Größe wählbar, Ton von
   jeder Kamera. Die kleinen Bilder lassen sich in einer Vorschau frei verschieben (oder als Ecke wählen). Ein kleiner eigener GStreamer-Baustein (`gst/`) schreibt die kleinen Bilder in einem Durchgang direkt in
-  das Hauptbild. Fällt eine Kamera aus, schaltet die Box nach 5 Sekunden automatisch auf die übrigen um.
+  das Hauptbild. Fällt eine Kamera aus, schaltet die Box automatisch auf die übrigen um (das dauert etwa 5 Sekunden ohne Bild) und nimmt die Kamera erst nach 60 Sekunden stabilem Signal wieder auf.
 - **Gleichlauf:** Verzögerung für Hauptbild und jedes kleine Bild per Regler (0 bis 3000 ms), bei laufender Sendekette ohne
   Neustart änderbar. Zum Abgleichen liegt eine Stoppuhr unter `tools/stopwatch.html`.
 - **Ausgangswerte (frei änderbar):** Hauptbild 1080p/30 fps/8 Mbit/s, kleine Bilder 720p/30 fps/4 Mbit/s (nach der Rolle in
@@ -43,6 +45,7 @@ vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
   GitHub). Nicht während einer Übertragung.
 - **System-Updates** der BELABOX über einen getrennten Root-Helfer mit festen Aktionen.
 - **Automatisch live gehen** nach dem Start der Box (Schalter in der Live-Karte, standardmäßig aus): einmal pro Start, sobald eine Kamera sendet.
+- **Streammodus** (Knopf im Kopf der Seite und in der Live-Karte): blendet Adressen, Namen und Protokolle aus, wenn der Bildschirm mitgefilmt wird. Die Einstellung merkt sich nur der Browser.
 - **Mindestanteil je Sendeweg** (bei "Alle Leitungen gleichzeitig nutzen"): Jeder geeignete Weg bekommt mindestens 10 Prozent der Pakete, damit auch ein schwächerer Weg (Mobilfunk neben DSL, Starlink neben 5G) warm bleibt und bei einem Ausfall des besten nicht erst anlaufen muss. Siehe `srtla/README.md`.
 - **Kamera-Ampel:** Der Punkt vor jeder Kamera in der Kameraliste zeigt den Zustand auf einen Blick. **Grün**: sendet und ist im Bild. **Gelb**: sendet, ist aber noch nicht oder nicht mehr im
   Bild (zum Beispiel beim Wiederverbinden: eine zurückgekehrte Kamera wird erst nach 60 s stabilem Signal wieder aufgenommen, damit eine wackelige Kamera nicht dauernd den Encoder neu startet).
@@ -56,15 +59,30 @@ vorhandene BELABOX-Passwort (Rückfall: eigenes Passwort).
   (`/var/log/pipbox-health.log`, alle 10 Sekunden, höchstens 4 MB), damit nach einem Totalausfall sichtbar bleibt, was kurz
   davor los war. Boxen, die vor 0.9.13 installiert wurden, bleiben beim Update auf "ausführlich".
 
+## Hinweise zum Kamera-WLAN (aus dem Betrieb)
+
+DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. Was in unserem Aufbau (GL.iNet-Router mit Mobilfunk, vier Kameras, Orange Pi 5 Plus) geholfen hat:
+
+- **Nur 5 GHz, WPA2, 20 MHz Kanalbreite:** Nach der Umstellung von WPA3 auf WPA2 gab es über Stunden keinen Aussetzer mehr (vorher bei einer Kamera etwa einen pro Minute). Ein Kanalwechsel allein
+  (44 auf 36 und zurück) brachte nichts. WPA2 mit AES und einem langen Passwort ist sicher genug für ein reines Kameranetz.
+- **Kanal 36 bis 48 (kein DFS):** Die Osmo Action 5 Pro unterstützt im 5-GHz-Band laut Datenblatt nur 5150 bis 5250 und 5725 bis 5850 MHz, also nicht die DFS-Kanäle in der Mitte. Nach unserem Kenntnisstand (bitte selbst prüfen) sind in Deutschland 36 bis 64
+  nur für den Innenbereich freigegeben und 149 bis 165 für private WLANs nicht.
+- **RTMP-Leerlaufgrenze:** Der RTMP-Server der BELABOX wirft eine Kamera, die 4 Sekunden lang nichts schickt, aus dem Bild (`drop_idle_publisher 4s`); jedes Mal startet der Encoder dann neu. Dieses Paket setzt
+  die Grenze auf 15 Sekunden (mit Sicherung `99-belabox-rtmp.conf.vor-pipbox`) und stellt sie nach einem Update des BELABOX-Pakets per apt-Haken wieder her. Die Aussetzer der Kamera selbst beseitigt das nicht, sie
+  laufen nur durch, ohne dass etwas neu startet.
+- **Ampeln:** In der Karte "Status" zeigt die Ampel der Kameras, ob eine Kamera im Bild ist (grün), gerade wieder aufgenommen wird (gelb) oder fehlt (rot). Die Ampel der Sendewege zeigt, welcher Weg trägt (grün),
+  in Reserve steht (gelb) oder fehlt (rot).
+
 ## Was noch fehlt oder ungetestet ist
 
-- Langzeitstabilität. Es gab unerklärte Totalausfälle der Box (zuletzt zwei in der Nacht zum 2. Oktober 2026, ohne
-  Fehlermeldung im Protokoll). Verdacht: Stromversorgung, wenn ein USB-Router am USB-C-Port der Box hängt; nicht bewiesen.
-  Seitdem lief die Box über 15 Stunden ohne neuen Ausfall. Auf der Orange Pi 5 Plus (gleiche Stromversorgung) lief der aktuelle Stand am 3. Oktober 2026 mehrere Stunden ohne Ausfall; auf der ROCK 5B+ schaltet sich die Box gelegentlich von selbst aus, Ursache unbekannt.
-- Pocket 3 und weitere DJI-Modelle: Protokoll vorhanden, nie mit echter Kamera getestet. Die Action 6 lief; eine neue
-  oder zurückgesetzte Kamera muss im Kopplungsmodus sein und die Kopplungsabfrage bestätigen.
-- Der WLAN-Weg lief mit einem Handy-Hotspot (nur Mobilfunk, Verbinden mit Passwort über die Oberfläche) und der Verteilung
-  "alle Leitungen gleichzeitig" nur kurz (rund 40 ms Laufzeit, einige Mbit/s); nicht unterwegs und nicht über Stunden.
+- Langzeitstabilität über mehr als acht Stunden und mit mehreren Kameras im Dauerbetrieb im Freien. Es gab unerklärte Totalausfälle der Box (zuletzt zwei in der Nacht zum 2. Oktober 2026, ohne
+  Fehlermeldung im Protokoll); Verdacht: Stromversorgung, wenn ein USB-Router am USB-C-Port der Box hängt, nicht bewiesen. Auf der Orange Pi 5 Plus lief der aktuelle Stand zuletzt über Stunden ohne Ausfall.
+- Ungetestet: Pocket 3 und weitere DJI-Modelle (Protokoll vorhanden, nie mit echter Kamera). Eine neue oder zurückgesetzte Kamera muss im Kopplungsmodus sein und die Kopplungsabfrage bestätigen.
+- Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") wurde bisher nur zu Hause getestet, wo einer der drei Wege das Heimnetz zum Empfänger ist (1 ms) und kaum über DSL läuft. Ein
+  schwächerer Weg neben einem guten, etwa Starlink neben 5G, ist nicht geprüft. Gleiches gilt für unterwegs über Stunden.
+- Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).
+- Geplant, nicht gebaut: schneller Wechsel zwischen Hauptbild und kleinem Bild mit Überblendung (heute würde jeder Wechsel den Encoder neu starten und etwa 5 Sekunden Bild kosten), eigene
+  Empfangsprozesse je Kamera, damit ein Kameraausfall den Encoder nicht anhält, und HDMI- oder USB-Kameras als Quelle.
 
 Siehe [KONZEPT.md](KONZEPT.md) und [CHANGELOG.md](CHANGELOG.md).
 
