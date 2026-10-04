@@ -4236,12 +4236,32 @@ class Handler(BaseHTTPRequestHandler):
             flags += "; Secure"
         return f"pb_session={tok}; Max-Age={max_age}; {flags}"
 
+    I18N_RE = re.compile(r"^/i18n/([a-z]{2,3}|languages)\.json$")
+
+    def i18n_file(self, path):
+        """Übersetzungsdateien der Seite (Issue #24): /i18n.js und /i18n/<Sprache>.json aus web/. Öffentlich (die Anmeldeseite braucht sie), keine Geheimnisse."""
+        if path == "/i18n.js":
+            name, ctype = "i18n.js", "application/javascript; charset=utf-8"
+        else:
+            m = self.I18N_RE.match(path)
+            if not m:
+                return False
+            name, ctype = "i18n/%s.json" % m.group(1), "application/json; charset=utf-8"
+        body = read(os.path.join(WEB_DIR, name), None)
+        if body is None:
+            self.reply(404, {"error": "not found"})
+        else:
+            self.send_bytes(200, body.encode("utf-8"), ctype)
+        return True
+
     def page(self, name):
         body = read(os.path.join(WEB_DIR, name), "")
         self.send_bytes(200, body.encode(), "text/html; charset=utf-8")
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if (path == "/i18n.js" or path.startswith("/i18n/")) and self.i18n_file(path):
+            return
         if path in ("/", "/index.html"):
             return self.page("index.html" if self.authed() else "login.html")
         if path == "/api/auth":

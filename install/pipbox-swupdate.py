@@ -54,7 +54,7 @@ MAX_FILES = 300
 MAX_FILE = 2 * 1024 * 1024
 MAX_TOTAL = 20 * 1024 * 1024
 REQUIRED = ("VERSION", "server.py", "dji.py", "dji_daemon.py", "pipbox_send.py", "pipbox_send_ctl.py",
-            "web/index.html", "web/login.html", "install/install.sh", "gst/gstpbpip.c", "gst/build.sh")
+            "web/index.html", "web/login.html", "web/i18n.js", "web/i18n/languages.json", "install/install.sh", "gst/gstpbpip.c", "gst/build.sh")
 VERSION_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}(-[a-z0-9.]{1,16})?$")
 
 

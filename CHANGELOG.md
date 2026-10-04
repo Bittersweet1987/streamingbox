@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.84 (Beta)
+- Neu (Issue #24): **Sprachen**. Standard ist Englisch. Beim ersten Öffnen erscheint die Auswahl, später steht sie im Kopf und unten in der Karte "Language". Auch die Anmeldeseite.
+  - 14 Sprachen: Englisch, Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Datum und Uhrzeit folgen der Sprache.
+  - **Außer Deutsch maschinell übersetzt, nicht von Muttersprachlern geprüft.** Fehlt ein Text, gilt Englisch, dann Deutsch. Verbessern oder neue Sprache: `web/i18n/README.md`.
+- Geändert: Die Anzeige "verbunden" oben rechts entfällt.
+- Geändert (Handy): Der äußere Rand ist schmaler (8 statt 16 Pixel). Kopf- und Fußleiste sind so breit wie die Karten, die Fußleiste ist abgerundet. Die Schatten reichen nicht mehr zur Seite (im hellen Modus heller).
+- Tests: `tools/test_i18n.py` (41), `tools/test_mobile.py` (43).
+
 ## 0.9.83 (Beta)
 - Neu (Issue #24, erster Teil): **Hell und dunkel**. Knopf mit Sonne/Mond im Kopf, die Wahl bleibt im Browser gespeichert, Standard bleibt dunkel. Gilt auch für die Anmeldeseite.
 - Geändert (Issue #23):

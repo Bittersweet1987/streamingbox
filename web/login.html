@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
+<script src="/i18n.js"></script>
 <script>try{var t=localStorage.getItem("pb_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>IRL4YOU BOX</title>
 <style>
@@ -12,6 +13,7 @@
 :root[data-theme="light"]{color-scheme:light;--bg:#f1f5f9;--card:#ffffff;--text:#0f172a;--muted:#475569;--line:#cbd5e1;--accent:#0e7490;--ok:#16a34a;--warn:#d97706;--crit:#dc2626;--bar:#0891b2;--blue:#2563eb}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,system-ui,sans-serif;padding:16px}
+#lang_sel{position:fixed;top:12px;right:12px;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);font:inherit;font-size:13px}
 form{width:100%;max-width:360px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;display:grid;gap:10px}
 h1{font-size:20px;margin:0;color:var(--accent)}
 p{margin:0;color:var(--muted);font-size:13px}
@@ -23,6 +25,7 @@ button{background:var(--bar);color:#0f172a;font-weight:600;border-color:transpar
 </style>
 </head>
 <body>
+<select id="lang_sel" data-lang translate="no" aria-label="Language" title="Language"></select>
 <form id="f">
   <h1>IRL4YOU BOX</h1>
   <p id="hint">Anmelden</p>

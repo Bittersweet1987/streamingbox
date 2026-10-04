@@ -4,16 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
+<script src="/i18n.js"></script>
 <script>try{var t=localStorage.getItem("pb_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <title>IRL4YOU BOX</title>
 <style>
-:root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4;--blue:#3b82f6}
+:root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4;--blue:#3b82f6;--shade:rgba(2,6,23,.45)}
 :root{color-scheme:dark}
-:root[data-theme="light"]{color-scheme:light;--bg:#f1f5f9;--card:#ffffff;--text:#0f172a;--muted:#475569;--line:#cbd5e1;--accent:#0e7490;--ok:#16a34a;--warn:#d97706;--crit:#dc2626;--bar:#0891b2;--blue:#2563eb}
+:root[data-theme="light"]{color-scheme:light;--bg:#f1f5f9;--card:#ffffff;--text:#0f172a;--muted:#475569;--line:#cbd5e1;--accent:#0e7490;--ok:#16a34a;--warn:#d97706;--crit:#dc2626;--bar:#0891b2;--blue:#2563eb;--shade:rgba(15,23,42,.16)}
 *{box-sizing:border-box}
 [hidden]{display:none!important}   /* Klassen mit display (z. B. .row, .updbtn) dürfen das Attribut hidden nicht überstimmen */
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,system-ui,sans-serif}
-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;margin:12px auto 0;max-width:calc(980px - 0px);width:calc(100% - 32px);border:1px solid var(--line);border-radius:14px;background:var(--card);position:sticky;top:8px;z-index:50;box-shadow:0 0 0 8px var(--bg),0 10px 20px 6px rgba(2,6,23,.5)}   /* Kopfleiste bleibt beim Scrollen oben stehen */
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;margin:12px auto 0;max-width:calc(980px - 32px);width:calc(100% - 32px);border:1px solid var(--line);border-radius:14px;background:var(--card);position:sticky;top:8px;z-index:50;box-shadow:0 0 0 8px var(--bg),0 12px 12px -4px var(--shade)}   /* Kopfleiste bleibt beim Scrollen oben stehen; so breit wie die Karten (main: 980 px minus 2 x 16 px), der Schatten fällt nur nach unten */
 .card{scroll-margin-top:calc(var(--hdrh,64px) + 20px)}   /* Sprung zu einer Karte (z. B. gelber Punkt) landet unter der festen Kopfleiste, nicht dahinter */
 h1{font-size:17px;margin:0;color:var(--accent)}
 .badge{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--line);color:var(--muted)}
@@ -177,18 +178,19 @@ details.card[open]>summary{margin-bottom:10px}
 .foldd{display:inline-flex;gap:6px}
 .foldm{display:none}.smic{display:none;font-size:16px;line-height:1}
 button.small{padding:4px 10px;font-size:13px}
+#lang_sel{padding:4px 4px;font-size:13px;width:auto;min-width:48px;flex:none}
 #theme_btn{padding:4px 8px;line-height:0}#theme_btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 @media(max-width:620px){.smtx{display:none}.smic{display:inline}#sm_btn{padding:3px 10px}.foldd{display:none}.foldm{display:inline-block}header{gap:8px}}
 /* Handy: Kopfleiste in einer Zeile, "Live"/"Stop" steht in der festen Fußleiste (Issue #19) */
 #mfoot{display:none}
-.mf-live{flex:1 1 76px;min-width:76px;min-height:54px;border-radius:14px;border:1px solid var(--ok);background:var(--ok);color:#06210f;font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
+.mf-live{flex:1 1 76px;min-width:68px;min-height:54px;padding:0 4px;white-space:nowrap;border-radius:12px;border:1px solid var(--ok);background:var(--ok);color:#06210f;font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
 .mf-live.on{background:var(--crit);border-color:var(--crit);color:#fff}
 .mf-live.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
 .mf-live:disabled{opacity:.55;cursor:not-allowed}
 /* Kamera- und Ton-Knöpfe in der Fußleiste (Issue #19): kurz = kleines Bild aus-/einblenden bzw. nächste Tonspur, lang = Hauptbild tauschen bzw. stumm */
 #mf_tools{display:flex;gap:6px;min-width:0;flex:0 1 auto}      /* neben "Live"/"Stop" in einer Reihe (wie in der BELABOX-Oberfläche von Bittersweet); die Knöpfe werden bei vielen Kameras schmaler */
-.mf-t{flex:0 1 60px;min-width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:54px;padding:2px;border-radius:14px;border:2px solid var(--line);background:var(--bg);color:var(--text);font-family:inherit;font-size:10px;font-weight:700;line-height:1.1;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+.mf-t{flex:0 1 60px;min-width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:54px;padding:2px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--text);font-family:inherit;font-size:10px;font-weight:700;line-height:1.1;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .mf-t svg{width:22px;height:22px;flex:none}
 .mf-t span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mf-aud span{white-space:normal;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}     /* "Ton: Osmo" darf in zwei Zeilen stehen */
@@ -199,9 +201,10 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:var(--text)}      /* deaktiviert: blass, gestrichelt, nie grün */
 .mf-aud{color:var(--text)}
 .mf-aud.muted{color:var(--crit);border-color:var(--crit)}
-.mf-msg{position:absolute;left:12px;right:12px;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
+.mf-msg{position:absolute;left:0;right:0;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
 @media(max-width:620px){
-  header{flex-wrap:nowrap;padding:6px 10px;gap:6px;width:calc(100% - 20px)}
+  header{flex-wrap:nowrap;padding:6px 10px;gap:6px;width:calc(100% - 16px)}       /* gleiche Breite wie die Karten (8 px Rand) */
+  main{padding-left:8px;padding-right:8px}                                          /* schmaler Rand am Handy: kein Platz verschenkt */
   header h1{font-size:15px;white-space:nowrap}
   header .hdr{flex-wrap:nowrap;gap:6px;min-width:0}
   header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
@@ -211,9 +214,15 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
   #livecard{padding:0;border:0;background:transparent;box-shadow:none;margin:0}
   #livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}
   #livecard :is(.ph,.err,.pending):empty{display:none}
-  #mfoot{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(2,6,23,.5)}
-  body{padding-bottom:var(--mfh,calc(76px + env(safe-area-inset-bottom)))}    /* --mfh: Höhe der Fußleiste, setzt die Seite (mit Knopfreihe höher) */
-  .toast{bottom:calc(var(--mfh,76px) + 16px)}
+  /* Fußleiste wie die Kopfleiste: abgerundet, mit seitlichem Rand und etwas Abstand nach unten (der Rand in der Hintergrundfarbe verdeckt, was darunter durchläuft) */
+  #mfoot{display:flex;position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:60;gap:6px;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 0 0 8px var(--bg),0 env(safe-area-inset-bottom) 0 8px var(--bg),0 -12px 12px -4px var(--shade)}
+  body{padding-bottom:calc(var(--mfh,72px) + 20px + env(safe-area-inset-bottom))}    /* --mfh: Höhe der Fußleiste, setzt die Seite (mit Knopfreihe höher) */
+  .toast{bottom:calc(var(--mfh,72px) + 28px + env(safe-area-inset-bottom))}
+}
+@media(max-width:374px){.mf-live{min-width:60px}.mf-t{min-width:38px}}                /* schmale Handys: die fünf Knöpfe müssen noch in die Leiste passen */
+@media(max-width:339px){
+  #mfoot{gap:4px;padding:5px}#mf_tools{gap:4px}.mf-live{min-width:52px;font-size:15px}.mf-t{min-width:34px}
+  header{padding:5px 8px;gap:4px}header h1{font-size:13px}header .hdr{gap:4px}header .hdr button{padding:3px 7px}
 }
 #rcard a.btnlink{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--bar);color:#0f172a;font-weight:600;text-decoration:none}
 #r_apps a.btnlink{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400}
@@ -275,7 +284,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 <body>
 <header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button> <span id="mode" class="badge" title="Verbindung der Seite zur Box">verbinde…</span></span></header>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
@@ -535,6 +544,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="dev_msg" class="ph" role="status"></div>
     <div id="dev_pw_out" class="ph sens" role="status"></div>
   </details>
+  <details class="card wide" id="c_lang" translate="no"><summary><span class="sumh">Language · Sprache</span></summary><div class="langbtns" data-lang-buttons></div></details>
   <details class="card wide" id="c_power"><summary><span class="sumh">Box ausschalten und abmelden</span></summary>
     <div class="ph" style="margin-top:0">Fährt die Box sauber herunter oder startet sie neu. Wenn die Box ausgeschaltet ist, kann sie über die Oberfläche nicht wieder eingeschaltet werden: dafür den Strom kurz trennen oder die Ein-Taste nutzen. „Abmelden“ beendet die Anmeldung auf diesem Gerät, auch eine mit „Angemeldet bleiben“ gemerkte.</div>
     <div class="actions"><button id="pw_off" type="button" class="warnbtn">Herunterfahren</button> <button id="pw_reboot" type="button" class="sec">Neu starten</button> <button id="logout" type="button" class="sec" title="Von dieser Box abmelden (auch eine gemerkte Anmeldung)">Abmelden</button></div>
@@ -656,7 +666,8 @@ $("addcam").addEventListener("submit",async e=>{
 $("logout").addEventListener("click",async()=>{await fetch("/api/logout",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});location.reload();});
 
 const UPD_LABEL={check:"Suche",autocheck:"Suche",dry:"Probelauf",run:"Update",reboot:"Neustart"};
-const fmtT=t=>t?new Date(t*1000).toLocaleString("de-DE"):"nie";
+const LOC=()=>window.PB_I18N?PB_I18N.locale():"de-DE";
+const fmtT=t=>t?new Date(t*1000).toLocaleString(LOC()):"nie";
 function renderUpdate(u){
   const v=u.versions||{}, busy=u.state==="running"||u.state==="rebooting";
   const lines=[
@@ -664,12 +675,13 @@ function renderUpdate(u){
     ["Kernelpaket installiert",esc(v["belabox-linux-rk3588"]||"–")],
     ["belaui / belacoder",esc((v["belaui"]||"–")+" / "+(v["belacoder"]||"–"))],
     ["Zuletzt geprüft",fmtT(u.last_check)]];
-  if(u.available!=null) lines.push(["Verfügbar",u.available+" Pakete"+(u.download&&u.download!=="0 B"?" ("+esc(u.download)+")":"")+(u.belabox&&u.belabox.length?", BELABOX: "+u.belabox.map(esc).join(", "):"")]);
+  if(u.available!=null) lines.push(["Verfügbar",u.download&&u.download!=="0 B"?`${u.available} Pakete (${esc(u.download)})`:`${u.available} Pakete`]);
+  if(u.available!=null&&u.belabox&&u.belabox.length) lines.push(["BELABOX-Pakete",u.belabox.map(esc).join(", ")]);
   if(u.would_reboot) lines.push(["Hinweis","Danach ist ein Neustart nötig (Kernel/Netzwerk)."]);
   $("updinfo").innerHTML=lines.map(l=>`<div class="upd-line"><span class="muted">${l[0]}</span><span>${l[1]}</span></div>`).join("");
   { const dot=$("hdr_sys"), n=(!busy&&u.state!=="failed"&&u.state!=="refused"&&u.available>0)?u.available:0;   // gelber Punkt in der Kopfleiste: Systemupdates (BELABOX/Ubuntu) liegen bereit
     dot.hidden=!n;
-    if(n){ const t="BELABOX-Systemupdates: "+n+" Pakete verfügbar"+(u.last_check?" (Stand "+fmtT(u.last_check)+")":"")+"."+(u.would_reboot?" Danach ist ein Neustart nötig.":"")+(u.streaming?" Einspielen geht nicht während der Übertragung.":" Zu den Systemupdates."); dot.title=t; dot.setAttribute("aria-label",t); } }
+    if(n){ const t=[u.last_check?`BELABOX-Systemupdates: ${n} Pakete verfügbar (Stand ${fmtT(u.last_check)}).`:`BELABOX-Systemupdates: ${n} Pakete verfügbar.`,u.would_reboot?"Danach ist ein Neustart nötig.":"",u.streaming?"Einspielen geht nicht während der Übertragung.":"Zu den Systemupdates."].filter(Boolean).join(" "); dot.title=t; dot.setAttribute("aria-label",t); } }
   const p=u.progress, show=u.state==="running"&&p&&p.total>0;
   $("updbar").hidden=!show;
   if(show){ const pct=Math.round(100*(p.downloading+p.unpacking+p.setting_up)/(3*p.total)); $("updbari").style.width=pct+"%"; }
@@ -693,7 +705,7 @@ function renderUpdate(u){
   if(busy) {badge=u.state==="rebooting"?"Neustart…":"läuft…"; cls="attn";}
   else if(u.reboot_pending) {badge="Neustart nötig"; cls="attn";}
   else if(u.state==="failed"||u.state==="refused") {badge="Fehler"; cls="attn";}
-  else if(u.available>0) {badge=u.available+" Updates verfügbar"; cls="attn";}
+  else if(u.available>0) {badge=`${u.available} Updates verfügbar`; cls="attn";}
   else if(u.last_check||u.state==="done") {badge="aktuell"; cls="ok";}
   $("updbadge").textContent=badge; $("updbadge").className="badge "+cls;
   // Die Karte öffnet sich von selbst, wenn etwas ansteht (Updates da, Fehler, Neustart nötig). Zuklappen tut sie nie von selbst:
@@ -725,7 +737,7 @@ const djiIsOther=c=>(djiData.wifi_options||[]).some(o=>o.ifname===c.wifi_ifname&
 const djiNeedsNet=c=>c.wifi_ifname==="manual"||djiIsOther(c);
 function djiCardHtml(c){
   const opts=djiData.wifi_options||[], known=opts.some(o=>o.ifname===c.wifi_ifname);
-  const netOpts=opts.map(o=>{ const lb=o.type==="other"?`${o.ifname} · ${o.ip}`:`${o.ssid} (${o.type==="hotspot"?"WLAN-Hotspot":"WLAN-Netz"} an ${o.ifname}, ${o.ip})`;
+  const netOpts=opts.map(o=>{ const lb=o.type==="other"?`${o.ifname} · ${o.ip}`:(o.type==="hotspot"?`${o.ssid} (WLAN-Hotspot an ${o.ifname}, ${o.ip})`:`${o.ssid} (WLAN-Netz an ${o.ifname}, ${o.ip})`);
     return `<option value="${esc(o.ifname)}"${c.wifi_ifname===o.ifname?" selected":""}>${esc(lb)}</option>`; }).join("");
   const missing=(c.wifi_ifname&&c.wifi_ifname!=="manual"&&!known)?`<option value="${esc(c.wifi_ifname)}" selected>${esc(c.wifi_ifname)} (nicht verbunden)</option>`:"";
   const res=["480p","720p","1080p"].map(r=>`<option${c.resolution===r?" selected":""}>${r}</option>`).join("");
@@ -896,7 +908,8 @@ async function netRender(){
   netOpts=d.options||[];
   const sel=$("netsel"); if(document.activeElement===sel||netBusy) return;
   sel.innerHTML=d.options.map(o=>`<option value="${esc(o.iface)}"${(d.selected?o.iface===d.selected:o.ip===d.ip)?" selected":""}>${esc(o.label)} · ${esc(o.cam_ip||o.ip)}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}</option>`).join("")||"<option>keine Netzwerke</option>";
-  $("netinfo").textContent=`Adresse für die Kamera: rtmp://${d.ip}:1935/publish/<Schlüssel>`+(d.selected?"":" (Standardweg, noch nicht gewählt)");
+  const keyHint="<Schlüssel>";                                            // wird beim Übersetzen eingesetzt, steht darum nicht im Text
+  $("netinfo").textContent=d.selected?`Adresse für die Kamera: rtmp://${d.ip}:1935/publish/${keyHint}`:`Adresse für die Kamera: rtmp://${d.ip}:1935/publish/${keyHint} (Standardweg, noch nicht gewählt)`;
 }
 $("netsel").addEventListener("change",async e=>{ netBusy=true;
   const r=await fetch("/api/network",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({iface:e.target.value})});
@@ -1029,7 +1042,7 @@ function hsPanel(c,busy){
     <label class="muted">Name des Hotspots<input class="hs-ssid" maxlength="32" autocomplete="off" value="${esc(dr.ssid)}"></label>
     <label class="muted">Passwort (8 bis 63 Zeichen)<input class="hs-pw-in" maxlength="63" autocomplete="off" value="${esc(dr.pw)}" placeholder="${c.hotspot?"leer = gespeichertes Passwort":""}"></label>
     <label class="muted">Band<select class="hs-band"><option value="bg"${dr.band==="bg"?" selected":""}>2,4 GHz (reicht weiter)</option><option value="a"${dr.band==="a"?" selected":""}${c.band5===false?" disabled":""}>5 GHz (schneller, weniger Störungen)</option></select></label>
-    <label class="muted">Kanal<select class="hs-ch">${chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?"Kanal "+n:"automatisch"}</option>`).join("")}</select></label>
+    <label class="muted">Kanal<select class="hs-ch">${chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?`Kanal ${n}`:"automatisch"}</option>`).join("")}</select></label>
   </div><div class="actions"><button type="button" class="hs-save"${off}>Speichern</button> <button type="button" class="sec hs-gen">Passwort erzeugen</button> <button type="button" class="sec hs-close">Schließen</button></div></div>`;
 }
 function hsControls(c,busy){                                // Zeile "Hotspot-Modus" unter der Karte (nicht bei Karten ohne Zugangspunkt-Betrieb)
@@ -1065,7 +1078,7 @@ async function hsToggle(iface){
   }
   const body={action:"hotspot_start",iface};
   if(c.ip){
-    if(!confirm("Die WLAN-Karte "+c.iface+" ist gerade mit "+(c.ssid?"„"+c.ssid+"“":"einem WLAN")+" verbunden. Der Hotspot beendet diese Verbindung."+
+    if(!confirm((c.ssid?`Die WLAN-Karte ${c.iface} ist gerade mit „${c.ssid}“ verbunden.`:`Die WLAN-Karte ${c.iface} ist gerade mit einem WLAN verbunden.`)+" Der Hotspot beendet diese Verbindung."+
                 "\n\nHast du die Oberfläche über dieses WLAN geöffnet, bricht sie ab. Du erreichst sie danach über den Hotspot (Adresse meist 10.42.0.1) oder über ein anderes Netz.\n\nHotspot einschalten?")) return;
     body.confirm=true;
   }
@@ -1103,7 +1116,7 @@ $("wifidev").addEventListener("input",e=>{                  // Eingaben im Feld 
   else if(c.contains("hs-band")){
     dr.band=e.target.value; const sel=card.querySelector(".hs-ch"), chs=HS_CH[dr.band]||HS_CH.bg;
     if(!chs.includes(+dr.ch)) dr.ch=0;
-    sel.innerHTML=chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?"Kanal "+n:"automatisch"}</option>`).join("");
+    sel.innerHTML=chs.map(n=>`<option value="${n}"${+dr.ch===n?" selected":""}>${n?`Kanal ${n}`:"automatisch"}</option>`).join("");
   }else if(c.contains("hs-ch")) dr.ch=parseInt(e.target.value,10)||0;
 });
 function wifiDebug(d){                                             // Suche ohne Treffer: technische Angaben der Karte zum Weitergeben (zum Beispiel an das Issue)
@@ -1178,7 +1191,7 @@ function styleFill(k,force){
   box.querySelector('[data-o="cropinfo"]').textContent=cropped?`Bild nach dem Beschneiden: ${CROP_W-c.l-c.r} × ${CROP_H-c.t-c.b} Pixel. Der Maßstab bleibt, es wird nur abgeschnitten.`:"Nicht beschnitten.";
   box.querySelector('[data-o="bopts"]').style.opacity=st.border.enabled?1:.5;
   box.querySelectorAll('[data-o="bopts"] input').forEach(e=>e.disabled=!st.border.enabled);
-  const parts=[st.visible?"":"ausgeblendet",cropped?"beschnitten":"",st.radius?"Ecken "+st.radius+" px":"",st.border.enabled?"Rahmen "+st.border.width+" px":""].filter(Boolean);
+  const parts=[st.visible?"":"ausgeblendet",cropped?"beschnitten":"",st.radius?`Ecken ${st.radius} px`:"",st.border.enabled?`Rahmen ${st.border.width} px`:""].filter(Boolean);
   box.querySelector(".pvs-sum").textContent=parts.length?"· "+parts.join(", "):"· Standard";
 }
 document.querySelectorAll(".pvs").forEach(box=>{
@@ -1324,7 +1337,7 @@ async function pipeLoad(){
       return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":(seamlessTo(c.main,k)?"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild, ohne Unterbrechung der Sendung)":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)")}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
-  let info=c.main?`Gespeichert: ${c.type==="pip"?"Bild-in-Bild":"eine Kamera"}, Hauptbild ${c.main}${c.type==="pip"?", kleines Bild "+c.pip+(c.pip2?(c.pip3?", ":" und ")+c.pip2:"")+(c.pip3?" und "+c.pip3:""):""}.`:"Noch keine Pipeline gespeichert.";
+  let info=!c.main?"Noch keine Pipeline gespeichert.":c.type==="pip"?`Gespeichert: Bild-in-Bild, Hauptbild ${c.main}, kleines Bild ${[c.pip,c.pip2,c.pip3].filter(Boolean).join(", ")}.`:`Gespeichert: eine Kamera, Hauptbild ${c.main}.`;
   // Deckkraft, Beschnitt und Rahmen gibt es erst, wenn der installierte Überlagerungs-Baustein sie kennt (er wird beim Software-Update neu gebaut); bis dahin bleiben die Felder weg
   document.querySelectorAll(".pvs").forEach(e=>e.hidden=d.plugin_present&&d.plugin_style===false);
   if(d.needs_plugin&&!d.plugin_present) info+=" Bild-in-Bild braucht den Überlagerungs-Baustein, der noch nicht auf der Box installiert ist.";
@@ -1371,7 +1384,7 @@ async function pipWatchRestart(base){
     let d; try{ d=await srtlaCall("GET","/api/send"); }catch(e){ continue; }
     const sec=Math.round((Date.now()-t0)/1000);
     if(d.state==="running"){
-      if(seenOther||sec>=4){ el.textContent="Gespeichert. Die Übertragung läuft wieder (nach "+sec+" Sekunden)."; el.style.color="var(--ok)"; setTimeout(()=>{ if(tok===pipWatchTok) el.style.color=""; },8000); return; }
+      if(seenOther||sec>=4){ el.textContent=`Gespeichert. Die Übertragung läuft wieder (nach ${sec} Sekunden).`; el.style.color="var(--ok)"; setTimeout(()=>{ if(tok===pipWatchTok) el.style.color=""; },8000); return; }
     }else if(d.state==="refused"||d.state==="stopped"){
       el.textContent="Gespeichert, aber die Übertragung läuft nicht: "+(d.message||LIVE_LABEL[d.state]||d.state); return;
     }else{ seenOther=true; el.textContent=base+" "+(LIVE_LABEL[d.state]||d.state)+" … ("+sec+" s)"; }
@@ -1386,7 +1399,7 @@ let sendData=null, pendIgnored="";
 const SM_LOCKED=["srtlacard","rcard"];
 function setSM(on){
   document.body.classList.toggle("sm",on);
-  document.querySelector("#sm_btn .smtx").textContent="Streammodus: "+(on?"an":"aus"); $("sm_btn").title="Streammodus ist "+(on?"an":"aus"); $("sm_btn").classList.toggle("smon",on);
+  document.querySelector("#sm_btn .smtx").textContent=on?"Streammodus: an":"Streammodus: aus"; $("sm_btn").title=on?"Streammodus ist an":"Streammodus ist aus"; $("sm_btn").classList.toggle("smon",on);
   SM_LOCKED.forEach(id=>{ const c=$(id); c.classList.toggle("locked",on); if(on) c.open=false; });
   $("srtlalock").hidden=!on; $("rlock").hidden=!on;
   try{ localStorage.setItem("pb_sendemodus",on?"1":"0"); }catch(e){}
@@ -1407,18 +1420,18 @@ async function sendLoad(){
   const pend=d.active&&d.pending&&d.pending.length?d.pending:[];
   if(!pend.length) pendIgnored="";
   $("livepending").hidden=!pend.length||pend.join("|")===pendIgnored;
-  if(pend.length) $("livepending_t").textContent="Noch nicht übernommen: "+pend.join(", ")+". Das gilt erst nach einem Neustart der Sendung.";
+  if(pend.length) $("livepending_t").textContent=`Noch nicht übernommen: ${pend.join(", ")}. `+"Das gilt erst nach einem Neustart der Sendung.";
   { const a=d.autostart||{}, cb=$("auto_on");
     if(document.activeElement!==cb) cb.checked=!!a.enabled;
     const st=$("autostatus");
-    if(a.phase==="wartet"){ st.hidden=false; st.textContent="Automatischer Start: wartet auf eine sendende Kamera"+(a.until?" (bis "+new Date(a.until*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})+" Uhr)":""); }
+    if(a.phase==="wartet"){ st.hidden=false; st.textContent=a.until?`Automatischer Start: wartet auf eine sendende Kamera (bis ${new Date(a.until*1000).toLocaleTimeString(LOC(),{hour:"2-digit",minute:"2-digit"})} Uhr)`:"Automatischer Start: wartet auf eine sendende Kamera"; }
     else if(a.phase==="aufgegeben"||a.phase==="abgebrochen"){ st.hidden=false; st.textContent=a.message||"Automatischer Start beendet"; }
     else st.hidden=true;
   }
   const why=[]; if(d.state==="refused"&&d.message) why.push(d.message);
   if(!d.active) why.push(...d.reasons);
   if(d.active&&d.failover&&d.failover.waiting) why.push((d.failover.inactive||[]).length?"Keine aktive Kamera sendet, warte auf ein Signal":"Keine Kamera sendet, warte auf ein Signal");
-  else if(d.active&&d.failover&&d.failover.degraded){ const nm=k=>(camsByKey[k]||{}).name||k; why.push("Notbetrieb: es senden "+d.failover.layout.map(nm).join(", ")+" (fehlende Kameras kommen nach 60 s stabilem Signal zurück)"); }
+  else if(d.active&&d.failover&&d.failover.degraded){ const nm=k=>(camsByKey[k]||{}).name||k; why.push(`Notbetrieb: es senden ${d.failover.layout.map(nm).join(", ")} (fehlende Kameras kommen nach 60 s stabilem Signal zurück)`); }
   if(d.active&&d.last&&d.last_age!=null&&d.last_age<180) why.push(d.last);      // alte Meldungen verschwinden von selbst
   if(d.active&&d.restarts){ const e=d.restarts.belacoder||0, n=d.restarts.srtla_send||0;
     if(e||n) why.push("Seit dem Start automatisch neu gestartet: "+[e?`Encoder ${e}×`:"",n?`Netzverbindung ${n}×`:""].filter(Boolean).join(", ")); }
@@ -1459,7 +1472,7 @@ function seamlessTo(main,key){      // läuft die Sendekette im Tausch-Betrieb u
 $("swapbtns").addEventListener("click",async e=>{
   const b=e.target.closest(".swapto"); if(!b) return;
   const live=!!(sendData&&sendData.active);
-  if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm("Hauptbild: "+b.textContent.trim()+" verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.")) return;
+  if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm(`Hauptbild: ${b.textContent.trim()} verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.`)) return;
   try{ const r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
 async function doLiveStop(){
@@ -1501,6 +1514,7 @@ let footBusy=false, footMsgT=null;
 function footMsg(t){ const m=$("mf_msg"); clearTimeout(footMsgT); m.textContent=t||""; m.hidden=!t; if(t) footMsgT=setTimeout(()=>{ m.hidden=true; },6000); }
 function sizeFoot(){ const h=$("mfoot").offsetHeight; if(h) document.documentElement.style.setProperty("--mfh",h+"px"); else document.documentElement.style.removeProperty("--mfh"); }
 window.addEventListener("resize",sizeFoot);
+if(window.ResizeObserver) new ResizeObserver(sizeFoot).observe($("mfoot"));          // auch wenn eine Übersetzung den Text breiter oder höher macht
 function renderFoot(d){
   if(footBusy) return;                                                    // mitten im Drücken nichts austauschen
   const f=d.footer, box=$("mf_tools");
@@ -1508,9 +1522,11 @@ function renderFoot(d){
   const L=camLabels(f.cams);
   const cams=f.cams.map(c=>{
     const full=c.name||c.key;
-    const tip=full+(c.main?" ist das Hauptbild (lässt sich nicht ausblenden).":(c.hidden?" ist ausgeblendet. Kurz drücken blendet das kleine Bild ein.":" ist als kleines Bild zu sehen. Kurz drücken blendet es aus.")+" Lang drücken macht es zum Hauptbild. Doppelt tippen: "+(c.inactive?"wieder aktivieren.":"deaktivieren (springt bei Ausfall nicht als Ersatz ein)."));
+    const tip=(c.main?[`${full} ist das Hauptbild (lässt sich nicht ausblenden).`]:[c.hidden?`${full} ist ausgeblendet.`:`${full} ist als kleines Bild zu sehen.`,
+      c.hidden?"Kurz drücken blendet das kleine Bild ein.":"Kurz drücken blendet es aus.","Lang drücken macht es zum Hauptbild.",
+      c.inactive?"Doppelt tippen: wieder aktivieren.":"Doppelt tippen: deaktivieren (springt bei Ausfall nicht als Ersatz ein)."]).join(" ");
     return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.inactive?" off":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" data-inactive="${c.inactive?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
-  const a=f.audio||{}, an=a.name||a.key||"", atip="Ton von "+an+(a.mute?" (stumm). Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":". Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm.");
+  const a=f.audio||{}, an=a.name||a.key||"", atip=(a.mute?`Ton von ${an} (stumm).`:`Ton von ${an}.`)+" "+(a.mute?"Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":"Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm.");
   const aud=`<button type="button" class="mf-t mf-aud${a.mute?" muted":""}" data-kind="aud" data-mute="${a.mute?1:0}" data-next="${esc(a.next||"main")}" title="${esc(atip)}" aria-label="${esc(atip)}">${a.mute?FIC.micoff:FIC.spk}<span>Ton: ${esc(L[a.key]||an)}</span></button>`;
   box.hidden=false; setHtml(box,cams+aud); sizeFoot();
 }
@@ -1684,9 +1700,9 @@ async function swLoad(force,fresh){
   }
   { const dot=$("hdr_upd");                      // gelber Punkt in der Kopfleiste, solange eine neuere Version auf GitHub liegt
     dot.hidden=!d.newer;
-    if(d.newer){ const t="Neue Version "+(d.latest?"v"+d.latest+" ":"")+"verfügbar (jetzt v"+d.current+")."+(d.sending?" Einspielen geht nicht während der Übertragung.":" Zum Software-Update."); dot.title=t; dot.setAttribute("aria-label",t); } }
+    if(d.newer){ const t=(d.latest?`Neue Version v${d.latest} verfügbar (jetzt v${d.current}).`:`Neue Version verfügbar (jetzt v${d.current}).`)+" "+(d.sending?"Einspielen geht nicht während der Übertragung.":"Zum Software-Update."); dot.title=t; dot.setAttribute("aria-label",t); } }
   const busy=d.state==="installing"||!!swPending;
-  $("stagefoot").textContent="IRL4YOU BOX Version "+d.current+(d.stage?" ("+d.stage+")":"")+(d.stage?" – Funktionen und Bedienung können sich noch ändern.":"");
+  $("stagefoot").textContent=d.stage?`IRL4YOU BOX Version ${d.current} (${d.stage}) – Funktionen und Bedienung können sich noch ändern.`:`IRL4YOU BOX Version ${d.current}`;
   $("sw_cur").textContent="v"+d.current+(d.stage?" ("+d.stage+")":"");
   $("sw_latest").textContent=d.latest?"v"+d.latest:(d.error?"–":"wird geprüft …");
   $("sw_badge").textContent=busy?"läuft …":(d.error?"unbekannt":(d.newer?"Update verfügbar":"aktuell"));
@@ -1695,7 +1711,7 @@ async function swLoad(force,fresh){
   $("sw_install").disabled=busy||!d.newer||d.sending||!d.helper_installed;
   $("sw_check").disabled=busy;
   $("sw_rollback").hidden=!d.backup_version||busy;
-  if(d.backup_version) $("sw_rollback").textContent="Zurück zu Version "+d.backup_version;
+  if(d.backup_version) $("sw_rollback").textContent=`Zurück zu Version ${d.backup_version}`;
   let msg="";
   if(!d.helper_installed) msg="Der Update-Helfer ist nicht installiert. Bitte install.sh einmal erneut ausführen.";
   else if(d.error) msg=d.error;
@@ -1704,7 +1720,7 @@ async function swLoad(force,fresh){
   else if(d.state==="refused"||d.state==="failed") msg=d.message;
   else if(d.sending&&d.newer) msg="Update gesperrt: Es wird gerade gesendet.";
   else if(d.newer) msg="Eine neue Version ist da. Installieren geht nur, wenn nicht gesendet wird.";
-  else if(d.latest) msg="Sie haben die neueste Version."+(d.checked_at?" Zuletzt geprüft um "+new Date(d.checked_at*1000).toLocaleTimeString("de-DE")+".":"");
+  else if(d.latest) msg="Sie haben die neueste Version."+(d.checked_at?` Zuletzt geprüft um ${new Date(d.checked_at*1000).toLocaleTimeString(LOC())}.`:"");
   $("sw_msg").textContent=msg;
   $("sw_msg").style.color=(d.state==="failed"||d.state==="refused"||d.error)&&!swPending?"var(--crit)":"";
   swVersions=d.versions||[]; swCurrent=d.current;
@@ -1729,7 +1745,7 @@ $("sw_switch").addEventListener("click",async()=>{
   const x=swFind($("sw_ver").value);
   if(!x||x.current){ swShowInfo(); return; }
   const older=x.relation==="älter";
-  if(!confirm(`Auf Version ${x.version} wechseln?\n\n`+(older?"ACHTUNG: Das ist eine ÄLTERE Version als die installierte ("+swCurrent+"). Neuere Funktionen und Korrekturen fehlen dann.\n\n":"")
+  if(!confirm(`Auf Version ${x.version} wechseln?\n\n`+(older?`ACHTUNG: Das ist eine ÄLTERE Version als die installierte (${swCurrent}). Neuere Funktionen und Korrekturen fehlen dann.\n\n`:"")
       +"• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu.\n• Die jetzige Version wird vorher gesichert, Sie können wieder zurück.")) return;
   swBegin("Wechsel wird gestartet …");
   try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); }catch(e){ swPending=0; $("sw_msg").textContent=e.message; $("sw_msg").style.color="var(--crit)"; }
@@ -1756,13 +1772,12 @@ swLoad(false,true);                                                   // beim Ö
 $("swcard").addEventListener("toggle",()=>{ if($("swcard").open) swLoad(false,true); });   // und beim Aufklappen der Karte
 (function swLoop(){ (swPending||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending?2000:8000)); })();
 // Nach dem automatischen Neuladen kurz bestätigen, dass das Update geklappt hat
-try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent="✔ Update installiert: Die Box läuft jetzt mit Version "+v+"."; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}
+try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent=`✔ Update installiert: Die Box läuft jetzt mit Version ${v}.`; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}
 async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}
     const m=await resp.json();
-    const mode=$("mode"); mode.textContent=m.demo?"Demo-Werte":"verbunden"; mode.className="badge"+(m.demo?" demo":"");
-    $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":"höchster Kern "+fmt(m.cpu.max,0)+" %"; $("cpubar").style.width=(m.cpu.avg||0)+"%";
+    $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":`höchster Kern ${fmt(m.cpu.max,0)} %`; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
     $("fanline").hidden=m.fan_pct==null; if(m.fan_pct!=null) $("fan").textContent=fmt(m.fan_pct,0);
     $("mem").textContent=fmt(m.mem.used_pct,0); $("membar").style.width=(m.mem.used_pct||0)+"%";
@@ -1791,7 +1806,7 @@ async function tick(){
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
     $("livehealth").innerHTML=m.alerts.length?m.alerts.map(a=>`<span class="${a.level}">${a.text}</span>`).join(" · "):'<span class="ok">● Alles im grünen Bereich</span>';
     $("alerts").innerHTML=m.alerts.length?m.alerts.map(a=>`<div class="alert ${a.level}">${a.text}</div>`).join(""):"";
-  }catch(e){ $("mode").textContent="keine Verbindung"; }
+  }catch(e){ /* keine Antwort: beim nächsten Durchlauf wieder */ }
 }
 // ---- Karten zuklappen: Zustand wird im Browser gemerkt ----
 (function(){
@@ -1835,7 +1850,7 @@ async function logsDownload(){
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(a.href),20000);
     const off=-now.getTimezoneOffset()/60;
-    msg.textContent="Heruntergeladen: "+name+" ("+Math.max(1,Math.round(blob.size/1024))+" KB). Zeiten in der Datei sind UTC"+(off?" (bei dir UTC"+(off>0?"+":"")+off+")":"")+"."
+    msg.textContent=`Heruntergeladen: ${name} (${Math.max(1,Math.round(blob.size/1024))} KB). `+(off?`Zeiten in der Datei sind UTC (bei dir UTC${off>0?"+":""}${off}).`:"Zeiten in der Datei sind UTC.")
       +(logModeNow==="sparsam"?" Im Modus „Sparsam“ fehlt die Zeit vor dem letzten Start der Box.":"");
   }catch(x){ msg.textContent="Fehler: "+x.message; }
   btn.disabled=false;
@@ -1900,12 +1915,12 @@ function hlpOwner(ph){                                             // die Übers
 // ---- Einstellungen sichern und einspielen (Karte "Einstellungen sichern", Issue #20) ----
 let bkDoc=null, bkInfo=null, bkSending=false, bkPw="";
 const BK_MIN=8;
-function bkPwHint(){ const on=$("bk_secrets").checked; $("bk_pwlab").textContent=on?"Passwort zum Verschlüsseln (mind. "+BK_MIN+" Zeichen)":"Passwort (leer = unverschlüsselt)"; }
+function bkPwHint(){ const on=$("bk_secrets").checked; $("bk_pwlab").textContent=on?`Passwort zum Verschlüsseln (mind. ${BK_MIN} Zeichen)`:"Passwort (leer = unverschlüsselt)"; }
 $("bk_secrets").addEventListener("change",bkPwHint);
 async function bkExport(){
   const sec=$("bk_secrets").checked, pw=$("bk_pw").value, pw2=$("bk_pw2").value, msg=$("bk_msg"), btn=$("bk_export");
   if(pw!==pw2){ msg.textContent="Die beiden Passwörter sind nicht gleich."; return; }
-  if((sec||pw)&&pw.length<BK_MIN){ msg.textContent=sec?"Mit Passwörtern bitte ein Passwort eingeben (mind. "+BK_MIN+" Zeichen).":"Mindestens "+BK_MIN+" Zeichen (oder leer lassen)."; return; }
+  if((sec||pw)&&pw.length<BK_MIN){ msg.textContent=sec?`Mit Passwörtern bitte ein Passwort eingeben (mind. ${BK_MIN} Zeichen).`:`Mindestens ${BK_MIN} Zeichen (oder leer lassen).`; return; }
   btn.disabled=true; msg.textContent="Wird gesammelt und verschlüsselt …";
   try{
     const r=await srtlaCall("POST","/api/settings/export",{secrets:sec,password:pw||undefined});
@@ -1934,11 +1949,11 @@ async function bkPreview(){
   try{ bkInfo=await srtlaCall("POST","/api/settings/preview",{document:bkDoc,password:pw||undefined}); }
   catch(x){ $("bk_imsg").textContent=x.message; return; }
   bkPw=pw; $("bk_ipwrow").hidden=true; $("bk_ipw").value=""; $("bk_imsg").textContent="";
-  const r=bkInfo, when=r.created?new Date(r.created):null, ts=when&&!isNaN(when)?when.toLocaleString("de-DE",{dateStyle:"medium",timeStyle:"short"}):"";
+  const r=bkInfo, when=r.created?new Date(r.created):null, ts=when&&!isNaN(when)?when.toLocaleString(LOC(),{dateStyle:"medium",timeStyle:"short"}):"";
   const rows=r.sections.map(x=>x.ok
     ?`<label class="logopt"><input type="checkbox" data-sec="${esc(x.id)}" checked> <b>${esc(x.label)}</b> <span class="muted">(${x.count})</span>${x.note?` <span class="ph">${esc(x.note)}</span>`:""}</label>`
     :`<div class="logopt bkbad"><b>${esc(x.label)}</b>: nicht lesbar, wird ausgelassen. <span class="ph">${esc(x.note)}</span></div>`).join("");
-  setHtml($("bk_plan"),`<div class="wstat ok"><span class="wdot"></span><span class="wgrow">Sicherung${ts?" vom <b>"+esc(ts)+"</b>":""}${r.box_version?" (Version "+esc(r.box_version)+")":""}, ${r.encrypted?"verschlüsselt":"nicht verschlüsselt"}, ${r.secrets?"mit Passwörtern":"ohne Passwörter"}</span></div>
+  setHtml($("bk_plan"),`<div class="wstat ok"><span class="wdot"></span><span class="wgrow"><span>${ts?`Sicherung vom ${esc(ts)}`:"Sicherung"}</span>${r.box_version?` <span>${`(Version ${esc(r.box_version)})`}</span>`:""}, <span>${r.encrypted?"verschlüsselt":"nicht verschlüsselt"}</span>, <span>${r.secrets?"mit Passwörtern":"ohne Passwörter"}</span></span></div>
     <div class="sech">Einspielen (ersetzt die jetzigen Einstellungen)</div>${rows}
     <div class="actions"><button id="bk_go" type="button" class="warnbtn"${bkSending?" disabled":""}>Ausgewählte Teile einspielen</button></div>`);
   $("bk_plan").hidden=false;
@@ -1985,7 +2000,7 @@ async function devLoad(){
   $("dev_badge").textContent=!d.available?"–":(d.active?"SSH an":"SSH aus"); $("dev_badge").className="badge "+(d.active?"attn":"");
   $("dev_state").className="wstat"+(d.active?" ok":"");
   $("dev_text").textContent=!d.available?"Auf dieser Box gibt es keinen SSH-Dienst.":
-    "SSH "+(d.active?"aktiv":"ist ausgeschaltet")+(d.user?" · Benutzer: „"+d.user+"“":"");
+    (d.active?"SSH aktiv":"SSH ist ausgeschaltet")+(d.user?" · "+`Benutzer: „${d.user}“`:"");
   const t=$("dev_toggle"); t.textContent=d.active?"SSH ausschalten":"SSH einschalten"; t.className=d.active?"dangerbtn":"warnbtn";       // ein Knopf an derselben Stelle
   t.disabled=!usable||!d.available; $("dev_reset").disabled=!usable||!d.can_reset; $("dev_reset").hidden=!d.can_reset;
   $("dev_pw").disabled=!d.helper_installed; devPwButton();
@@ -2035,9 +2050,8 @@ devLoad();
 async function powerDo(action){
   let st={}; try{ st=await srtlaCall("GET","/api/power"); }catch(e){}
   if(!st.helper_installed){ $("pwmsg").textContent="Der Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen)."; return; }
-  const what=action==="poweroff"?"herunterfahren":"neu starten";
   const live=st.sending?"\n\nAchtung: Es wird gerade gesendet. Die Übertragung bricht dabei ab.":"";
-  if(!confirm(`Die Box jetzt ${what}?${live}`)) return;
+  if(!confirm((action==="poweroff"?"Die Box jetzt herunterfahren?":"Die Box jetzt neu starten?")+live)) return;
   try{ await srtlaCall("POST","/api/power",{action,confirm:true}); }
   catch(x){ $("pwmsg").textContent=x.message; return; }
   $("pwmsg").textContent=action==="poweroff"

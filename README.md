@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.83 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.84 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 ## Installation auf der Box
 
@@ -111,6 +111,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   **mit echtem Stick und Kamera noch nicht geprüft**.
 - **Einstellungen sichern und einspielen** (Karte "Einstellungen sichern"): Kameras, Bildaufbau, SRTLA-Server, DJI-Kameras, Hotspots, WLAN-Netze u. a. in einer Datei.
   Mit Passwörtern immer **mit Passwort verschlüsselt** (AES-256). Einspielen nur ohne Sendung, der Stand davor wird gesichert. WLAN-Netze und DJI-Kameras **noch nicht mit einer echten Box geprüft**.
+- **Sprachen** (beim ersten Öffnen, im Kopf und in der Karte "Language"): Englisch (Standard), Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Texte, Datum und Uhrzeit folgen der Sprache. **Außer Deutsch maschinell übersetzt, nicht von Muttersprachlern geprüft.** Verbessern oder neue Sprache: `web/i18n/README.md`.
 - **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
   oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
   trotzdem kurz durchsehen).
@@ -159,6 +160,7 @@ Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB
 - Langzeitstabilität über mehr als acht Stunden und mit mehreren Kameras im Dauerbetrieb im Freien. Es gab unerklärte Totalausfälle der Box (zuletzt zwei in der Nacht zum 2. Oktober 2026, ohne
   Fehlermeldung im Protokoll); Verdacht: Stromversorgung, wenn ein USB-Router am USB-C-Port der Box hängt, nicht bewiesen. Auf der Orange Pi 5 Plus lief der aktuelle Stand zuletzt über Stunden ohne Ausfall.
 - Ungetestet: Pocket 3 und weitere DJI-Modelle (Protokoll vorhanden, nie mit echter Kamera). Eine neue oder zurückgesetzte Kamera muss im Kopplungsmodus sein und die Kopplungsabfrage bestätigen.
+- Sprachen: nur im Browser mit Demo-Werten geprüft (Vollständigkeit, Zeilenumbrüche), nicht von Muttersprachlern und nicht auf echten Handys in jeder Sprache. Zusammengesetzte Texte können in einzelnen Fällen noch deutsch oder englisch bleiben.
 - Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") wurde bisher nur zu Hause getestet, wo einer der drei Wege das Heimnetz zum Empfänger ist (1 ms) und kaum über DSL läuft. Ein
   schwächerer Weg neben einem guten, etwa Starlink neben 5G, ist nicht geprüft. Gleiches gilt für unterwegs über Stunden.
 - Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).

@@ -122,6 +122,10 @@ PY
     install -m 644 "$HERE/install/pipbox-health.service" /etc/systemd/system/pipbox-health.service
     install -m 644 "$HERE/web/index.html" /opt/pipbox/web/index.html
     install -m 644 "$HERE/web/login.html" /opt/pipbox/web/login.html
+    install -m 644 "$HERE/web/i18n.js" /opt/pipbox/web/i18n.js
+    install -d /opt/pipbox/web/i18n
+    rm -f /opt/pipbox/web/i18n/*.json
+    for f in "$HERE"/web/i18n/*.json; do [ -f "$f" ] && install -m 644 "$f" "/opt/pipbox/web/i18n/$(basename "$f")"; done
     install -m 755 "$HERE/install/pipbox-update.py" /opt/pipbox/pipbox-update.py
     install -m 644 "$HERE/install/pipbox.service" /etc/systemd/system/pipbox.service
     install -m 644 "$HERE/install/pipbox-dji.service" /etc/systemd/system/pipbox-dji.service
