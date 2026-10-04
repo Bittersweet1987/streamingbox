@@ -24,6 +24,7 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
+.clight{display:flex;align-items:center;margin:4px 0}
 #alerts{display:grid;gap:8px}
 .alert{padding:9px 12px;border-radius:8px;font-size:14px;border-left:4px solid var(--warn);background:var(--bg)}
 .alert.crit{border-color:var(--crit)}
@@ -160,6 +161,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="row"><span class="big"><span id="mem">–</span><span class="unit"> % belegt</span></span></div>
     <div class="bar"><i id="membar" style="width:0"></i></div>
   </div>
+      <div class="statbox"><div class="sech">Kameras</div><div id="camlights"></div></div>
       <div class="statbox"><div class="sech">Upload (Netze zum Senden)</div><div id="net"></div></div>
     </div>
   </details>
@@ -383,6 +385,11 @@ const ROLE={main:"Hauptbild",pip:"Bild-in-Bild",extra:"Weitere"};
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function setHtml(el,html){ if(el.dataset.h===html) return; el.dataset.h=html; el.innerHTML=html; }
 let camsByKey={};
+const camDotCls=c=>"dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
+const camDotTitle=c=>c.state!=="live"?(c.state==="unknown"?"Status unbekannt":"Kein Signal"):(c.pic==="an"?"Sendet und ist im Bild":(c.pic==="wartet"?`Sendet, kommt in ${c.pic_wait} s ins Bild`:(c.pic==="aus"?"Sendet, ist noch nicht im Bild":"Sendet")));
+function renderCamLights(list){
+  setHtml($("camlights"),list.length?list.map(c=>`<div class="clight"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
+}
 function renderCams(list){
   const box=$("cams");
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
@@ -400,10 +407,10 @@ function renderCams(list){
   }
   for(const c of list){
     const row=box.querySelector(`.cam[data-cid="${c.id}"]`); if(!row) continue;
-    row.querySelector(".dot").className="dot"+(c.state==="live"?((c.pic==="wartet"||c.pic==="aus")?" wait":""):(c.state==="unknown"?" unk":" off"));
+    row.querySelector(".dot").className=camDotCls(c);
     const dot=row.querySelector(".dot");
     row.querySelector(".dyn").textContent=c.state==="live"?`${c.fps?fmt(c.fps,0)+" fps"+" · ":""}${fmt(c.mbit)} Mbit/s`:(c.state==="unknown"?"Status unbekannt":"wartet auf Signal");
-    dot.title=c.state!=="live"?(c.state==="unknown"?"Status unbekannt":"Kein Signal"):(c.pic==="an"?"Sendet und ist im Bild":(c.pic==="wartet"?`Sendet, kommt in ${c.pic_wait} s ins Bild`:(c.pic==="aus"?"Sendet, ist noch nicht im Bild":"Sendet")));
+    dot.title=camDotTitle(c);
   }
 }
 $("cams").addEventListener("click",async e=>{
@@ -1062,7 +1069,7 @@ async function tick(){
     }
     $("net").innerHTML=netHtml||'<span class="muted">keine Daten</span>';
     setRates(m.net);
-    renderCams(m.cameras);
+    renderCams(m.cameras); renderCamLights(m.cameras);
     if(due("net","c_cams",15000)) netRender();
     if(due("dji","c_cams",20000)){ try{ const dr=await fetch("/api/dji"); if(dr.ok) djiRender(await dr.json()); }catch(e){} }
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
