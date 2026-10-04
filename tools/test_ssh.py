@@ -383,6 +383,8 @@ class FilesAndPage(unittest.TestCase):
         page = self.read("web", "index.html")
         for needle in ('id="c_dev"', "Entwickler", 'id="dev_on"', 'id="dev_off"', 'id="dev_pw"', "/api/developer/password", "/api/developer", "Original-Oberfläche"):
             self.assertIn(needle, page)
+        self.assertIn(".pwshow{", page)                                                  # Passwort groß und markierbar
+        self.assertIn('class="pwshow"', page)
         self.assertLess(page.index('id="c_logs"'), page.index('id="c_dev"'))             # "nach Protokolle"
         self.assertLess(page.index('id="c_dev"'), page.index('id="c_power"'))
 

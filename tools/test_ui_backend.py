@@ -2189,5 +2189,58 @@ class PictureStyle(unittest.TestCase):
         self.assertEqual(s.status([])["config"]["styles"], server.clean_styles(None))
 
 
+class UpdateArchiveCheck(unittest.TestCase):
+    """Das Archiv eines Software-Updates wird geprüft, bevor etwas eingespielt wird: eine Fehlerseite statt der Oberfläche darf nie durchkommen."""
+
+    ERROR_PAGE = ('<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"><html><head><title>Error response</title></head>'
+                  '<body><h1>Error response</h1><p>Error code: 404</p></body></html>')
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pbswupdate", os.path.join(os.path.dirname(HERE), "install", "pipbox-swupdate.py"))
+        cls.h = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.h)
+
+    def tree(self, **pages):
+        d = tempfile.mkdtemp()
+        for f in self.h.REQUIRED:
+            p = os.path.join(d, f)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as fh:
+                fh.write("")
+        with open(os.path.join(d, "VERSION"), "w") as fh:
+            fh.write("0.9.99\n")
+        with open(os.path.join(d, "install", "install.sh"), "w") as fh:
+            fh.write("echo ok\n")
+        good = "<!doctype html>\n<html><head><title>IRL4YOU BOX</title></head><body>Seite</body></html>\n"
+        for name in ("index", "login"):
+            with open(os.path.join(d, "web", name + ".html"), "w") as fh:
+                fh.write(pages.get(name, good))
+        return d
+
+    def test_good_pages_pass(self):
+        self.assertEqual(self.h.validate(self.tree(), "0.9.1"), "0.9.99")
+
+    def test_error_page_instead_of_the_ui_is_refused(self):
+        for name in ("index", "login"):
+            with self.assertRaises(self.h.Refuse) as e:
+                self.h.validate(self.tree(**{name: self.ERROR_PAGE}), "0.9.1")
+            self.assertIn(name + ".html", str(e.exception))
+
+    def test_empty_or_foreign_pages_are_refused(self):
+        for bad in ("", "kein html", "<!doctype html><html><body>etwas anderes</body></html>", "<!doctype html><html><body>IRL4YOU, abgeschnitten"):
+            with self.assertRaises(self.h.Refuse, msg=bad):
+                self.h.validate(self.tree(index=bad), "0.9.1")
+
+    def test_real_pages_of_this_version_pass(self):
+        d = self.tree()
+        for name in ("index", "login"):
+            shutil_copy = open(os.path.join(os.path.dirname(HERE), "web", name + ".html"), encoding="utf-8").read()
+            with open(os.path.join(d, "web", name + ".html"), "w", encoding="utf-8") as fh:
+                fh.write(shutil_copy)
+        self.assertEqual(self.h.validate(d, "0.9.1"), "0.9.99")
+
+
 if __name__ == "__main__":
     unittest.main()

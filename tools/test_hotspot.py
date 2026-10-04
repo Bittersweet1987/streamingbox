@@ -423,7 +423,7 @@ class LogsAndPage(unittest.TestCase):
 
     def test_page(self):
         page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
-        for needle in ('id="h_start"', 'id="h_stop"', 'id="h_pw"', "/api/wifi/hotspot", "hotspot_start", "hotspot_stop", "Verbindungen zum Senden (Upload)",
+        for needle in ('id="h_start"', 'id="h_stop"', 'id="h_pw"', 'id="h_pw_out"', "/api/wifi/hotspot", "hotspot_start", "hotspot_stop", "Verbindungen zum Senden (Upload)",
                        "WLAN-Verbindungen (z. B. Handy-Hotspot", "Upload (Verbindungen zum Senden)", "WLAN-Hotspot (Stick als Zugangspunkt der Box)"):
             self.assertIn(needle, page)
         self.assertNotIn("Netze zum Senden", page.replace("Nur die Netze zum Senden anzeigen", ""))        # nur noch im Kommentar

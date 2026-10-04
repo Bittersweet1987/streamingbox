@@ -189,6 +189,10 @@ def validate(tree, local, wanted=None):
     for f in REQUIRED:
         if not os.path.isfile(os.path.join(tree, f)):
             raise Refuse(f"Pflichtdatei fehlt im Archiv: {f}")
+    for page in ("web/index.html", "web/login.html"):               # eine Fehlerseite statt der Oberfläche (beim Hochladen passiert) wird nie eingespielt
+        text = read(f"{tree}/{page}") or ""
+        if not text.lstrip().lower().startswith("<!doctype html") or "IRL4YOU" not in text or "</html>" not in text.lower():
+            raise Refuse(f"Die Seite im Archiv ist beschädigt: {page}")
     new = read(f"{tree}/VERSION")
     if wanted is None:
         if vkey(new) <= vkey(local):

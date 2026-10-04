@@ -208,7 +208,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 pre{white-space:pre-wrap;word-break:break-all;font-size:11px;color:var(--muted);max-height:220px;overflow:auto;margin:8px 0 0}
 .upd-line{display:flex;justify-content:space-between;padding:3px 0}
 .livehealth{font-size:12px;margin-top:8px;opacity:.85}.livehealth .ok{color:var(--ok)}.livehealth .warn{color:var(--warn)}.livehealth .crit,.livehealth .err{color:var(--crit)}
-details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
+details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!important}.pwshow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:600;letter-spacing:.05em;color:var(--fg,inherit);margin:6px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;user-select:all;word-break:break-all;display:inline-block}.smon{background:var(--warn);color:#111}.lockhint{font-size:12px;color:var(--muted);font-weight:400}
 .foot a{color:var(--muted);text-decoration:underline}.footlinks{margin-top:6px}
 .pending{margin-top:10px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:13px}.pending button{margin-left:8px;padding:4px 10px}
 dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn);border-radius:12px;max-width:min(420px,90vw);padding:18px}dialog#rdlg::backdrop{background:rgba(0,0,0,.6)}
@@ -393,6 +393,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </div>
     <div class="actions"><button id="h_start" type="button">Hotspot starten</button> <button id="h_stop" type="button" class="sec">Hotspot beenden</button> <button id="h_gen" type="button" class="sec" title="Zufälliges Passwort eintragen (noch nicht gespeichert)">Passwort erzeugen</button> <button id="h_show" type="button" class="sec" title="Name und Passwort des gespeicherten Hotspots dieser Karte anzeigen">Passwort anzeigen</button></div>
     <div id="hmsg" class="ph" style="margin:8px 0" role="status"></div>
+    <div id="h_pw_out" class="ph sens" role="status"></div>
   </div></div>
     <div class="sech">Bluetooth (für DJI-Kameras)</div>
     <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
@@ -989,10 +990,13 @@ $("h_if").addEventListener("change",()=>{ hsFilled={}; hsRender(wifiData); });
 $("h_gen").addEventListener("click",()=>{
   const al="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789", a=new Uint32Array(12); crypto.getRandomValues(a);
   $("h_pw").value=[...a].map(n=>al[n%al.length]).join(""); $("h_pw").type="text";
-  $("hmsg").textContent="Neues Passwort eingetragen. Erst mit „Hotspot starten“ gilt es; bitte notieren oder bei der Kamera eintragen."; hsShown=true;
+  $("hmsg").textContent="Neues Passwort eingetragen. Erst mit „Hotspot starten“ gilt es; bitte notieren oder bei der Kamera eintragen.";
+  $("h_pw_out").innerHTML='<div class="muted">Neues Passwort (noch nicht gespeichert)</div><div class="pwshow">'+esc($("h_pw").value)+'</div>';
 });
 $("h_show").addEventListener("click",async()=>{
-  try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent($("h_if").value)); $("hmsg").textContent="Hotspot „"+r.ssid+"“, Passwort: "+r.password; hsShown=true; }
+  $("h_pw_out").textContent="";
+  try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent($("h_if").value)); $("hmsg").textContent="";
+       $("h_pw_out").innerHTML='<div class="muted">Hotspot „'+esc(r.ssid)+'“, Passwort (Antippen markiert es zum Kopieren)</div><div class="pwshow">'+esc(r.password)+'</div>'; }
   catch(x){ $("hmsg").textContent=x.message; }
 });
 $("h_start").addEventListener("click",async()=>{
@@ -1004,13 +1008,13 @@ $("h_start").addEventListener("click",async()=>{
                 "\n\nHast du die Oberfläche über dieses WLAN geöffnet, bricht sie ab. Du erreichst sie danach über den Hotspot (Adresse meist 10.42.0.1) oder über ein anderes Netz.\n\nHotspot starten?")) return;
     body.confirm=true;
   }
-  hsShown=false; $("hmsg").textContent="Hotspot wird gestartet …";
+  hsShown=false; $("h_pw_out").textContent=""; $("hmsg").textContent="Hotspot wird gestartet …";
   try{ await srtlaCall("POST","/api/wifi",body); }catch(x){ $("hmsg").textContent=x.message; return; }
   $("h_pw").value=""; $("h_pw").type="password";
   clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
 });
 $("h_stop").addEventListener("click",async()=>{
-  hsShown=false; $("hmsg").textContent="Hotspot wird beendet …";
+  hsShown=false; $("h_pw_out").textContent=""; $("hmsg").textContent="Hotspot wird beendet …";
   try{ await srtlaCall("POST","/api/wifi",{action:"hotspot_stop",iface:$("h_if").value}); }catch(x){ $("hmsg").textContent=x.message; return; }
   clearTimeout(wifiTimer); wifiTimer=setTimeout(wifiLoad,1500); [6000,14000].forEach(ms=>setTimeout(wifiLoad,ms));
 });
@@ -1690,8 +1694,8 @@ async function devPassword(){
   $("dev_msg").textContent="";
   try{
     const r=await srtlaCall("GET","/api/developer/password");
-    out.textContent="SSH-Passwort"+(r.user?" für Benutzer „"+r.user+"“":"")+": "+r.password+
-      (r.state==="own"?"  ·  Achtung: Das Passwort wurde danach von Hand geändert, dieses gilt vermutlich nicht mehr.":(r.state==="generated"?"":"  ·  (nicht geprüft, ob es noch gilt)"));
+    out.innerHTML='<div class="muted">SSH-Passwort'+(r.user?' für Benutzer „'+esc(r.user)+'“':'')+' (Antippen markiert es zum Kopieren)</div><div class="pwshow">'+esc(r.password)+'</div>'+
+      (r.state==="own"?'<div class="muted">Achtung: Das Passwort wurde danach von Hand geändert, dieses gilt vermutlich nicht mehr.</div>':(r.state==="generated"?'':'<div class="muted">(nicht geprüft, ob es noch gilt)</div>'));
   }catch(x){ $("dev_msg").textContent=x.message; }
 }
 $("dev_pw").addEventListener("click",devPassword);
