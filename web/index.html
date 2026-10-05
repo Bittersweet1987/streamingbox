@@ -843,7 +843,8 @@ function djiDynamic(){
     const active=c.state!=="idle"||c.publishing;
     card.querySelector(".d-connect").disabled=c.state==="streaming"||c.state==="status";
     const so=card.querySelector(".d-statusonly"); if(so!==document.activeElement) so.checked=!!c.status_only; so.disabled=!!c.locked;
-    card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });      // ohne Stream gibt es nichts zu verbinden und einzustellen
+    card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });
+    card.querySelector(".d-auto").closest("label").hidden=!!c.status_only;     // Nur-Akku-Kameras verbinden immer automatisch      // ohne Stream gibt es nichts zu verbinden und einzustellen
     card.querySelector(".d-disconnect").disabled=!active;
     card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel").forEach(f=>{ f.disabled=!!c.locked; });
     card.querySelector(".d-lockhint").hidden=!c.locked;
