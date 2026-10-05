@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.112 (Beta)
+- **Behoben (Meldung von Bittersweet1987 zu 0.9.111, Issue #19): Mit "Alle Kameras immer bereit" ging kein Stream raus.** Ursache: Die Zubringer brauchen das Programm `gst-launch-1.0` (Paket `gstreamer1.0-tools`), das ein frisches BELABOX-Image nicht mitbringt. Auf der Entwicklungsbox war es von Hand installiert, deshalb fiel das beim Testen nicht auf. Im Protokoll stand "Zubringer 0 nicht startbar (FileNotFoundError)".
+  - Der Installer (Software-Update) installiert `gstreamer1.0-tools` jetzt mit (bei Fehlschlag nach `apt-get update` noch einmal). Das braucht auch die HDMI-Kamera.
+  - Fehlt das Programm trotzdem (oder der Baustein ist zu alt), **läuft die Sendung im normalen Modus weiter** statt Schwarz zu senden, und die Karte "Live" zeigt den Grund ("Alle Kameras immer bereit ist nicht aktiv: …"). Die Meldung im Protokoll kommt nur noch einmal je Zubringer und nennt das fehlende Paket.
+- Neu: `tools/boxtest_always_send.py`, ein Gesamttest mit dem **echten Sende-Dienst und dem echten belacoder** (statt Dateiausgabe): Der Encoder liefert über 60 s ohne Neustart Daten an die SRT-Seite, Hauptkamera fällt aus, Ersatz übernimmt, Rückkehr nach 3 s stabilem Bild. Auf der Box mit Testbildern gelaufen (kein Netz, srtla_send ersetzt durch einen Platzhalter); **nicht mit echten Kameras und nicht über SRTLA ins Internet.**
+- Tests: `tools/test_always.py` (+4, 49).
+
 ## 0.9.111 (Beta)
 - Neu (Issue #19, Anregung von Bittersweet1987, Umsetzung eigen): **"Alle Kameras immer bereit" (Beta).** Neuer Schalter im Bildaufbau bei "Bild in Bild" (Standard **aus**; ohne den Schalter ändert sich nichts gegenüber 0.9.110). Eingeschaltet gilt:
   - Jedes Bildfeld der Sendekette hat immer einen Eingang. Sendet eine Kamera nicht, steht an ihrer Stelle ein schwarzes Bild (Ton: Stille), unsichtbar, ohne Rahmen.
