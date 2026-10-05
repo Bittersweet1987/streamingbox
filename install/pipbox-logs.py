@@ -355,6 +355,15 @@ def sections():
                  ("pipbox-update", 100), ("pipbox-remote", 100), ("pipbox-power", 40)):
         text = journal(u, n)
         out.append(("Journal %s" % u, collapse_repeats(drop_noise(text) if u == "pipbox-dji" else text)))
+    # Tailscale: Zustand der Freigaben (privat und öffentlich) und die Zeilen des Dienstes, die Freigabe, Zertifikat, Anmeldung und Fehler betreffen
+    # (der Rest, zum Beispiel Verbindungsaufbau zu den Gegenstellen, ist Rauschen)
+    ts = ("serve:\n" + (run(["tailscale", "serve", "status"], 10).strip() or "(leer)") + "\n\nfunnel:\n"
+          + (run(["tailscale", "funnel", "status"], 10).strip() or "(leer)") + "\n")
+    out.append(("Tailscale (Freigabe)", ts))
+    tsj = [l for l in journal("tailscaled", 3000).splitlines()
+           if re.search(r"(?i)serve|funnel|cert|acme|login|auth|expire|error|fail|warn|denied|health|hostinfo|netmap.*(changed|self)", l)
+           and not re.search(r"(?i)portmapper|magicsock|derp|disco|netcheck", l)]
+    out.append(("Journal tailscaled (nur Freigabe, Zertifikat, Anmeldung, Fehler)", "\n".join(tsj[-120:]) + "\n"))
     out.append(("Warnungen und Fehler des Systems (seit dem Start)", run(["journalctl", "-p", "warning", "-b", "--no-pager", "-o", "short-iso", "-n", "200"], 20)))
     out.append(("Kernel (USB, Bluetooth, WLAN)", "\n".join([l for l in run(["dmesg"], 10).splitlines()
                                                               if re.search(r"(?i)usb|bluetooth|btusb|wlan|wifi|cfg80211|rtl|brcm", l)][-150:]) + "\n"))
