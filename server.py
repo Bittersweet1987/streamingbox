@@ -2158,102 +2158,10 @@ class Remote:
     STATUS = "/run/pipbox-remote/status.json"
     ACTIONS = ("install", "login", "down", "serve_on", "serve_off", "funnel_on", "funnel_off", "logout")
 
-    PROBE_OK_S, PROBE_WAIT_S = 120, 8             # wie oft die öffentliche Adresse erneut geprüft wird (erreichbar / noch nicht)
-    HOST_RE = re.compile(r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.ts\.net$")
-
     def __init__(self, state_dir, demo):
         self.req = os.path.join(state_dir, "remote-request")
         self.demo = demo
         self.fake = {}
-        self._probe = {}                           # Adresse -> {"ok": bool, "t": Zeit, "running": bool}
-        self._probe_lock = threading.Lock()
-
-    @staticmethod
-    def dns_a(host, server, timeout=3.0, port=53):
-        """Eine A-Abfrage per UDP an einen öffentlichen Namensdienst (wie ein Gerät im Internet die Adresse sieht, nicht wie der Zwischenspeicher
-        des Routers dieser Box). Gibt die IPv4-Adressen zurück (leer: keine Antwort oder kein Eintrag)."""
-        q = os.urandom(2) + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + b"".join(bytes([len(p)]) + p.encode("ascii") for p in host.split(".")) + b"\x00\x00\x01\x00\x01"
-        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            sk.settimeout(timeout)
-            sk.sendto(q, (server, port))
-            data = sk.recv(2048)
-        except OSError:
-            return []
-        finally:
-            sk.close()
-        return Remote.parse_dns_a(q[:2], data)
-
-    @staticmethod
-    def parse_dns_a(qid, data):
-        if len(data) < 12 or data[:2] != qid or data[3] & 0x0F != 0:
-            return []
-        qd, an = int.from_bytes(data[4:6], "big"), int.from_bytes(data[6:8], "big")
-
-        def skip(i):
-            while i < len(data):
-                n = data[i]
-                if n == 0:
-                    return i + 1
-                if n & 0xC0 == 0xC0:
-                    return i + 2
-                i += 1 + n
-            return len(data)
-        i, out = 12, []
-        for _ in range(qd):
-            i = skip(i) + 4
-        for _ in range(an):
-            i = skip(i)
-            if i + 10 > len(data):
-                break
-            typ, rdlen = int.from_bytes(data[i:i + 2], "big"), int.from_bytes(data[i + 8:i + 10], "big")
-            i += 10
-            if typ == 1 and rdlen == 4 and i + 4 <= len(data):
-                out.append(".".join(str(b) for b in data[i:i + 4]))
-            i += rdlen
-        return out
-
-    def probe_public(self, host):
-        """Antwortet die öffentliche Adresse wirklich? Name über einen öffentlichen Namensdienst auflösen, mit dem Zertifikat der Adresse verbinden und
-        die Startseite abrufen (der Weg geht von dieser Box ins Internet zu Tailscale und von dort zurück). True bei einer HTTP-Antwort unter 500."""
-        if not self.HOST_RE.match(host):
-            return False
-        for server in ("1.1.1.1", "8.8.8.8"):
-            for ip in self.dns_a(host, server)[:2]:
-                try:
-                    with socket.create_connection((ip, 443), timeout=8) as raw:
-                        with ssl.create_default_context().wrap_socket(raw, server_hostname=host) as tls:
-                            tls.settimeout(8)
-                            tls.sendall(b"GET / HTTP/1.0\r\nHost: " + host.encode("ascii") + b"\r\nUser-Agent: irl4you-box-selbstpruefung\r\nConnection: close\r\n\r\n")
-                            line = tls.recv(64).split(b"\r\n")[0]
-                    m = re.match(rb"^HTTP/1\.[01] (\d{3})", line)
-                    if m and int(m.group(1)) < 500:
-                        return True
-                except (OSError, ssl.SSLError, ValueError):
-                    continue
-        return False
-
-    def public_state(self, url):
-        """"check" (noch keine Antwort der Prüfung), "ok" (öffentliche Adresse antwortet) oder "wait" (noch nicht). Die Prüfung läuft im Hintergrund."""
-        host = url.replace("https://", "").split("/")[0].split(":")[0].lower()
-        now = time.time()
-        with self._probe_lock:
-            rec = self._probe.setdefault(host, {"ok": None, "t": 0.0, "running": False})
-            stale = now - rec["t"] > (self.PROBE_OK_S if rec["ok"] else self.PROBE_WAIT_S)
-            start = stale and not rec["running"]
-            if start:
-                rec["running"] = True
-            ok = rec["ok"]
-        if start:
-            def run():
-                try:
-                    res = self.probe_public(host)
-                except Exception:
-                    res = False
-                with self._probe_lock:
-                    rec.update(ok=res, t=time.time(), running=False)
-            threading.Thread(target=run, daemon=True).start()
-        return "check" if ok is None else ("ok" if ok else "wait")
 
     def _ts(self, *args):
         """tailscale-Abfrage, 20 s zwischengespeichert (das Go-Programm zu starten kostet spürbar CPU). Ändert der Root-Helfer
@@ -2279,13 +2187,13 @@ class Remote:
             d = {"installed": True, "backend": "Running", "connected": True, "name": "irl4you-box.demo.ts.net",
                  "ip": "100.64.0.1", "tailnet": "demo",
                  "serve": bool(self.fake.get("serve")), "url": "https://irl4you-box.demo.ts.net/" if self.fake.get("serve") else "",
-                 "funnel": bool(self.fake.get("funnel")), "public": "ok" if self.fake.get("funnel") else "",
+                 "funnel": bool(self.fake.get("funnel")),
                  "state": "idle", "step": "", "message": self.fake.get("message", ""), "login_url": "",
                  "hint_url": "", "helper_installed": True}
             return d
         installed = bool(shutil.which("tailscale"))
         out = {"installed": installed, "backend": "", "connected": False, "name": "", "ip": "", "tailnet": "",
-               "serve": False, "url": "", "funnel": False, "public": "", "state": "idle", "step": "", "message": "", "login_url": "",
+               "serve": False, "url": "", "funnel": False, "state": "idle", "step": "", "message": "", "login_url": "",
                "hint_url": "", "helper_installed": os.path.exists("/etc/systemd/system/pipbox-remote.path")}
         try:
             with open(self.STATUS) as f:
@@ -2317,8 +2225,6 @@ class Remote:
                     if "127.0.0.1:%d" % 8780 in str(h2.get("Proxy", "")):
                         out["serve"], out["url"] = True, "https://" + host.replace(":443", "") + "/"
             out["funnel"] = any((sv.get("AllowFunnel") or {}).values())
-            if out["funnel"] and out["url"]:
-                out["public"] = self.public_state(out["url"])
         return out
 
     def request(self, action, confirm, public=False):
