@@ -504,5 +504,31 @@ class FilesAndPage(unittest.TestCase):
         self.assertIn('action:"collect"', page)
 
 
+class TailscaleSections(unittest.TestCase):
+    """Das Protokollpaket enthält den Zustand der Tailscale-Freigaben und nur die wichtigen Zeilen des Dienstes (Fehlersuche bei verlorener Freigabe)."""
+
+    def test_sections_exist_and_the_journal_is_filtered(self):
+        mod = load_helper()
+        fake = {"serve": "https://box.tail1234.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:8780\n", "funnel": "No serve config\n"}
+        journal = "\n".join([
+            "2026-10-05T10:00:00+0000 b tailscaled[1]: portmapper: failed to get PCP mapping",
+            "2026-10-05T10:00:01+0000 b tailscaled[1]: magicsock: derp-4 connected",
+            "2026-10-05T10:00:02+0000 b tailscaled[1]: serve: config changed, AllowFunnel removed",
+            "2026-10-05T10:00:03+0000 b tailscaled[1]: control: login expired",
+            "2026-10-05T10:00:04+0000 b tailscaled[1]: cert: ACME error"])
+        with mock.patch.object(mod, "run", lambda cmd, timeout=15, limit=400_000: fake.get(cmd[1], "") if cmd[0] == "tailscale" else ""), \
+                mock.patch.object(mod, "journal", lambda u, n: journal if u == "tailscaled" else ""), \
+                mock.patch.object(mod, "settings_summary", lambda: ""), mock.patch.object(mod, "usb_devices", lambda: ""), mock.patch.object(mod, "wifi_cards", lambda: ""):
+            secs = dict(mod.sections())
+        self.assertIn("serve:", secs["Tailscale (Freigabe)"])
+        self.assertIn("No serve config", secs["Tailscale (Freigabe)"])
+        j = secs["Journal tailscaled (nur Freigabe, Zertifikat, Anmeldung, Fehler)"]
+        self.assertIn("AllowFunnel removed", j)
+        self.assertIn("login expired", j)
+        self.assertIn("ACME error", j)
+        self.assertNotIn("portmapper", j)
+        self.assertNotIn("magicsock", j)
+
+
 if __name__ == "__main__":
     unittest.main()
