@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -139,7 +140,8 @@ TEST_TARBALL = None      # nur für Tests auf der Kommandozeile als root (--tarb
 IGNORE_SENDING = False   # ebenso nur per Kommandozeile (--ignore-sending); die Weboberfläche kann das nie setzen
 
 
-def download(url=URL):
+def download(url=URL, progress=None):
+    """Archiv laden. progress(Prozent 0-100) wird beim Laden aufgerufen, wenn die Größe bekannt ist."""
     if TEST_TARBALL:
         with open(TEST_TARBALL, "rb") as f:
             return f.read(MAX_BYTES + 1)
@@ -147,7 +149,21 @@ def download(url=URL):
     with urllib.request.urlopen(req, timeout=30) as r:
         if not r.geturl().startswith("https://"):
             raise Refuse("Die Quelle hat nicht auf HTTPS geantwortet")
-        data = r.read(MAX_BYTES + 1)
+        try:
+            total = int(r.headers.get("Content-Length") or 0)
+        except ValueError:
+            total = 0
+        chunks, got, last = [], 0, 0.0
+        while got <= MAX_BYTES:
+            part = r.read(65536)
+            if not part:
+                break
+            chunks.append(part)
+            got += len(part)
+            if progress and total and time.time() - last >= 0.5:
+                last = time.time()
+                progress(min(100, got * 100 // total))
+        data = b"".join(chunks)
     if len(data) > MAX_BYTES:
         raise Refuse("Das Archiv ist größer als erlaubt")
     return data
@@ -287,7 +303,7 @@ def restore(ver, reason="", note="Zurück auf"):
     if not os.path.isdir(f"{src}/opt-pipbox"):
         raise Refuse(f"Version {ver} ist nicht gesichert")
     local = local_version()
-    status(state="installing", step=f"Stelle Version {ver} wieder her", message="", frm=local, to=ver)
+    status(state="installing", step=f"Stelle Version {ver} wieder her", message="", frm=local, to=ver, progress=10)
     dji_names = ("dji.py", "dji_daemon.py")
     dji_changed = files_differ(f"{src}/opt-pipbox", INSTALL, dji_names)
     hdmi_changed = files_differ(f"{src}/opt-pipbox", INSTALL, ("hdmi_daemon.py",))
@@ -306,6 +322,7 @@ def restore(ver, reason="", note="Zurück auf"):
         shutil.copytree(s, d, symlinks=True) if os.path.isdir(s) else shutil.copy2(s, d)
     for f in os.listdir(f"{src}/units"):
         shutil.copy2(f"{src}/units/{f}", os.path.join(UNIT_DIR, f))
+    status(progress=60)
     subprocess.run(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "restart", "pipbox.service"])
     if dji_changed:
@@ -323,7 +340,7 @@ def restore(ver, reason="", note="Zurück auf"):
     ok = wait_active("pipbox.service")
     prune()
     log(f"Wechsel auf {ver}: {'ok' if ok else 'Oberfläche läuft nicht'}")
-    status(state="rolledback" if ok else "failed", step="", version=ver,
+    status(state="rolledback" if ok else "failed", step="", version=ver, progress=100 if ok else 0,
            message=(f"{note} Version {ver}." + (f" Grund: {reason}" if reason else "")) if ok
            else "Wechsel fehlgeschlagen: die Oberfläche startet nicht. Bitte per SSH prüfen.")
 
@@ -337,36 +354,78 @@ def rollback(reason=""):
     restore(prev[0], reason)
 
 
+# Schritte von install.sh (Zeilen "PIPBOX-STEP <Kennung>"): Fortschritt in Prozent und Text für die Anzeige
+INSTALL_STEPS = {
+    "pakete": (40, "Prüfe die benötigten Pakete"),
+    "dienst": (48, "Halte die Oberfläche an und richte Benutzer und Daten ein"),
+    "dateien": (58, "Kopiere Programme und Oberfläche"),
+    "baustein": (66, "Prüfe den Bild-in-Bild-Baustein (wird neu gebaut, wenn er sich geändert hat)"),
+    "srtla": (78, "Prüfe den SRTLA-Sender (wird neu gebaut, wenn er sich geändert hat)"),
+    "belacoder": (88, "Prüfe den Encoder (wird neu gebaut, wenn er sich geändert hat)"),
+    "start": (95, "Starte die Dienste neu"),
+}
+INSTALL_TIMEOUT = 900
+
+
+def run_install(tmp):
+    """install.sh ausführen und dabei die Schrittmarken in den Fortschritt übersetzen. Gibt (Rückgabecode, letzte Zeilen) zurück."""
+    p = subprocess.Popen(["bash", f"{tmp}/install/install.sh", "install"], cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, errors="replace", start_new_session=True)
+    killed = []
+
+    def too_long():
+        killed.append(1)
+        try:
+            os.killpg(p.pid, 9)                       # die ganze Gruppe: Kindprozesse halten sonst die Leitung offen
+        except OSError:
+            p.kill()
+    timer = threading.Timer(INSTALL_TIMEOUT, too_long)
+    timer.start()
+    tail = []
+    try:
+        for line in p.stdout:
+            line = line.rstrip("\n")
+            m = re.match(r"^PIPBOX-STEP (\w+)$", line)
+            if m and m.group(1) in INSTALL_STEPS:
+                pct, txt = INSTALL_STEPS[m.group(1)]
+                status(step=txt, progress=pct)
+                continue
+            tail.append(line)
+            del tail[:-25]
+        p.wait()
+    finally:
+        timer.cancel()
+    return (-9 if killed else p.returncode), tail
+
+
 def install(version=None):
     """version=None: neueste Version aus dem Zweig main (nur wenn neuer). version=x.y.z: genau diese Release-Marke von GitHub."""
     if sending() and not IGNORE_SENDING:
         raise Refuse("Es wird gerade gesendet. Bitte zuerst die Übertragung beenden.")
     local = local_version()
-    status(state="installing", step="Lade die neue Version von GitHub", message="", frm=local, to=version or "")
+    status(state="installing", step="Lade die neue Version von GitHub", message="", frm=local, to=version or "", progress=2)
     try:
-        data = download(URL if version is None else TAG_URL.format(version))
+        data = download(URL if version is None else TAG_URL.format(version), lambda pct: status(progress=2 + pct * 18 // 100))
     except urllib.error.HTTPError as e:
         raise Refuse(f"Version {version} gibt es auf GitHub nicht (Antwort {e.code})" if version else f"GitHub antwortet mit {e.code}")
     tmp = f"/var/tmp/pipbox-swupdate-{os.getpid()}"
     shutil.rmtree(tmp, ignore_errors=True)
     try:
-        status(step="Prüfe das Archiv")
+        status(step="Prüfe das Archiv", progress=22)
         n = safe_extract(data, tmp)
         new = validate(tmp, local, version)
         log(f"Archiv ok: {n} Dateien, Version {new} (installiert {local})")
-        status(step="Sichere die jetzige Version", to=new)
+        status(step="Sichere die jetzige Version", to=new, progress=30)
         backup(local, do_prune=False)
-        status(step=f"Installiere Version {new}")
-        r = subprocess.run(["bash", f"{tmp}/install/install.sh", "install"], cwd=tmp, capture_output=True,
-                           text=True, timeout=900)
-        tail = (r.stdout + r.stderr).splitlines()[-25:]
+        status(step=f"Installiere Version {new}", progress=36)
+        rc, tail = run_install(tmp)
         log("install.sh Ausgabe (Ende):\n" + "\n".join(tail))
-        if r.returncode != 0 or not wait_active("pipbox.service"):
+        if rc != 0 or not wait_active("pipbox.service"):
             log("Installation fehlgeschlagen, rolle zurück")
-            restore(local, f"Installation fehlgeschlagen (Code {r.returncode})")
+            restore(local, f"Installation fehlgeschlagen (Code {rc})")
             return
         prune()
-        status(state="done", step="", version=new, message=f"Version {new} ist installiert.")
+        status(state="done", step="", version=new, message=f"Version {new} ist installiert.", progress=100)
         log(f"Update auf {new} abgeschlossen")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -419,10 +478,10 @@ def main():
             switch(arg)
     except Refuse as e:
         log(f"abgelehnt: {e}")
-        status(state="refused", step="", message=str(e))
+        status(state="refused", step="", message=str(e), progress=0)
     except Exception as e:                                  # nie ohne Meldung enden
         log(f"Fehler: {e!r}")
-        status(state="failed", step="", message=f"Fehler beim Update: {str(e)[:120]}")
+        status(state="failed", step="", message=f"Fehler beim Update: {str(e)[:120]}", progress=0)
         if mode in ("install", "switch") and not wait_active("pipbox.service", 1):
             try:
                 rollback("Fehler beim Update")

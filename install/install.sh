@@ -8,6 +8,7 @@ case "${1:-install}" in
   install)
     # Pakete, die ein frisches BELABOX-Image nicht mitbringt (Bluetooth für die DJI-Kameras). Ohne sie fehlt auch die Gruppe
     # "bluetooth", die der Benutzer unten braucht. Braucht Internet; schlägt es fehl, läuft alles außer den DJI-Kameras.
+    echo "PIPBOX-STEP pakete"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     need=""
     for p in bluez python3-dbus python3-gi; do dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"; done
     if [ -n "$need" ]; then
@@ -29,6 +30,7 @@ case "${1:-install}" in
       fi
     fi
     getent group bluetooth >/dev/null || groupadd --system bluetooth
+    echo "PIPBOX-STEP dienst"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     systemctl stop pipbox.service 2>/dev/null || true
     # Fester, rechteloser Benutzer (der D-Bus-Daemon akzeptiert keine DynamicUser-Benutzer).
     # In /etc/passwd prüfen: "id" findet sonst einen noch laufenden temporären Benutzer.
@@ -68,6 +70,7 @@ except Exception as e:
     print("Hinweis: Die Kameraliste wurde nicht bereinigt:", e)
 PY
     fi
+    echo "PIPBOX-STEP dateien"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/web
     # Bluetooth-Dienst nur neu starten, wenn sich seine Dateien ändern (sonst reißen die Kameras ab)
     dji_changed=0
@@ -139,6 +142,7 @@ PY
     install -m 644 "$HERE/install/pipbox-update.service" /etc/systemd/system/pipbox-update.service
     install -m 644 "$HERE/install/pipbox-update.path" /etc/systemd/system/pipbox-update.path
     # Bild-in-Bild-Baustein bauen, wenn er fehlt oder der Quelltext neuer ist (braucht Internet für die Header)
+    echo "PIPBOX-STEP baustein"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/gst-src
     # Nur neu bauen, wenn der Quelltext sich wirklich geändert hat (oder der Baustein fehlt)
     gst_changed=0
@@ -150,6 +154,7 @@ PY
     fi
     # Latenzbewusster SRTLA-Sender (verteilt nach Laufzeit je Leitung, verhindert Bitrate-Einbrüche bei ungleichen
     # Leitungen). Wird nur gebaut, wenn der Patch neuer ist; schlägt das fehl, bleibt der Original-Sender aktiv.
+    echo "PIPBOX-STEP srtla"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/srtla
     srtla_changed=0
     for sp in srtla_send-latency-aware.patch srtla_send-min-share.patch; do
@@ -168,6 +173,7 @@ PY
     # belacoder mit tolerantem Bitraten-Regler (verhindert, dass die Bitrate nach einer kurzen Überlast auf dem Minimum hängen
     # bleibt) und Stall-Wächter, der nur den Ausgang prüft (ein Aussetzer einer kleinen Kamera beendet die Sendung nicht mehr).
     # Wird nur gebaut, wenn ein Patch neuer ist; schlägt das fehl, bleibt die bisherige Fassung (oder das BELABOX-Original) aktiv.
+    echo "PIPBOX-STEP belacoder"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/belacoder
     bc_changed=0
     for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch; do
@@ -192,6 +198,7 @@ PY
     install -m 755 "$HERE/install/pipbox-nginx-guard.sh" /opt/pipbox/pipbox-nginx-guard.sh
     install -m 644 "$HERE/install/99pipbox-nginx" /etc/apt/apt.conf.d/99pipbox-nginx
     /opt/pipbox/pipbox-nginx-guard.sh
+    echo "PIPBOX-STEP start"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     systemctl daemon-reload
     systemctl enable pipbox.service pipbox-dji.service pipbox-hdmi.service
     # Kein Trennen der Kameras vor dem Neustart des Bluetooth-Dienstes: BlueZ hält die Verbindung, der neue Dienst verwendet sie weiter. Ein Trennen
