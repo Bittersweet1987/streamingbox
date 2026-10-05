@@ -536,6 +536,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <div class="ph">Der Link öffnet Tailscale. Melden Sie sich mit Ihrem Konto an (z. B. GitHub oder Google) und klicken Sie dort auf „Connect“. Danach hier einen Moment warten.</div></div>
     <div id="r_url_row" class="row" hidden><span>Adresse im privaten Netz</span><span><a id="r_url" target="_blank" rel="noopener noreferrer" href="#"></a> <button id="r_copy" type="button" class="sec" style="padding:2px 8px;font-size:12px">Kopieren</button></span></div>
     <div id="r_warn" class="err" hidden>Achtung: „Funnel“ ist an, die Oberfläche ist öffentlich im Internet erreichbar. Mit „Freigabe beenden“ abschalten.</div>
+    <div id="r_public" class="ph" hidden role="status"></div>
     <div class="actions" id="r_actions"></div>
     <div id="r_msg" class="ph"></div>
     <div class="ph" style="margin-top:14px">Tailscale-App für Ihre Geräte (offizielle Stores):</div>
@@ -1831,13 +1832,16 @@ async function footAct(b,long,dbl){
   box.addEventListener("contextmenu",e=>e.preventDefault());              // kein Auswahl- oder Kontextmenü beim langen Druck
 })();
 sendLoad(); setInterval(()=>{ if(!document.hidden) sendLoad(); },2000);
-let rBusy=false, rDeclinedMem=false;
+let rBusy=false, rWait=false, rDeclinedMem=false;
 const R_STATE={Running:"verbunden",NeedsLogin:"Anmeldung nötig",Stopped:"getrennt",NoState:"startet …",Starting:"startet …"};
 async function rLoad(){
   let d; try{ d=await srtlaCall("GET","/api/remote"); }catch(e){ return; }
   rBusy=d.state==="working";
-  $("r_badge").textContent=!d.installed?"nicht installiert":(rBusy?"läuft …":(R_STATE[d.backend]||d.backend||"–")+(d.connected&&d.serve?", freigegeben":""));
-  $("r_badge").className="badge "+(d.connected&&d.serve?"ok":"attn");
+  rWait=!!(d.funnel&&d.public&&d.public!=="ok");          // öffentliche Adresse antwortet noch nicht: öfter nachsehen
+  $("r_badge").textContent=!d.installed?"nicht installiert":(rBusy?"läuft …":(R_STATE[d.backend]||d.backend||"–")+(d.connected&&d.serve?(rWait?", wird vorbereitet":", freigegeben"):""));
+  $("r_badge").className="badge "+(d.connected&&d.serve&&!rWait?"ok":"attn");
+  { const pb=$("r_public"); pb.hidden=!(d.funnel&&d.public);
+    if(!pb.hidden){ pb.textContent=d.public==="ok"?"Die öffentliche Adresse antwortet.":(d.public==="wait"?"Die öffentliche Adresse antwortet noch nicht. Tailscale bereitet gerade Zertifikat und Adresse vor, das kann einige Minuten dauern. Bitte nicht aus- und wieder einschalten, das beginnt von vorn.":"Die öffentliche Adresse wird geprüft …"); pb.style.color=d.public==="ok"?"var(--ok)":""; } }
   const info=$("r_info"); info.innerHTML="";
   if(d.installed&&d.connected){ for(const [k,v] of [["Gerätename",d.name],["Adresse im Tailscale-Netz",d.ip],["Tailscale-Netz",d.tailnet]]){ if(!v) continue; const r=document.createElement("div"); r.className="row"; const a=document.createElement("span"); a.textContent=k; const b=document.createElement("b"); b.textContent=v; r.append(a,b); info.append(r); } }
   const login=d.login_url&&/^https:\/\/(login|console)\.tailscale\.com\//.test(d.login_url);
@@ -1910,7 +1914,7 @@ $("r_copy").addEventListener("click",async()=>{
   $("r_copy").textContent=ok?"Kopiert":"Markiert: Strg/Cmd+C";
   setTimeout(()=>$("r_copy").textContent="Kopieren",2500);
 });
-(function rLoop(){ (rBusy||due("r","rcard",60000)?rLoad():Promise.resolve()).finally(()=>setTimeout(rLoop,rBusy?2000:6000)); })();
+(function rLoop(){ (rBusy||rWait||due("r","rcard",60000)?rLoad():Promise.resolve()).finally(()=>setTimeout(rLoop,rBusy?2000:(rWait?4000:6000))); })();
 let swFirst=null, swPending=0;
 // swPending: Zeitpunkt (ms), seit dem DIESER Browser ein Update, einen Wechsel oder einen Rückschritt ausgelöst hat (0 = nichts). Er wird nur zurückgesetzt, wenn
 // das Ergebnis feststeht (neue Version läuft: Seite lädt von selbst neu; abgelehnt oder fehlgeschlagen; nach 15 Minuten). Früher hing das Neuladen an dem Zustand
