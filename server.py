@@ -53,6 +53,58 @@ def read(path, default=None):
         return default
 
 
+BC_STATS_FILE = "/run/pipbox-send/belacoder-stats.json"        # vom Sender (belacoder-stats.patch), einmal je Sekunde
+THERMAL_NAMES = {"soc-thermal": "SoC", "bigcore0-thermal": "Große Kerne 4–5", "bigcore1-thermal": "Große Kerne 6–7",
+                 "littlecore-thermal": "Kleine Kerne 0–3", "center-thermal": "Mitte", "gpu-thermal": "GPU", "npu-thermal": "NPU"}
+
+
+def devfreq_loads():
+    """Auslastung von GPU und NPU (und Speichercontroller) aus /sys/class/devfreq/*/load ("12@300000000Hz"): {"gpu": {...}, "npu": {...}}."""
+    out = {}
+    try:
+        names = sorted(os.listdir("/sys/class/devfreq"))
+    except OSError:
+        return out
+    for n in names:
+        kind = "gpu" if "gpu" in n else "npu" if "npu" in n else None
+        if not kind:
+            continue
+        raw = (read(f"/sys/class/devfreq/{n}/load", "") or "").strip()
+        m = re.match(r"^(\d+)@(\d+)Hz$", raw)
+        if m:
+            out[kind] = {"load_pct": int(m.group(1)), "mhz": int(m.group(2)) // 1000000}
+    return out
+
+
+def disk_usage(path="/"):
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+    return {"total_gb": round(total / 1e9, 1), "free_gb": round(free / 1e9, 1), "used_gb": round((total - st.f_bfree * st.f_frsize) / 1e9, 1),
+            "used_pct": round(100.0 * (1 - free / total), 1) if total else None}
+
+
+def send_stats():
+    """Kennzahlen der Sendung aus der Datei von belacoder (Bitrate, Laufzeit, Sendepuffer, Neuübertragungen, Verlust, Encoder-Bilder je Sekunde).
+    None, wenn keine frische Datei da ist (Sendung aus oder ältere belacoder-Fassung)."""
+    try:
+        if time.time() - os.stat(BC_STATS_FILE).st_mtime > 6:
+            return None
+        d = json.loads(read(BC_STATS_FILE, "") or "{}")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict) or not d:
+        return None
+    sent = d.get("sent_total")
+    out = {k: d.get(k) for k in ("fps", "bitrate_kbps", "rtt_ms", "send_mbps", "snd_buf_pkts", "snd_buf_ms", "retrans_total", "loss_total", "drop_total", "sent_total")}
+    for k in ("retrans", "loss"):
+        t = d.get(k + "_total")
+        out[k + "_pct"] = round(100.0 * t / sent, 2) if isinstance(t, (int, float)) and isinstance(sent, (int, float)) and sent > 0 and t >= 0 else None
+    return out
+
+
 class Sampler:
     """Berechnet Raten aus Zählerdifferenzen zwischen zwei Abfragen."""
 
@@ -152,8 +204,14 @@ class Sampler:
         for line in (read("/proc/stat", "") or "").splitlines():
             if line.startswith("procs_blocked"):
                 blocked = int(line.split()[1])
-        return self.finish(cores, freqs, max(temps) if temps else None,
-                           total, avail, rates, blocked, self.fan_pwm())
+        zones = []
+        for zi in range(len(temps)):
+            zt = (read(f"/sys/class/thermal/thermal_zone{zi}/type", "") or "").strip()
+            zones.append({"name": THERMAL_NAMES.get(zt, zt or f"Zone {zi}"), "c": round(temps[zi], 1)})
+        out = self.finish(cores, freqs, max(temps) if temps else None,
+                          total, avail, rates, blocked, self.fan_pwm())
+        out["details"] = {"temps": zones, "accel": devfreq_loads(), "disk": disk_usage("/"), "send": send_stats()}
+        return out
 
     def sample_demo(self):
         t = time.time()
@@ -164,8 +222,17 @@ class Sampler:
         rates = {"eth0": {"rx_mbit": 0.4, "tx_mbit": round(6 + random.uniform(-1, 1), 2)},
                  "eth1": {"rx_mbit": round(13 + random.uniform(-1, 1), 2),
                           "tx_mbit": round(5 + random.uniform(-1, 1), 2)}}
-        return self.finish(cores, freqs, temp, 16 * 1024 * 1024,
-                           int(7.4 * 1024 * 1024), rates, 0, int(110 + 40 * math.sin(t / 30)))
+        out = self.finish(cores, freqs, temp, 16 * 1024 * 1024,
+                          int(7.4 * 1024 * 1024), rates, 0, int(110 + 40 * math.sin(t / 30)))
+        out["details"] = {
+            "temps": [{"name": n, "c": round(temp + d + random.uniform(-0.4, 0.4), 1)} for n, d in
+                      (("SoC", 0), ("Große Kerne 4–5", 2), ("Große Kerne 6–7", 1.5), ("Kleine Kerne 0–3", -3), ("Mitte", 0), ("GPU", -5), ("NPU", -6))],
+            "accel": {"gpu": {"load_pct": int(12 + 8 * math.sin(t / 5)), "mhz": 600}, "npu": {"load_pct": 0, "mhz": 1000}},
+            "disk": {"total_gb": 62.8, "free_gb": 55.5, "used_gb": 4.6, "used_pct": 8.7},
+            "send": {"fps": 29.9, "bitrate_kbps": 9800, "rtt_ms": round(38 + 6 * math.sin(t / 9), 1), "send_mbps": round(9.7 + random.uniform(-0.5, 0.5), 2),
+                     "snd_buf_pkts": int(30 + 20 * random.random()), "snd_buf_ms": int(25 + 15 * random.random()), "retrans_total": 412, "loss_total": 37,
+                     "drop_total": 0, "sent_total": 90210, "retrans_pct": 0.46, "loss_pct": 0.04}}
+        return out
 
     def finish(self, cores, freqs, temp, total_kb, avail_kb, rates, blocked, fan_pwm=None):
         cpu_avg = round(sum(cores) / len(cores), 1) if cores else None

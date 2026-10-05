@@ -29,6 +29,7 @@ BELACODER = "/opt/pipbox/bin/belacoder"      # belacoder mit tolerantem Regler (
 RUN = "/run/pipbox-send"
 WORK = "/var/tmp/pipbox"
 STATUS = f"{RUN}/status.json"
+BC_STATS = f"{RUN}/belacoder-stats.json"       # JSON von belacoder, einmal je Sekunde (Bitrate, RTT, Sendepuffer, Neuübertragungen, Verlust, Encoder-Bilder), im RAM
 STATS = f"{RUN}/belacoder-stats.txt"     # die letzten Regelzeilen von belacoder (nur Zahlen), im RAM
 STATS_KEEP = 3000
 LISTEN_PORT = 9100
@@ -498,6 +499,7 @@ class Sender:
 
     def run(self):
         env = dict(os.environ, GST_PLUGIN_PATH=PLUGIN_DIR)
+        env["BELACODER_STATS_FILE"] = BC_STATS            # Kennzahlen für "Details" im Status (belacoder-stats.patch), sonst nichts
         senv = None
         if self.plan.get("spread") == "all":
             # Alle Wege gleichzeitig: auch Leitungen mit höherer Laufzeit mitnutzen (bis 300 ms schlechter als die beste); jeder geeignete Weg bekommt mindestens 10 Prozent der Pakete
@@ -654,7 +656,7 @@ class Sender:
                 time.sleep(0.2)
             if p.poll() is None:
                 p.kill()
-        for f in (STATUS, STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE):
+        for f in (STATUS, STATS, BC_STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE):
             try:
                 os.remove(f)
             except OSError:

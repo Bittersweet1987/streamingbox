@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.96 (Beta)
+- Neu (Issue #26): **Details im Status.** Unter den Kästen des Status steht ein zugeklappter Bereich "Details" (gezeichnet nur, solange er offen ist) mit vier Kategorien:
+  - **Senden:** Bitrate (gemessen und eingestellt), Laufzeit (Ping, RTT) gesamt und je Weg, Sendepuffer (ms und Pakete), Neuübertragungen und Paketverlust (Summe und Anteil), Encoder-Bilder pro Sekunde.
+  - **Prozessor:** Auslastung und Takt je Kern (0 bis 7), GPU und NPU. **Temperaturen:** je Wärmezone (SoC, große Kerne, kleine Kerne, Mitte, GPU, NPU). **Speicherplatz:** belegt, frei, gesamt.
+  - Die Sendewerte kommen von `belacoder` (neuer Patch `belacoder/belacoder-stats.patch`: schreibt einmal je Sekunde eine JSON-Datei im RAM, nur wenn der Sender sie anfordert). Das Update baut `belacoder` dafür neu (braucht Internet, git, gcc); bis dahin und ohne Sendung steht "Keine Daten". Die Kernwerte, Temperaturen, GPU/NPU und Speicherplatz zeigen sich sofort.
+  - Hinweis: Neuübertragungen und Verlust sind Summen seit dem Start der Verbindung. Die Temperaturen sind je Wärmezone, nicht je einzelnem Kern (der Chip hat keine Messung je Kern). Die NPU-Last kommt aus dem Frequenzregler des Chips.
+  - Tests: `tools/test_details.py` (7).
+
 ## 0.9.95 (Beta)
 - Geändert: **Ton-Wechsel mit kaum noch Stille.** Der DJI-Ton kommt stoßweise (Stücke von bis zu 1,7 s). Die Version 0.9.94 füllte die Lücke bis zum nächsten passenden Stück mit Stille (gemessen 0,85 s zum kleinen Bild, 1,7 s zurück). Jetzt spielt die alte Quelle weiter, bis ein Puffer der neuen passt, und schließt dann nahtlos an (kurze Aus- und Einblendung, wie bisher). "Passt" heißt: Der neue Puffer liegt höchstens 0,4 s vor und höchstens 50 ms nach dem Ende des alten (zu spät würde der Ton hinter die Echtzeit fallen und den Muxer das Bild zurückhalten lassen, gemessen schon bei 0,4 s; zu früh bedeutet nur einen Ton-Versatz bis 0,4 s zum Bild). Kommt in 2,5 s nichts Passendes, springt der Ton auf die Echtzeit-Lage und die Lücke wird mit Stille gefüllt (bis 12 s).
   - Der "typische" Zeitabstand je Tonweg ist jetzt ein gleitender Mittelwert (10 s) statt des höchsten Werts; der höchste Wert war ein Ausreißer und machte einen Weg dauerhaft bis 1,8 s "zu spät". Fester Bezug statt Kette von Wechsel zu Wechsel: nichts summiert sich auf.
