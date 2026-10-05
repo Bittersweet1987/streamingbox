@@ -936,6 +936,8 @@ typedef struct {
   gint64 dropped_ns;             /* beim Umschalten verworfene Dauer des neuen Eingangs (Ton) */
   gint drop_idx;                 /* für welchen Eingang dropped_ns gilt */
   gboolean first_after_switch;   /* der nächste Puffer ist der erste nach dem Umschalten (Ton) */
+  gboolean fade_in;              /* der nächste Puffer bekommt eine kurze Einblendung (Ton, nach dem Umschalten) */
+  GstBuffer *held;               /* Ton: der letzte Puffer wird einen Schritt zurückgehalten, damit er beim Umschalten ausgeblendet werden kann */
 } PbPipSel;
 typedef struct { GstElementClass parent_class; } PbPipSelClass;
 G_DEFINE_TYPE(PbPipSel, pb_pip_sel, GST_TYPE_ELEMENT)
@@ -953,6 +955,8 @@ static void pb_sel_reset(PbPipSel *self) {
   self->dropped_ns = 0;
   self->drop_idx = -1;
   self->first_after_switch = FALSE;
+  self->fade_in = FALSE;
+  gst_clear_buffer(&self->held);
   self->next_out = self->prev_pts = GST_CLOCK_TIME_NONE;
   gst_caps_replace(&self->sent_caps, NULL);
   for (guint i = 0; i < SEL_PADS; i++)
@@ -1026,6 +1030,83 @@ static void pb_sel_sample(PbPipSel *self, gint idx, GstClockTime pts) {
   g_mutex_unlock(&self->plock);
 }
 
+/* Ton: Format des Eingangs, wenn es 16-Bit-Ganzzahlen verschachtelt sind (so macht es die Pipeline vor dem Umschalter). Sonst keine Blenden/Stille. */
+static gboolean pb_sel_audio_fmt(PbPipSel *self, gint idx, gint *rate, gint *ch) {
+  if (!self->caps[idx] || gst_caps_get_size(self->caps[idx]) < 1)
+    return FALSE;
+  const GstStructure *st = gst_caps_get_structure(self->caps[idx], 0);
+  const gchar *fmt = gst_structure_get_string(st, "format");
+  if (g_strcmp0(gst_structure_get_name(st), "audio/x-raw") != 0 || g_strcmp0(fmt, "S16LE") != 0)
+    return FALSE;
+  if (!gst_structure_get_int(st, "rate", rate) || !gst_structure_get_int(st, "channels", ch) || *rate < 8000 || *ch < 1 || *ch > 8)
+    return FALSE;
+  return TRUE;
+}
+
+/* Lineare Blende über den ganzen Puffer (Ein- oder Ausblendung), Puffer wird beschreibbar gemacht. */
+static GstBuffer *pb_sel_fade(GstBuffer *buf, gboolean fade_in, gint ch) {
+  buf = gst_buffer_make_writable(buf);
+  GstMapInfo m;
+  if (!gst_buffer_map(buf, &m, GST_MAP_READWRITE))
+    return buf;
+  const gsize frames = m.size / (2 * (gsize) ch);
+  gint16 *x = (gint16 *) m.data;
+  for (gsize i = 0; i < frames; i++) {
+    const gdouble g = frames > 1 ? (gdouble) i / (gdouble) (frames - 1) : 1.0;
+    const gdouble k = fade_in ? g : 1.0 - g;
+    for (gint c = 0; c < ch; c++)
+      x[i * ch + c] = (gint16) (x[i * ch + c] * k);
+  }
+  gst_buffer_unmap(buf, &m);
+  return buf;
+}
+
+#define SEL_SILENCE_MAX (3 * GST_SECOND)     /* so viel Stille wird beim Umschalten höchstens eingefügt */
+#define SEL_SILENCE_MIN (5 * GST_MSECOND)    /* kürzere Lücken bleiben (Zeitstempel schließen dort einfach an) */
+
+/* Beim Umschalten (Aufrufer hält lock): den zurückgehaltenen letzten Puffer des alten Eingangs ausblenden und weitergeben, danach Stille von
+ * next_out bis to einfügen. Der Ausgang bleibt so ohne Lücke (der Muxer wartet sonst auf den Ton und hält das Bild zurück, gemessen: 1,6 s
+ * Bildstillstand je Wechsel) und der Wechsel knackt nicht. */
+static GstFlowReturn pb_sel_gap_locked(PbPipSel *self, gint rate, gint ch, GstClockTime to) {
+  GstFlowReturn ret = GST_FLOW_OK;
+  if (self->held) {
+    GstBuffer *h = pb_sel_fade(self->held, FALSE, ch);
+    self->held = NULL;
+    ret = gst_pad_push(self->src, h);
+    if (ret != GST_FLOW_OK)
+      return ret;
+  }
+  if (!self->have_next || !GST_CLOCK_TIME_IS_VALID(to) || to <= self->next_out + SEL_SILENCE_MIN)
+    return ret;
+  if (to - self->next_out > SEL_SILENCE_MAX)
+    to = self->next_out + SEL_SILENCE_MAX;
+  while (self->next_out + SEL_SILENCE_MIN < to) {
+    GstClockTime chunk = MIN(to - self->next_out, 20 * GST_MSECOND);
+    const gsize frames = (gsize) gst_util_uint64_scale(chunk, (guint64) rate, GST_SECOND);
+    if (frames == 0)
+      break;
+    GstBuffer *b = gst_buffer_new_and_alloc(frames * 2 * (gsize) ch);
+    GstMapInfo m;
+    if (gst_buffer_map(b, &m, GST_MAP_WRITE)) {
+      memset(m.data, 0, m.size);
+      gst_buffer_unmap(b, &m);
+    }
+    chunk = gst_util_uint64_scale(frames, GST_SECOND, (guint64) rate);
+    GST_BUFFER_PTS(b) = self->next_out;
+    GST_BUFFER_DTS(b) = self->next_out;
+    GST_BUFFER_DURATION(b) = chunk;
+    if (self->resync) {
+      GST_BUFFER_FLAG_SET(b, GST_BUFFER_FLAG_DISCONT);
+      self->resync = FALSE;
+    }
+    self->next_out += chunk;
+    ret = gst_pad_push(self->src, b);
+    if (ret != GST_FLOW_OK)
+      return ret;
+  }
+  return ret;
+}
+
 static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf) {
   PbPipSel *self = (PbPipSel *) parent;
   const gint idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(pad), "pbsel-idx"));
@@ -1042,6 +1123,8 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
     gst_buffer_unref(buf);
     return GST_FLOW_OK;
   }
+  gint a_rate = 0, a_ch = 0;
+  const gboolean audio_fx = !self->tag_offset && pb_sel_audio_fmt(self, idx, &a_rate, &a_ch);
   if (self->sent_pad != idx) {                                       /* Umschalten (oder erster Puffer) */
     if (!pb_sel_push_sticky_locked(self, idx)) {
       g_mutex_unlock(&self->lock);
@@ -1072,13 +1155,33 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
             GstClockTime dur = GST_BUFFER_DURATION_IS_VALID(buf) ? GST_BUFFER_DURATION(buf) : 0;
             if ((gint64) pts + ideal + (gint64) dur <= (gint64) self->next_out && self->dropped_ns < (gint64) SEL_MAX_DROP) {
               self->dropped_ns += dur ? (gint64) dur : 21 * GST_MSECOND;     /* liegt noch vor dem Ende des alten Eingangs: verwerfen */
+              GstFlowReturn fr = GST_FLOW_OK;
+              if (audio_fx) {                                            /* der Ausgang bleibt in Echtzeit lückenlos: Stille bis "jetzt" */
+                const gint64 rt = pb_sel_running_time((GstElement *) self);
+                if (rt >= 0) {
+                  g_mutex_lock(&self->plock);
+                  const gint64 now_out = rt + self->offset + self->p_max[self->sent_pad];
+                  g_mutex_unlock(&self->plock);
+                  fr = pb_sel_gap_locked(self, a_rate, a_ch, now_out > 0 ? (GstClockTime) now_out : GST_CLOCK_TIME_NONE);
+                }
+              }
               g_mutex_unlock(&self->lock);
               gst_buffer_unref(buf);
-              return GST_FLOW_OK;
+              return fr;
             }
             if (self->dropped_ns < (gint64) SEL_MAX_DROP) {
               offset = ideal;
               self->first_after_switch = TRUE;
+              if (audio_fx) {                                            /* alten Ton ausblenden, Lücke bis zum neuen mit Stille füllen, neuen einblenden */
+                gint64 first = (gint64) pts + ideal;
+                const GstFlowReturn fr = pb_sel_gap_locked(self, a_rate, a_ch, first > 0 ? (GstClockTime) first : GST_CLOCK_TIME_NONE);
+                if (fr != GST_FLOW_OK) {
+                  g_mutex_unlock(&self->lock);
+                  gst_buffer_unref(buf);
+                  return fr;
+                }
+                self->fade_in = TRUE;
+              }
             }
           }
         }
@@ -1127,7 +1230,23 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
   }
   if (self->tag_offset)
     GST_BUFFER_OFFSET(buf) = STATE_MARK | (guint64) (state & 0xFFFF);
-  const GstFlowReturn ret = gst_pad_push(self->src, buf);
+  GstFlowReturn ret;
+  if (audio_fx) {                                                    /* Ton: einen Puffer zurückhalten (Ausblendung beim nächsten Umschalten) */
+    if (self->fade_in) {
+      buf = pb_sel_fade(buf, TRUE, a_ch);
+      self->fade_in = FALSE;
+    }
+    GstBuffer *prev = self->held;
+    self->held = buf;
+    ret = prev ? gst_pad_push(self->src, prev) : GST_FLOW_OK;
+  } else {
+    if (self->held) {                                                /* Format hat gewechselt: zurückgehaltenen Puffer zuerst weitergeben */
+      GstBuffer *prev = self->held;
+      self->held = NULL;
+      gst_pad_push(self->src, prev);
+    }
+    ret = gst_pad_push(self->src, buf);
+  }
   g_mutex_unlock(&self->lock);
   return ret;
 }
@@ -1152,6 +1271,11 @@ static gboolean pb_sel_event(GstPad *pad, GstObject *parent, GstEvent *event) {
         g_mutex_lock(&self->lock);
         if (self->sent_pad < 0 && self->caps[idx])
           pb_sel_push_sticky_locked(self, idx);
+        if (self->held) {
+          GstBuffer *h = self->held;
+          self->held = NULL;
+          gst_pad_push(self->src, h);
+        }
         ret = gst_pad_push_event(self->src, event);
         g_mutex_unlock(&self->lock);
       } else {
@@ -1159,7 +1283,14 @@ static gboolean pb_sel_event(GstPad *pad, GstObject *parent, GstEvent *event) {
       }
       break;
     case GST_EVENT_FLUSH_START:
-      if (act) ret = gst_pad_push_event(self->src, event); else gst_event_unref(event);
+      if (act) {
+        ret = gst_pad_push_event(self->src, event);                  /* zuerst weitergeben (entsperrt einen hängenden Push), dann den Rest verwerfen */
+        g_mutex_lock(&self->lock);
+        gst_clear_buffer(&self->held);
+        g_mutex_unlock(&self->lock);
+      } else {
+        gst_event_unref(event);
+      }
       break;
     case GST_EVENT_FLUSH_STOP:
       if (act) {
@@ -1234,6 +1365,7 @@ static void pb_sel_finalize(GObject *o) {
   gst_caps_replace(&self->sent_caps, NULL);
   for (guint i = 0; i < SEL_PADS; i++)
     gst_caps_replace(&self->caps[i], NULL);
+  gst_clear_buffer(&self->held);
   g_mutex_clear(&self->lock);
   g_mutex_clear(&self->plock);
   G_OBJECT_CLASS(pb_pip_sel_parent_class)->finalize(o);
