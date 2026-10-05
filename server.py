@@ -72,7 +72,9 @@ def devfreq_loads():
         raw = (read(f"/sys/class/devfreq/{n}/load", "") or "").strip()
         m = re.match(r"^(\d+)@(\d+)Hz$", raw)
         if m:
-            out[kind] = {"load_pct": int(m.group(1)), "mhz": int(m.group(2)) // 1000000}
+            # Der Frequenzregler der NPU (rknpu_ondemand) meldet immer 100 %, auch im Leerlauf (gemessen, die echte Last steht nur in debugfs,
+            # und das liest nur root): bei der NPU deshalb nur die Frequenz, die Auslastung bleibt unbekannt.
+            out[kind] = {"load_pct": int(m.group(1)) if kind == "gpu" else None, "mhz": int(m.group(2)) // 1000000}
     return out
 
 
@@ -227,7 +229,7 @@ class Sampler:
         out["details"] = {
             "temps": [{"name": n, "c": round(temp + d + random.uniform(-0.4, 0.4), 1)} for n, d in
                       (("SoC", 0), ("Große Kerne 4–5", 2), ("Große Kerne 6–7", 1.5), ("Kleine Kerne 0–3", -3), ("Mitte", 0), ("GPU", -5), ("NPU", -6))],
-            "accel": {"gpu": {"load_pct": int(12 + 8 * math.sin(t / 5)), "mhz": 600}, "npu": {"load_pct": 0, "mhz": 1000}},
+            "accel": {"gpu": {"load_pct": int(12 + 8 * math.sin(t / 5)), "mhz": 600}, "npu": {"load_pct": None, "mhz": 1000}},
             "disk": {"total_gb": 62.8, "free_gb": 55.5, "used_gb": 4.6, "used_pct": 8.7},
             "send": {"fps": 29.9, "bitrate_kbps": 9800, "rtt_ms": round(38 + 6 * math.sin(t / 9), 1), "send_mbps": round(9.7 + random.uniform(-0.5, 0.5), 2),
                      "snd_buf_pkts": int(30 + 20 * random.random()), "snd_buf_ms": int(25 + 15 * random.random()), "retrans_total": 412, "loss_total": 37,

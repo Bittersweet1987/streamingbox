@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.97 (Beta)
+- Korrigiert: **NPU-Auslastung** in "Details" zeigte immer 100 %. Der Frequenzregler der NPU (rknpu_ondemand) meldet auch im Leerlauf 100 %; die echte Last (0 %) steht nur in debugfs und das liest nur root. Jetzt steht dort "–" mit Erklärung (Tooltip) und die Frequenz; die GPU-Auslastung stimmt (Mali-Regler).
+- Mit der echten Box geprüft (nach 0.9.96): Die Kennzahlen-Datei von `belacoder` liefert Bitrate, RTT, Sendepuffer, Neuübertragungen, Verlust und 29 bis 30 Bilder pro Sekunde; Temperaturen, GPU, Speicherplatz stimmen. Beobachtung: Neuübertragungen und Verlust lagen kurz nach dem Start bei etwa 5 % (Summe seit Verbindungsbeginn).
+
 ## 0.9.96 (Beta)
 - Neu (Issue #26): **Details im Status.** Unter den Kästen des Status steht ein zugeklappter Bereich "Details" (gezeichnet nur, solange er offen ist) mit vier Kategorien:
   - **Senden:** Bitrate (gemessen und eingestellt), Laufzeit (Ping, RTT) gesamt und je Weg, Sendepuffer (ms und Pakete), Neuübertragungen und Paketverlust (Summe und Anteil), Encoder-Bilder pro Sekunde.
