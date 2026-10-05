@@ -1,5 +1,5 @@
 #!/bin/sh
-# Baut belacoder (BELABOX/belacoder, Commit ccce9ca, GPL-3.0) mit den Patches aus diesem Ordner (Regler, Stall-Wächter).
+# Baut belacoder (BELABOX/belacoder, Commit ccce9ca, GPL-3.0) mit den Patches aus diesem Ordner (Regler, Stall-Wächter, Kennzahlen-Datei).
 # Installiert nach /opt/pipbox/bin/belacoder (das Original aus dem BELABOX-Paket bleibt unter /usr/bin unberührt und dient
 # als Rückfall). Braucht gcc, git, patch und Internet; die Header für GStreamer und GLib lädt das Skript wie gst/build.sh
 # in ein temporäres Verzeichnis, die Header für SRT bringt das BELABOX-Paket libsrt mit. Als root ausführen.
@@ -23,6 +23,7 @@ cd "$D/belacoder"
 git checkout --quiet "$COMMIT"
 patch -p1 --quiet < "$HERE/belacoder-jitter-tolerant.patch"
 patch -p1 --quiet < "$HERE/belacoder-stall-output.patch"
+patch -p1 --quiet < "$HERE/belacoder-stats.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
 gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2\" belacoder.c -o belacoder.new \
