@@ -356,7 +356,7 @@ print(JSON.stringify({a: a, b: b, c: c}));"""
 class StatusOrder(unittest.TestCase):
     def test_upload_then_cameras_then_system(self):                                         # Issue #22
         i = PAGE.index('<div class="statgrid">')
-        grid = PAGE[i:PAGE.index("</details>", i)]
+        grid = PAGE[i:PAGE.index('<details class="dsec" id="statdet">', i)]                  # ohne den Bereich "Details" (Issue #26)
         pos = [grid.index(m) for m in ('<div class="sech">Up- und Download</div>', 'id="camlights"', '<div class="sech">System</div>')]
         self.assertEqual(pos, sorted(pos))
         self.assertEqual(grid.count('<div class="statbox">'), 3)
