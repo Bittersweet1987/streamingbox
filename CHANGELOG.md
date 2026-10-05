@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.110 (Beta)
+- Geändert (Issue #24, Rückmeldung des Melders): **Die Karte "Language · Sprache" am Ende der Seite entfällt.** Die Sprachauswahl steht schon im Kopf der Seite (und beim ersten Öffnen als Auswahl); die zweite Auswahl unten war doppelt und blähte das Menü auf. Die Sprache lässt sich weiter im Kopf wechseln, auf der Anmeldeseite wie bisher.
+  - Geprüft in der Demo: Seite lädt ohne Fehler, Sprachwechsel im Kopf geht. Nicht auf einem Handy geprüft.
+
+
 ## 0.9.109 (Beta)
 - **Testversion auf Wunsch: Der Tailscale-Teil ist wieder auf dem Stand von 0.9.94.** Anlass: Nach einem Neustart war die Box mit 0.9.94 (und frisch angemeldetem Tailscale) sofort öffentlich erreichbar, mit 0.9.107 (ebenfalls frisch angemeldet) nicht. Wir wollen sehen, ob es an unserem Tailscale-Teil liegt.
   - Zurückgesetzt auf 0.9.94: der Helfer `install/pipbox-remote.py` (damit entfallen die mehrfachen Versuche beim Laden der Paketliste aus 0.9.100 und das Auswerten des Freischalt-Links bei Zeitüberschreitung aus 0.9.101), die Klasse `Remote` in `server.py` und die Karte "Fernzugriff" (damit entfällt die Prüfung der öffentlichen Adresse aus 0.9.108).
