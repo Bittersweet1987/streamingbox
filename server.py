@@ -4891,18 +4891,42 @@ class LimitedHTTPServer(ThreadingHTTPServer):
         super().__init__(*a, **kw)
         self._conn_lock = threading.Lock()
         self._conns = {}
+        self._senders = {}
         self._total = 0
+
+    LOOPBACK_CONN = 48        # vom Tailscale-Proxy (Serve/Funnel): davor nur diese Obergrenze, danach zählt der echte Absender aus X-Forwarded-For
 
     def verify_request(self, request, client_address):
         ip = client_address[0]
         if not self.allow_public and not source_allowed(ip):
             return False
+        loop = self.is_loopback(ip)
         with self._conn_lock:
-            if self._total >= self.MAX_CONN or self._conns.get(ip, 0) >= self.PER_IP:
+            if self._total >= self.MAX_CONN or (self._conns.get(ip, 0) >= (self.LOOPBACK_CONN if loop else self.PER_IP)):
                 return False
             self._conns[ip] = self._conns.get(ip, 0) + 1
             self._total += 1
         return True
+
+    @staticmethod
+    def is_loopback(ip):
+        return ip in ("127.0.0.1", "::1")
+
+    def claim_sender(self, ip):
+        """Hinter dem Proxy: den echten Absender zählen (höchstens PER_IP offene Verbindungen). Wahr, wenn noch Platz ist."""
+        with self._conn_lock:
+            if self._senders.get(ip, 0) >= self.PER_IP:
+                return False
+            self._senders[ip] = self._senders.get(ip, 0) + 1
+            return True
+
+    def release_sender(self, ip):
+        with self._conn_lock:
+            n = self._senders.get(ip, 1) - 1
+            if n > 0:
+                self._senders[ip] = n
+            else:
+                self._senders.pop(ip, None)
 
     def process_request_thread(self, request, client_address):
         try:
@@ -4921,6 +4945,48 @@ class LimitedHTTPServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     timeout = 15              # eine Verbindung, die so lange nichts sendet, wird beendet (Issue #25: halb offene Anfragen blieben ewig offen)
     BODY_SECONDS = 15.0       # so lange darf der Inhalt einer Anfrage insgesamt brauchen (nicht nur je Teilstück)
+    REQUEST_SECONDS = 15.0    # Gesamtfrist für Kopfzeilen und Inhalt zusammen; danach wird die Verbindung getrennt (ein Byte alle paar Sekunden hielt sie offen)
+    _timer = None
+    _claimed = None
+
+    def setup(self):
+        super().setup()
+        self._timer = threading.Timer(self.REQUEST_SECONDS, self._cut)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _cut(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except (OSError, AttributeError):
+            pass
+
+    def request_read(self):
+        """Die Anfrage ist vollständig gelesen: Gesamtfrist beenden (Antworten schreiben hat seine eigene Zeitgrenze je Teilstück)."""
+        t = self._timer
+        if t is not None:
+            t.cancel()
+
+    def finish(self):
+        self.request_read()
+        if self._claimed is not None:
+            try:
+                self.server.release_sender(self._claimed)
+            except AttributeError:
+                pass
+            self._claimed = None
+        super().finish()
+
+    def parse_request(self):
+        ok = super().parse_request()
+        if ok and self.client_address[0] in ("127.0.0.1", "::1") and hasattr(self.server, "claim_sender"):
+            real = self.ip()                                           # Anfrage vom Proxy: den echten Absender zählen
+            if real not in ("127.0.0.1", "::1"):
+                if not self.server.claim_sender(real):
+                    self.send_error(429, "Zu viele Verbindungen")
+                    return False
+                self._claimed = real
+        return ok
     sampler = None
     cams = None
     auth = None
@@ -4972,7 +5038,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("ungültige Länge")
         if n > limit:
             raise ValueError("Die Anfrage ist zu groß")
-        return json.loads(self.read_body(n) or b"{}")
+        data = self.read_body(n)
+        self.request_read()
+        return json.loads(data or b"{}")
 
     def read_body(self, n):
         """Liest n Bytes, insgesamt höchstens BODY_SECONDS lang (ein Absender, der alle paar Sekunden ein Byte schickt, hält sonst die Verbindung offen)."""
@@ -5041,6 +5109,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(200, body.encode(), "text/html; charset=utf-8")
 
     def do_GET(self):
+        self.request_read()
         path = self.path.split("?")[0]
         if (path == "/i18n.js" or path.startswith("/i18n/")) and self.i18n_file(path):
             return
@@ -5301,6 +5370,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404, {"error": "not found"})
 
     def do_DELETE(self):
+        self.request_read()
         if not self.authed():
             return self.reply(401, {"error": "nicht angemeldet"})
         m3 = re.match(r"^/api/srtla/([0-9a-f]{8})$", self.path.split("?")[0])
