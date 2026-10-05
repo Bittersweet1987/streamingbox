@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.107 (Beta)
+- **Testversion für die Fehlersuche bei Tailscale: ändert für den Betrieb nichts.** Beim Einspielen dieser Version schreibt `install.sh` den Zustand der Tailscale-Freigaben (`tailscale serve status` und `tailscale funnel status`) **vor** und **nach** der Installation ins Protokoll der Software-Updates (Karte "Protokolle", Abschnitt "Protokoll der Software-Updates"). So lässt sich ablesen, ob eine öffentliche Freigabe (Funnel) bei einem Update verloren geht. Die Befehle lesen nur und ändern nichts; fehlt Tailscale oder antwortet es nicht, geht die Installation unverändert weiter.
+  - Tests: `tools/test_swupdate_progress.py` (+3).
+
+
 ## 0.9.106 (Beta)
 - Neu: **Das Protokollpaket (Karte "Protokolle") enthält jetzt den Zustand der Tailscale-Freigaben** (`tailscale serve status` und `tailscale funnel status`) und aus dem Journal von Tailscale nur die Zeilen zu Freigabe, Zertifikat, Anmeldung und Fehlern (der Rest ist Rauschen). Anlass: Auf einer Box ging die öffentliche Freigabe (Funnel) angeblich immer wieder verloren; im bisherigen Paket stand dazu nichts vom Tailscale-Dienst, nur das Protokoll unseres Helfers (dort: Funnel an um 14:32, danach nur noch von Hand "aus" und "an" um 15:10 und 15:59 UTC, nichts von selbst).
   - **Die Ursache für das Verlieren der Freigabe ist damit nicht gefunden oder behoben**: Unser Code beendet Funnel nie von selbst; nur der Knopf "Beenden" tut das. Das neue Paket soll zeigen, ob die Freigabe in Tailscale wirklich verschwindet (dann steht es in `funnel status`) und was der Dienst dazu meldet. Die Namen und Adressen sind wie bisher bereinigt.
