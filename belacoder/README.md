@@ -1,10 +1,11 @@
 # belacoder mit toleranterem Bitraten-Regler und Stall-Wächter am Ausgang
 
-Zwei kleine Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler) und `belacoder-stall-output.patch` (Stall-Wächter, siehe unten).
+Drei kleine Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status).
 
 `belacoder-jitter-tolerant.patch` ändert die Funktion `update_bitrate()` in `belacoder.c` aus
-[BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Der
-Patch steht unter derselben Lizenz; der Quelltext des gebauten Programms ist: Upstream-Commit plus dieser Patch.
+[BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Alle
+Patches stehen unter derselben Lizenz (GPL-3.0, nicht MIT wie der Rest dieses Pakets); der Quelltext des gebauten Programms ist:
+Upstream-Commit plus diese Patches. Der Upstream-Quelltext selbst liegt nicht in diesem Paket, `build.sh` holt ihn von GitHub.
 
 ## Warum
 
