@@ -1435,6 +1435,18 @@ class DjiServiceTests(unittest.TestCase):
             self.svc.command({"cmd": "update", "addr": ADDR, "name": "Neuer Name"})
         self.assertEqual(self.cams.cams[0]["name"], "HDMI")
 
+    def test_switching_to_status_only_drops_the_cameras_own_list_entry(self):
+        self.cams.add("Osmo Action 5 Pro", "dji-d0d04b", "extra")
+        self.cams.add("HDMI", "hdmi", "extra")
+        cfg = {ADDR: {"rtmp_key": "dji-d0d04b"}}
+        with mock.patch.object(self.svc, "_config", lambda: cfg):
+            self.svc.command({"cmd": "update", "addr": ADDR, "status_only": True})
+        self.assertEqual([c["key"] for c in self.cams.cams], ["hdmi"])
+        self.cams.add("Andere", "dji-111111", "extra")
+        with mock.patch.object(self.svc, "_config", lambda: cfg):
+            self.svc.command({"cmd": "update", "addr": ADDR, "status_only": False})    # zurück: nichts wird gelöscht
+        self.assertEqual(len(self.cams.cams), 2)
+
     def test_status_only_is_part_of_the_settings_backup(self):
         t = server.SettingsTransfer.__new__(server.SettingsTransfer)
         clean_dji = t._clean_dji
