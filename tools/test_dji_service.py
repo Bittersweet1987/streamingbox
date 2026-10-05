@@ -251,44 +251,53 @@ class Commands(unittest.TestCase):
             self.assertEqual(dm.cameras[ADDR].cfg["password"], "geheim")
         arun(go())
 
-    def test_connection_cannot_change_while_connected(self):
+    def test_connection_can_be_changed_any_time_but_applies_next_time(self):
         async def go():
             d, dm = self.daemon()
             await self.add(dm)
             cam = dm.cameras[ADDR]
-            cam.state = "streaming"
-            r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "eth2"})
-            self.assertIn("error", r)
-            self.assertNotEqual(cam.cfg.get("wifi_ifname"), "eth2")
-            self.assertTrue(cam.public()["locked"])
-            r = await dm.handle({"cmd": "update", "addr": ADDR, "bitrate": 5000})       # Videowerte gehen trotzdem
-            self.assertEqual(r, {"ok": True})
-            cam.state, cam.publishing = "idle", True                                    # sendet noch ohne Bluetooth
+            for st in ("idle", "error", "searching", "connecting", "pairing", "preparing", "wifi", "streaming", "status", "stopping"):
+                cam.state = st
+                r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "manual", "ssid": "Neu-" + st, "password": "pw-" + st})
+                self.assertEqual(r, {"ok": True}, st)
+                self.assertEqual(cam.cfg["ssid"], "Neu-" + st)
+            for st, locked in (("idle", False), ("error", False), ("searching", False), ("connecting", False), ("pairing", True), ("streaming", True)):
+                cam.state = st
+                self.assertEqual(cam.public()["locked"], locked, st)          # nur noch ein Hinweis: "gilt ab der nächsten Verbindung"
+            cam.state, cam.publishing = "idle", True                           # sendet noch ohne Bluetooth
             self.assertTrue(cam.public()["locked"])
             cam.publishing = False
             self.assertFalse(cam.public()["locked"])
+            cam.state = "streaming"
+            r = await dm.handle({"cmd": "update", "addr": ADDR, "bitrate": 5000})
+            self.assertEqual(r, {"ok": True})
         arun(go())
 
-    def test_network_can_be_changed_while_searching_but_not_the_mode(self):
+    def test_saved_network_can_be_used_and_deleted_while_streaming(self):
         async def go():
             d, dm = self.daemon()
             await self.add(dm)
             cam = dm.cameras[ADDR]
-            for st in ("idle", "error", "searching", "connecting"):
-                cam.state = st
-                self.assertFalse(cam.public()["locked"], st)
-                r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "manual", "ssid": "Neu-" + st})
-                self.assertEqual(r, {"ok": True}, st)
-            for st in ("searching", "connecting"):
+            cam.cfg["saved"] = [{"ssid": "Alt", "password": "alt12345"}, {"ssid": "Neu", "password": "neu12345"}]
+            cam.state = "streaming"
+            self.assertEqual(await dm.handle({"cmd": "use_saved", "addr": ADDR, "ssid": "Neu"}), {"ok": True})
+            self.assertEqual((cam.cfg["ssid"], cam.cfg["password"]), ("Neu", "neu12345"))
+            self.assertEqual(await dm.handle({"cmd": "delete_saved", "addr": ADDR, "ssid": "Alt"}), {"ok": True})
+            self.assertEqual([n["ssid"] for n in cam.cfg["saved"]], ["Neu"])
+        arun(go())
+
+    def test_mode_stays_locked_while_a_session_runs(self):
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            cam = dm.cameras[ADDR]
+            for st in ("searching", "connecting", "pairing", "streaming"):
                 cam.state = st
                 r = await dm.handle({"cmd": "update", "addr": ADDR, "status_only": True})        # die Art hat die laufende Sitzung schon gelesen
                 self.assertIn("error", r, st)
                 self.assertTrue(cam.public()["mode_locked"], st)
-            for st in ("pairing", "preparing", "wifi", "configuring", "starting", "streaming", "status", "stopping"):
-                cam.state = st
-                self.assertTrue(cam.public()["locked"], st)
-                r = await dm.handle({"cmd": "update", "addr": ADDR, "ssid": "Nein"})
-                self.assertIn("error", r, st)
+            cam.state = "error"
+            self.assertFalse(cam.public()["mode_locked"])
         arun(go())
 
     def test_saved_networks_use_and_delete(self):
