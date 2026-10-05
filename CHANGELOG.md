@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.108 (Beta)
+- Geändert: **Die Karte "Fernzugriff" meldet die öffentliche Freigabe (Funnel) erst als fertig, wenn die öffentliche Adresse wirklich antwortet.** Bisher stand "freigegeben", sobald die Einstellung gesetzt war, obwohl Tailscale nach dem Anmelden oder Umschalten erst Zertifikat und Adresse im Internet vorbereitet. Die Adresse ging dann noch eine Weile nicht, und die Karte sagte trotzdem "freigegeben".
+  - Die Box prüft jetzt selbst: Sie löst den Namen über einen öffentlichen Namensdienst (1.1.1.1, dann 8.8.8.8) auf, verbindet sich mit dem Zertifikat der Adresse und ruft die Startseite ab (Weg: von der Box ins Internet zu Tailscale und zurück). Das Ergebnis erscheint in der Karte: "Die öffentliche Adresse wird geprüft …", "… antwortet noch nicht. Tailscale bereitet gerade Zertifikat und Adresse vor … Bitte nicht aus- und wieder einschalten" oder "… antwortet." Solange sie nicht antwortet, steht im Kopf "wird vorbereitet" statt "freigegeben". Bis zur ersten Antwort wird alle 8 Sekunden geprüft, danach alle 2 Minuten.
+  - Geprüft werden nur Namen auf `.ts.net`. Die Prüfung ändert nichts an der Freigabe und läuft nur, wenn Funnel an ist.
+  - **Grenzen:** Das ist die Sicht von der Box aus. Ein Gerät mit eigenem Zwischenspeicher für Namen oder in einem anderen Netz kann die Adresse früher oder später erreichen. Es sagt nicht, wie lange Tailscale braucht, nur ob es geht. Geprüft mit Tests (DNS-Antworten, Zustände, Statusfeld) und gegen echte Namensdienste und eine echte HTTPS-Adresse (github.com); **nicht mit einer echten öffentlichen Tailscale-Adresse**.
+  - Tests: `tools/test_remote_public.py` (8).
+
+
 ## 0.9.107 (Beta)
 - **Testversion für die Fehlersuche bei Tailscale: ändert für den Betrieb nichts.** Beim Einspielen dieser Version schreibt `install.sh` den Zustand der Tailscale-Freigaben (`tailscale serve status` und `tailscale funnel status`) **vor** und **nach** der Installation ins Protokoll der Software-Updates (Karte "Protokolle", Abschnitt "Protokoll der Software-Updates"). So lässt sich ablesen, ob eine öffentliche Freigabe (Funnel) bei einem Update verloren geht. Die Befehle lesen nur und ändern nichts; fehlt Tailscale oder antwortet es nicht, geht die Installation unverändert weiter.
   - Tests: `tools/test_swupdate_progress.py` (+3).
