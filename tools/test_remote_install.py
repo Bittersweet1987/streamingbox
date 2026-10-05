@@ -73,5 +73,48 @@ class Install(unittest.TestCase):
         self.assertFalse([c for c in calls if c[:2] == ["apt-get", "install"]])
 
 
+class Serve(unittest.TestCase):
+    """tailscale serve wartet auf die Freischaltung im Konto und blockiert: der Link muss trotzdem in der Oberfläche ankommen."""
+
+    def run_serve(self, fake_run):
+        seen = {}
+        with mock.patch.object(remote, "status", lambda **kw: seen.update(kw)), mock.patch.object(remote.subprocess, "run", fake_run):
+            try:
+                remote.do_serve_on()
+                err = None
+            except RuntimeError as e:
+                err = str(e)
+        return seen, err
+
+    def test_timeout_with_link_asks_for_enabling(self):
+        def fake_run(cmd, **kw):
+            raise remote.subprocess.TimeoutExpired(cmd, 40, output=b"\nServe is not enabled on your tailnet.\nTo enable, visit:\n\n\t https://login.tailscale.com/f/serve?node=n123abc\n")
+        seen, err = self.run_serve(fake_run)
+        self.assertIsNone(err)
+        self.assertEqual(seen["state"], "needs_serve")
+        self.assertEqual(seen["hint_url"], "https://login.tailscale.com/f/serve?node=n123abc")
+
+    def test_timeout_without_output_gives_a_message_not_a_traceback(self):
+        def fake_run(cmd, **kw):
+            raise remote.subprocess.TimeoutExpired(cmd, 40)
+        seen, err = self.run_serve(fake_run)
+        self.assertIn("Freigabe fehlgeschlagen", err)
+
+    def test_funnel_timeout_with_link_asks_for_enabling(self):
+        def fake_run(cmd, **kw):
+            raise remote.subprocess.TimeoutExpired(cmd, 40, output=b"Funnel is not enabled on your tailnet.\nTo enable, visit:\n https://login.tailscale.com/f/funnel?node=n123abc\n")
+        seen = {}
+        with mock.patch.object(remote, "status", lambda **kw: seen.update(kw)), mock.patch.object(remote.subprocess, "run", fake_run), \
+                mock.patch.object(remote, "funnel_active", lambda cfg=None: False):
+            remote.do_funnel_on()
+        self.assertEqual(seen["state"], "needs_funnel")
+        self.assertEqual(seen["hint_url"], "https://login.tailscale.com/f/funnel?node=n123abc")
+
+    def test_success(self):
+        seen, err = self.run_serve(lambda cmd, **kw: Result("Available within your tailnet", 0))
+        self.assertIsNone(err)
+        self.assertEqual(seen["state"], "idle")
+
+
 if __name__ == "__main__":
     unittest.main()
