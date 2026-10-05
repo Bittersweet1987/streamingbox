@@ -21,7 +21,7 @@ class Sources(unittest.TestCase):
         files = {"/sys/class/devfreq/fb000000.gpu/load": "12@300000000Hz\n", "/sys/class/devfreq/fdab0000.npu/load": "100@1000000000Hz\n",
                  "/sys/class/devfreq/dmc/load": "4@2112000000Hz\n"}
         with mock.patch("os.listdir", lambda p: ["dmc", "fb000000.gpu", "fdab0000.npu"]), mock.patch.object(server, "read", lambda p, d=None: files.get(p, d)):
-            self.assertEqual(server.devfreq_loads(), {"gpu": {"load_pct": 12, "mhz": 300}, "npu": {"load_pct": 100, "mhz": 1000}})
+            self.assertEqual(server.devfreq_loads(), {"gpu": {"load_pct": 12, "mhz": 300}, "npu": {"load_pct": None, "mhz": 1000}})   # NPU: der Regler meldet immer 100 %
 
     def test_devfreq_garbage_is_ignored(self):
         with mock.patch("os.listdir", lambda p: ["fb000000.gpu"]), mock.patch.object(server, "read", lambda p, d=None: "kaputt"):
