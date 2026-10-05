@@ -21,15 +21,16 @@ ts_snapshot() {
 case "${1:-install}" in
   install)
     ts_snapshot "vor der Installation"
-    # Pakete, die ein frisches BELABOX-Image nicht mitbringt (Bluetooth für die DJI-Kameras). Ohne sie fehlt auch die Gruppe
+    # Pakete, die ein frisches BELABOX-Image nicht mitbringt (Bluetooth für die DJI-Kameras; gstreamer1.0-tools mit gst-launch-1.0 für die Zubringer von "alle Kameras immer bereit" und die HDMI-Kamera). Ohne sie fehlt auch die Gruppe
     # "bluetooth", die der Benutzer unten braucht. Braucht Internet; schlägt es fehl, läuft alles außer den DJI-Kameras.
     echo "PIPBOX-STEP pakete"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     need=""
-    for p in bluez python3-dbus python3-gi; do dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"; done
+    for p in bluez python3-dbus python3-gi gstreamer1.0-tools; do dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"; done
     if [ -n "$need" ]; then
       echo "Installiere fehlende Pakete:$need"
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $need \
-        || echo "WARNUNG: Pakete konnten nicht installiert werden (Internet?). Die DJI-Kameras gehen erst, wenn bluez, python3-dbus und python3-gi da sind."
+        || { apt-get update >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $need; } \
+        || echo "WARNUNG: Pakete konnten nicht installiert werden (Internet?). Die DJI-Kameras gehen erst, wenn bluez, python3-dbus und python3-gi da sind; Alle Kameras immer bereit und die HDMI-Kamera brauchen gstreamer1.0-tools."
     fi
     # DJI-Dienst: Bluetooth-Bibliothek bleak. Für Ubuntu 22.04 gibt es kein Paket dafür, deshalb pip (braucht Internet). Fehlt sie
     # danach, bricht die Installation hier ab, bevor etwas verändert wurde: Der Update-Helfer stellt dann die vorige Version wieder
