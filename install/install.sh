@@ -101,6 +101,7 @@ PY
     install -m 644 "$HERE/hdmi_daemon.py" /opt/pipbox/hdmi_daemon.py
     install -m 644 "$HERE/pipbox_send.py" /opt/pipbox/pipbox_send.py
     install -m 644 "$HERE/pipbox_send_ctl.py" /opt/pipbox/pipbox_send_ctl.py
+    install -m 644 "$HERE/pipbox_always.py" /opt/pipbox/pipbox_always.py       # Zubringer und Auswahl für "alle Kameras immer bereit" (nicht in der Pflichtliste des Update-Helfers: ein Rückweg auf ältere Versionen muss möglich bleiben)
     install -m 755 "$HERE/install/pipbox_health.py" /opt/pipbox/pipbox_health.py
     install -m 644 "$HERE/VERSION" /opt/pipbox/VERSION
     install -m 755 "$HERE/install/pipbox-swupdate.py" /opt/pipbox/pipbox-swupdate.py
