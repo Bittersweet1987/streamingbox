@@ -4,8 +4,23 @@
 set -eu
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Fehlersuche: Zustand der Tailscale-Freigaben (privat und öffentlich) vor und nach der Installation ins Protokoll des Update-Helfers schreiben.
+# Anlass: Auf einer Box ging die öffentliche Freigabe angeblich bei Updates verloren. Verändert nichts, schlägt nie fehl (die Installation geht weiter).
+ts_snapshot() {
+  command -v tailscale >/dev/null 2>&1 || return 0
+  tsto=""
+  if command -v timeout >/dev/null 2>&1; then tsto="timeout 10"; fi
+  {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Tailscale $1:"
+    $tsto tailscale serve status 2>&1 | sed 's/^/    serve: /'
+    $tsto tailscale funnel status 2>&1 | sed 's/^/    funnel: /'
+  } >> "${PIPBOX_SWUPDATE_LOG:-/var/log/pipbox-swupdate.log}" 2>/dev/null || true
+  return 0
+}
+
 case "${1:-install}" in
   install)
+    ts_snapshot "vor der Installation"
     # Pakete, die ein frisches BELABOX-Image nicht mitbringt (Bluetooth für die DJI-Kameras). Ohne sie fehlt auch die Gruppe
     # "bluetooth", die der Benutzer unten braucht. Braucht Internet; schlägt es fehl, läuft alles außer den DJI-Kameras.
     echo "PIPBOX-STEP pakete"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
@@ -209,6 +224,7 @@ PY
     systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer
     systemctl restart pipbox.service
     systemctl start --no-block pipbox-btdriver.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
+    ts_snapshot "nach der Installation"
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
   uninstall)
