@@ -420,9 +420,9 @@ class Camera:
         self.leaving = False          # der Dienst wird beendet: Sitzung ohne Stopp des Streams verlassen, Verbindung ordentlich trennen
 
     def locked(self):
-        """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet. Beim Suchen und beim Aufbau der
-        Bluetooth-Verbindung geht es noch: das Netz wird erst kurz vor der Übergabe an die Kamera gelesen (Schritt "preparing"). Sonst wäre die
-        Eingabe bei einer Kamera, die nicht gefunden wird und alle 30 Sekunden neu sucht, jedes zweite Mal gesperrt."""
+        """Läuft eine Sitzung (Kopplung, Stream, Beenden)? Dann gelten Änderungen an Netz, Passwort und Adresse erst ab der nächsten Verbindung: Die Sitzung
+        liest sie kurz vor der Übergabe an die Kamera (Schritt "preparing"). Sie lassen sich trotzdem jederzeit ändern (Kamera, die gerade streamt, bleibt
+        verbunden). Die Oberfläche zeigt dann nur einen Hinweis; bei Suchen und Aufbau der Bluetooth-Verbindung gilt eine Änderung noch für diesen Versuch."""
         return self.state not in ("idle", "error", "searching", "connecting") or self.publishing
 
     def mode_locked(self):
@@ -1199,8 +1199,6 @@ class Daemon:
         if cmd == "update":
             if cam.mode_locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
                 return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
-            if cam.locked() and any(k in req for k in NETWORK_FIELDS):
-                return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
             for k, t in SETTINGS_ALLOWED.items():
                 if k in req and isinstance(req[k], t) and not (t is int and isinstance(req[k], bool)):
                     if k == "password" and req[k] == "":
@@ -1224,8 +1222,6 @@ class Daemon:
             if cmd == "delete_saved":
                 cam.cfg["saved"] = [n for n in cam.cfg.get("saved", []) if n["ssid"] != ssid]
             else:
-                if cam.locked():
-                    return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
                 for n in cam.cfg.get("saved", []):
                     if n["ssid"] == ssid:
                         cam.cfg["ssid"], cam.cfg["password"] = n["ssid"], n["password"]

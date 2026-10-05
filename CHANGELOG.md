@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.105 (Beta)
+- Geändert: **Die Verbindung einer DJI-Kamera (Auswahl der Verbindung, Netze in der Nähe, gespeicherte Netze, WLAN-Name, Passwort, Adresse, "Löschen") lässt sich jetzt jederzeit ändern, auch wenn die Kamera verbunden ist oder streamt.** Vorher war der ganze Bereich gesperrt, solange die Kamera verbunden war ("Zuerst trennen"), und bei einer Kamera, die nicht gefunden wird, zusätzlich jede zweite Viertelminute. Der Bereich "Bild und Stream" war nie gesperrt.
+  - Eine Änderung gilt **ab der nächsten Verbindung** der Kamera; die laufende bleibt bestehen. Ist die Kamera verbunden, steht darüber ein Hinweis.
+  - Ist die Kamera verbunden, werden Name, Passwort und Adresse erst beim Verlassen des Feldes gespeichert (sonst bei jedem Tastendruck), damit eine Kamera, die sich nach einem Abriss neu verbindet, nie einen halb getippten Netznamen liest.
+  - Gesperrt bleibt nur die Art ("Nur Akkustand lesen" oder Stream), solange eine Sitzung läuft.
+  - Tests: `tools/test_dji_service.py` (Netz in jedem Zustand änderbar, gespeichertes Netz benutzen und löschen beim Streamen, Art bleibt gesperrt). **Mit einer echten Kamera nicht geprüft.**
+
+
 ## 0.9.104 (Beta)
 - Neu: **Fortschrittsanzeige bei beiden Updates** ("Software-Update (IRL4YOU BOX)" und "System-Updates (BELABOX)") im selben Aussehen: Balken mit laufender Bewegung, Prozent, aktueller Schritt und laufende Zeit (⏱ 0:42). Die Zeile mit der Zeit zählt weiter, auch wenn gerade nichts Neues gemeldet wird, damit man sieht, dass etwas läuft.
   - IRL4YOU-Update: Schritte Laden (nach Bytes, 2 bis 20 %), Archiv prüfen, Sichern, dann die Schritte von `install.sh` (Pakete prüfen, Dienst anhalten, Dateien kopieren, Bild-Baustein, SRTLA-Sender, Encoder, Dienste starten; `install.sh` meldet sie mit Zeilen `PIPBOX-STEP <Name>`). Wechsel auf eine andere Version und "Zurück" zeigen ebenfalls einen Balken, mit weniger Schritten.
