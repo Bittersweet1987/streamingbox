@@ -886,7 +886,7 @@ function djiDynamic(){
     const dt=card.querySelector(".ddetail"); dt.textContent=det?"· "+det:""; dt.style.color=c.state==="error"?"var(--crit)":"";
     const active=c.state!=="idle"||c.publishing;
     card.querySelector(".d-connect").disabled=c.state==="streaming"||c.state==="status";
-    const so=card.querySelector(".d-statusonly"); if(so!==document.activeElement) so.checked=!!c.status_only; so.disabled=!!c.locked;
+    const so=card.querySelector(".d-statusonly"); if(so!==document.activeElement) so.checked=!!c.status_only; so.disabled=!!(c.mode_locked!==undefined?c.mode_locked:c.locked);
     card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });
     card.querySelector(".d-auto").closest("label").hidden=!!c.status_only;     // Nur-Akku-Kameras verbinden immer automatisch      // ohne Stream gibt es nichts zu verbinden und einzustellen
     card.querySelector(".d-disconnect").disabled=!active;
