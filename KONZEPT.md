@@ -13,7 +13,7 @@ des Tests beschreiben README und CHANGELOG (Beta).
    niemals `funnel` (öffentlich).
    Technisch lauscht die Oberfläche auf allen Schnittstellen (`--host 0.0.0.0`), nimmt aber nur Anfragen von Loopback (Tailscale-Proxy), privaten
    Adressbereichen, Link-Local, 100.64.0.0/10 und IPv6-ULA an (`--allow-public` hebt das auf). **Unverschlüsselt:** Im Netz, über das die Box sendet (z. B. ein
-   fremdes WLAN), laufen Anmeldung und Sitzung über HTTP im Klartext; dort die Oberfläche nur über Tailscale (HTTPS) benutzen (Issue #25).
+   fremdes WLAN), laufen Anmeldung und Sitzung über HTTP im Klartext; dort die Oberfläche nur über Tailscale (HTTPS) benutzen (Issue #25). Der Schalter "Über fremde WLANs sperren" (Karte Verbindungen, Standard aus) trennt Verbindungen auf Gast-WLANs; Ethernet, eigener Hotspot, USB und Tailscale bleiben.
 4. **Geheimnisse bleiben auf der Box.** Stream-ID, WLAN-Passwörter und Zugangsdaten stehen nie in Antworten der Oberfläche,
    nie in Protokollen und nie im Repository. Einzige bekannte Ausnahme: `belacoder` bekommt die Stream-ID als
    Programmargument, sie ist für lokale Benutzer der Box in der Prozessliste sichtbar.

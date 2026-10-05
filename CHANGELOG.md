@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.99 (Beta)
+- Neu (Issue #25): **Schalter "Über fremde WLANs sperren"** (Karte "Verbindungen", Bereich "Zugriff auf diese Oberfläche"). Die Oberfläche ist unverschlüsselt (HTTP); in einem WLAN, in dem die Box nur Gast ist (Hotel, Handy-Hotspot, fremdes Netz), liest dort jeder mit. Ist der Schalter an, werden Verbindungen auf der Adresse eines solchen WLANs ohne Antwort getrennt. Ethernet, der eigene Hotspot der Box, USB und Tailscale bleiben erreichbar. Standard: aus.
+  - Erkennung über NetworkManager (WLAN verbunden, Modus nicht "ap"); bei einem Fehler wird nichts gesperrt. Die Liste wird nur gefragt, wenn der Schalter an ist (5 s zwischengespeichert).
+  - **Schutz vor dem Aussperren:** Wer gerade selbst über ein Gast-WLAN verbunden ist, kann den Schalter nicht einschalten (Meldung mit dem Hinweis auf Ethernet, Hotspot oder Tailscale). Ausschalten geht von überall. Wer sich trotzdem aussperrt: Schalter über Ethernet/Tailscale ausschalten oder die Datei `ui-access.json` im Zustandsordner löschen.
+  - Gilt für alle WLANs, in denen die Box Gast ist, auch für den eigenen Handy-Hotspot (das ist ein Gast-WLAN).
+  - Tests: `tools/test_uiaccess.py` (12). **Nicht an einer echten Box mit Gast-WLAN geprüft** (die Box war ohne WLAN verbunden); die Erkennung nutzt dieselben nmcli-Abfragen wie die Kamera-Verbindungen.
+
 ## 0.9.98 (Beta)
 - Sicherheit, letzte Kleinigkeit zu Issue #25: Eine abgeschnittene oder zu langsame Anfrage schrieb Tracebacks ins Journal (ValueError "Die Anfrage ist unvollständig", danach BrokenPipeError beim Antworten). Abgebrochene Verbindungen und Zeitüberschreitungen des Gegenübers werden jetzt still verworfen, echte Fehler des Dienstes bleiben sichtbar. Test: `QuietErrors` in `tools/test_security.py`.
 

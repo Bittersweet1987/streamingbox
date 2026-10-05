@@ -4935,6 +4935,81 @@ class SettingsTransfer:
         return self.wifi.import_saved(d["networks"])
 
 
+def client_wifi_list():
+    """WLAN-Schnittstellen, in denen die Box nur Gast ist (verbunden mit einem fremden Netz, nicht der eigene Hotspot): [{"iface", "ip"}].
+    NetworkManager: Typ wifi, verbunden, Modus der Verbindung nicht "ap". Bei jedem Fehler leer (dann wird nichts gesperrt)."""
+    def run(args):
+        try:
+            return subprocess.run(args, capture_output=True, text=True, timeout=4).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    out = []
+    for line in run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev"]).splitlines():
+        parts = line.replace("\\:", "\x00").split(":")
+        if len(parts) < 4 or parts[1] != "wifi" or parts[2] != "connected":
+            continue
+        conn = parts[3].replace("\x00", ":")
+        if run(["nmcli", "-g", "802-11-wireless.mode", "connection", "show", conn]) == "ap":
+            continue                                                    # der eigene Hotspot der Box
+        ip = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", parts[0]]).split("/")[0].split("\n")[0]
+        if ip:
+            out.append({"iface": parts[0], "ip": ip})
+    return out
+
+
+class UiAccess:
+    """Schalter "Oberfläche über fremde WLANs sperren" (Issue #25): Die Oberfläche läuft unverschlüsselt (HTTP). In einem WLAN, in dem die Box nur
+    Gast ist, liest dort jeder mit. Ist der Schalter an, werden Verbindungen auf der Adresse eines solchen WLANs ohne Antwort getrennt. Ethernet,
+    der eigene Hotspot, USB und Tailscale bleiben erreichbar. Aus der Aussperrung heraus: per Ethernet/Tailscale ausschalten oder die Datei
+    ui-access.json im Zustandsordner löschen. Standard: aus (sonst könnte sich sperren, wer die Box nur per WLAN erreicht)."""
+    TTL = 5.0
+
+    def __init__(self, path, demo=False, lister=None):
+        self.path, self.demo, self.lister = path, demo, lister or client_wifi_list
+        self.lock = threading.Lock()
+        self.block = False
+        self._cache = (-1e9, [])
+        try:
+            with open(path) as f:
+                self.block = json.load(f).get("block_client_wifi") is True
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def clients(self):
+        if self.demo:
+            return [{"iface": "wlan0", "ip": "10.1.1.20"}]
+        with self.lock:
+            now = time.monotonic()
+            if now - self._cache[0] > self.TTL:
+                try:
+                    self._cache = (now, self.lister())
+                except Exception:
+                    self._cache = (now, [])
+            return list(self._cache[1])
+
+    def refuses(self, local_ip):
+        """Soll eine Verbindung auf dieser eigenen Adresse abgewiesen werden?"""
+        return bool(self.block and local_ip and any(c["ip"] == local_ip for c in self.clients()))
+
+    def status(self, local_ip=None):
+        cl = self.clients()
+        return {"block_client_wifi": self.block, "client_wifi": cl, "on_client": bool(local_ip and any(c["ip"] == local_ip for c in cl))}
+
+    def set(self, block, local_ip=None):
+        if not isinstance(block, bool):
+            raise ValueError("ja oder nein")
+        if block and local_ip and any(c["ip"] == local_ip for c in self.clients()):
+            raise ValueError("Du bist gerade über ein Gast-WLAN verbunden. Sonst sperrst du dich aus: Verbinde dich zuerst über Ethernet, den Hotspot der Box oder Tailscale.")
+        self.block = block
+        if not self.demo:
+            tmp = self.path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({"block_client_wifi": block}, f)
+            os.replace(tmp, self.path)
+        return self.status(local_ip)
+
+
 def source_allowed(ip):
     """Darf diese Adresse die Oberfläche erreichen? Nur eigene und private Netze: Loopback (Tailscale-Proxy), private Adressbereiche, Link-Local,
     Carrier-Grade-NAT (100.64.0.0/10, dort liegt auch Tailscale) und IPv6-ULA. Eine öffentliche Quelladresse heißt: die Oberfläche hängt
@@ -4956,6 +5031,7 @@ class LimitedHTTPServer(ThreadingHTTPServer):
     MAX_CONN = 64
     PER_IP = 16
     allow_public = False
+    ui_access = None
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -4971,6 +5047,13 @@ class LimitedHTTPServer(ThreadingHTTPServer):
         if not self.allow_public and not source_allowed(ip):
             return False
         loop = self.is_loopback(ip)
+        ua = self.ui_access
+        if ua is not None and ua.block:                                   # über fremde WLANs (Gast-WLAN der Box) nicht erreichbar
+            try:
+                if ua.refuses(request.getsockname()[0]):
+                    return False
+            except (OSError, AttributeError):
+                pass
         with self._conn_lock:
             if self._total >= self.MAX_CONN or (self._conns.get(ip, 0) >= (self.LOOPBACK_CONN if loop else self.PER_IP)):
                 return False
@@ -5077,6 +5160,7 @@ class Handler(BaseHTTPRequestHandler):
     send = None
     twitch = None
     hdmi = None
+    uiaccess = None
 
     def log_message(self, *a):
         pass
@@ -5096,6 +5180,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
         return peer
+
+    def local_ip(self):
+        """Eigene Adresse, auf der diese Verbindung ankam (welches Netz der Box)."""
+        try:
+            return self.connection.getsockname()[0]
+        except (OSError, AttributeError):
+            return None
 
     def token(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -5260,6 +5351,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/dji":
             st = label_bluetooth(self.djisvc.status(), self.names)
             return self.reply(200, st)
+        if path == "/api/uiaccess":
+            return self.reply(200, self.uiaccess.status(self.local_ip()))
         if path == "/api/twitch":
             return self.reply(200, self.twitch.status())
         if path == "/api/hdmi":
@@ -5417,6 +5510,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(404, {"error": "nicht gefunden"})
             if path == "/api/dji/cmd":
                 return self.reply(200, self.djisvc.command(d))
+            if path == "/api/uiaccess":
+                return self.reply(200, self.uiaccess.set(d.get("block_client_wifi"), self.local_ip()))
             if path == "/api/twitch":
                 return self.reply(200, self.twitch.save(d))
             if path == "/api/twitch/test":
@@ -5524,6 +5619,8 @@ def main():
                 print("auto_add:", e)
             time.sleep(3)
     threading.Thread(target=watcher, daemon=True).start()
+    Handler.uiaccess = UiAccess(os.path.join(args.state, "ui-access.json"), demo=args.demo)
+    LimitedHTTPServer.ui_access = Handler.uiaccess
     LimitedHTTPServer.allow_public = args.allow_public
     srv = LimitedHTTPServer((args.host, args.port), Handler)
     print(f"PIPBOX auf http://{args.host}:{args.port} (demo={args.demo})")
