@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.94 (Beta)
+- Behoben: **Ton-Wechsel zwischen Kameras ruckelt nicht mehr und knackt nicht mehr.** Mitschnitt des Empfängers bei 10 Wechseln mit zwei DJI-Kameras (Verzögerung 0 / 1860 ms): nach jedem Wechsel zum Hauptton fehlten 1,8 s Ton und das Bild stand etwa 8 s fast still (alle 1,6 s ein Bild). Ursache: Der Umschalter verwarf beim Wechsel Ton des neuen Wegs oder ließ eine Zeitlücke; der Muxer wartet dann auf den Ton und hält das Bild zurück.
+  - Jetzt bleibt der Ton-Ausgang ohne Lücke: Der letzte Puffer der alten Quelle wird ausgeblendet, eine nötige Lücke wird mit Stille (höchstens 3 s) gefüllt, der erste Puffer der neuen Quelle eingeblendet (je etwa 21 ms, "leichte Ausblendung"). Hörbar bleibt höchstens ein kurzes Absenken beim Wechsel.
+  - Gemessen: echter `belacoder` mit den echten Kameras der Box, 24 Ton-Wechsel in 4 Minuten: größte Lücke im Bild 0,27 s (einmal), im Ton 0,25 s (nur beim Beenden); vorher mehrfach 1,6 bis 1,8 s. Synthetischer Test mit stoßweisem Ton: vorher 11 Knackser (Sprünge bis Vollaussteuerung) und 2,6 s Lücken, jetzt keine Knackser und keine Lücken.
+  - Auf der laufenden Sendung (Mitschnitt beim Empfänger, 10 Wechsel im 10-s-Takt): Ton ohne Lücke, größte Lücke im Bild 0,03 s; ein erster Lauf direkt nach dem Neustart zeigte zwei Episoden mit ~0,6 s Bildlücken, die im Wiederholungslauf nicht mehr auftraten (vermutlich Anlaufphase oder Netz, nicht geklärt).
+  - Tests: `tools/boxtest_synth_audio_switch.py` (ohne Hardware, auch neben einer laufenden Sendung), `tools/boxtest_switch_belacoder.sh`, `tools/pes_gaps.py`.
+  - Gilt ab dem nächsten Start der Sendung (der Baustein wird beim Update neu gebaut).
+  - Nicht geprüft: Hörprobe (nur Pegelsprünge gemessen), Stunden-Dauerlauf.
+
 ## 0.9.93 (Beta)
 - Sicherheit (Meldung von romestylez, Issue #25):
   - **Anmeldesperre:** Der Fehlversuch wird jetzt vor der Prüfung gezählt. Vorher kamen bei vielen gleichzeitigen Anmeldungen alle an der Sperre vorbei (60 gleichzeitige Anfragen = 53 Prüfungen statt 5). Dazu laufen höchstens 2 Passwortprüfungen (je ein node-Prozess mit bcrypt) gleichzeitig; weitere bekommen sofort "bitte gleich noch einmal versuchen" (429) und zählen nicht als Fehlversuch. Ein gelungenes Anmelden wird nicht gezählt.
