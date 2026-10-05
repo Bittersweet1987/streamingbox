@@ -1,5 +1,18 @@
 # Änderungen
 
+## 0.9.111 (Beta)
+- Neu (Issue #19, Anregung von Bittersweet1987, Umsetzung eigen): **"Alle Kameras immer bereit" (Beta).** Neuer Schalter im Bildaufbau bei "Bild in Bild" (Standard **aus**; ohne den Schalter ändert sich nichts gegenüber 0.9.110). Eingeschaltet gilt:
+  - Jedes Bildfeld der Sendekette hat immer einen Eingang. Sendet eine Kamera nicht, steht an ihrer Stelle ein schwarzes Bild (Ton: Stille), unsichtbar, ohne Rahmen.
+  - **Kameras können jederzeit dazukommen, ausfallen und zurückkehren, ohne dass die Sendung neu startet.** Tauschen, Ein- und Ausblenden und der Ton-Wechsel gehen ebenfalls ohne Neustart. Einen "Notbetrieb" gibt es in diesem Modus nicht mehr.
+  - **Fällt die Hauptkamera aus, übernimmt die nächste Kamera mit echtem Stream** (Reihenfolge: kleines Bild 1, 2 …). Kommt die ursprüngliche zurück, wird sie nach 3 s stabilem Bild wieder Hauptbild; die Ersatzkamera geht zurück auf ihr eigenes Bild. Wechsel, die du selbst einstellst, gelten sofort.
+  - Fußleiste und Tonauswahl zeigen nur Kameras mit aktivem Stream.
+  - Die Sendung startet, sobald **eine** eingestellte Kamera sendet; die anderen kommen später dazu.
+- Technik: Je Kamera holt ein kleiner Zubringer (`gst-launch-1.0`, `pipbox_always.py`) den Stream aus dem RTMP-Server und reicht Bild (H.264 per RTP) und Ton (PCM) lokal an die Sendekette weiter (UDP, Loopback, Ports ab 9410); endet der Stream, startet der Zubringer nach 1 s neu. Die Sendekette hat dadurch nie eine Quelle, die ausfällt. Der Baustein `pbpipsel` (`gst/gstpbpip.c`, wird beim Update neu gebaut) füllt fehlende Bilder mit Schwarz (nach 0,5 s) und Ton mit Stille (nach 0,15 s) und lässt die Zeit nie rückwärts laufen; `pbctl` meldet in `/run/pipbox-send/cam-live`, welche Kamera Bilder liefert. Der Sende-Dienst (`pipbox_send.py`) wählt alle 0,5 s Haupt- und kleine Bilder.
+- Gemessen **auf der Box mit Testbildern** (drei synthetische 1080p30-Kameras, keine echten): keine Neustarts über 55 s; Hauptkamera A stoppt, B wird nach rund 2 s Hauptbild; A kehrt zurück und ist nach rund 4,6 s wieder Hauptbild; zugeschaltete Kamera erscheint ohne Neustart; Bild etwa 30 Bilder/s mit kurzen Einbrüchen (22 bis 27 Bilder/s für etwa 1 s) an den Umschaltstellen; Ton lückenlos. Rechenlast mit drei Kameras: Sendekette etwa 40 % eines Kerns, je Zubringer etwa 5 %.
+- **Grenzen (ehrlich):** Mit **echten Kameras und einer echten Sendung nicht geprüft.** Jede Kamera wird in diesem Modus doppelt dekodiert (groß und klein), das kostet mehr Rechenleistung. Fällt die letzte Kamera aus, sendet die Box Schwarz mit Stille weiter. Ist die Kamera mit dem gewählten Ton ausgefallen, kommt Stille (kein Ausweichen auf eine andere Kamera). Ein zusätzliches kleines Bild, das erst nach dem Start der Sendung eingestellt wird, braucht weiter einen Neustart (andere Bauform der Kette).
+- Tests: `tools/test_always.py` (45, Zubringer, Platzzuordnung, Wahl bei Ausfall und Rückkehr, Pipeline-Text, Einstellungen, Fußleiste, Sende-Dienst); Box-Tests `tools/boxtest_fill.py` (Füllen im Baustein) und `tools/boxtest_always.py` (ganze Kette mit Testkameras). Entwurf: `KONZEPT-immer-bereit.md`.
+- Englischer Text für den Schalter ergänzt (andere Sprachen folgen am Schluss).
+
 ## 0.9.110 (Beta)
 - Geändert (Issue #24, Rückmeldung des Melders): **Die Karte "Language · Sprache" am Ende der Seite entfällt.** Die Sprachauswahl steht schon im Kopf der Seite (und beim ersten Öffnen als Auswahl); die zweite Auswahl unten war doppelt und blähte das Menü auf. Die Sprache lässt sich weiter im Kopf wechseln, auf der Anmeldeseite wie bisher.
   - Geprüft in der Demo: Seite lädt ohne Fehler, Sprachwechsel im Kopf geht. Nicht auf einem Handy geprüft.
