@@ -171,7 +171,7 @@ class HttpLimits(unittest.TestCase):
                 self.send_header("Content-Length", "2")
                 self.end_headers()
                 self.wfile.write(b"ok")
-        self.srv = start(H, PER_IP=2, MAX_CONN=10)
+        self.srv = start(H, PER_IP=2, LOOPBACK_CONN=2, MAX_CONN=10)
         a, b = self.conn(), self.conn()                                          # halb offen: Anfrage kommt nie
         time.sleep(0.2)
         c = self.conn()
@@ -194,7 +194,7 @@ class HttpLimits(unittest.TestCase):
         class H(BaseHTTPRequestHandler):
             timeout = 5
 
-        self.srv = start(H, PER_IP=50, MAX_CONN=3)
+        self.srv = start(H, PER_IP=50, LOOPBACK_CONN=50, MAX_CONN=3)
         held = [self.conn() for _ in range(3)]
         time.sleep(0.2)
         extra = self.conn()
@@ -244,3 +244,73 @@ class HttpLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HttpDeadlines(unittest.TestCase):
+    def setUp(self):
+        stub = types.SimpleNamespace(valid=lambda tok: False, configured=True, mode="own")
+        p = mock.patch.object(server.Handler, "auth", stub)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        getattr(self, "srv", None) and (self.srv.shutdown(), self.srv.server_close())
+
+    def start(self, **kw):
+        self.srv = start(server.Handler, **kw)
+        return self.srv
+
+    def conn(self):
+        return socket.create_connection(self.srv.server_address, timeout=8)
+
+    def test_slow_headers_are_cut_off_by_the_total_deadline(self):
+        """Issue #25 (Nachtest): Alle paar Sekunden ein Byte in den Kopfzeilen hielt die Verbindung beliebig lange offen."""
+        with mock.patch.object(server.Handler, "REQUEST_SECONDS", 2.0), mock.patch.object(server.Handler, "timeout", 5):
+            self.start()
+            s = self.conn()
+            s.sendall(b"GET / HTTP/1.1\r\nX-A: ")
+            t0 = time.time()
+            closed_at = None
+            while time.time() - t0 < 7:
+                try:
+                    s.sendall(b"a")
+                except OSError:
+                    closed_at = time.time() - t0
+                    break
+                time.sleep(0.5)
+            self.assertIsNotNone(closed_at)
+            self.assertLess(closed_at, 4.5)
+            s.close()
+
+    def test_finished_request_is_not_cut(self):
+        with mock.patch.object(server.Handler, "REQUEST_SECONDS", 1.0):
+            self.start()
+            s = self.conn()
+            s.sendall(b"GET /api/auth HTTP/1.0\r\n\r\n")
+            data = b""
+            while True:
+                c = s.recv(1000)
+                if not c:
+                    break
+                data += c
+            self.assertIn(b"200", data.split(b"\r\n")[0])
+
+    def test_behind_the_proxy_the_real_sender_counts(self):
+        """Issue #25 (Nachtest): Über Tailscale Serve/Funnel ist die Adresse immer 127.0.0.1; dort zählt der Absender aus X-Forwarded-For."""
+        with mock.patch.object(server.Handler, "timeout", 6):
+            self.start(PER_IP=2, MAX_CONN=20, LOOPBACK_CONN=10)
+            held = []
+            for _ in range(2):                                                    # zwei offene Anfragen von Absender A (Inhalt fehlt noch)
+                s = self.conn()
+                s.sendall(b"POST /api/login HTTP/1.0\r\nX-Forwarded-For: 203.0.113.7\r\nContent-Length: 50\r\n\r\n{")
+                held.append(s)
+            time.sleep(0.4)
+            third = self.conn()
+            third.sendall(b"GET /api/auth HTTP/1.0\r\nX-Forwarded-For: 203.0.113.7\r\n\r\n")
+            data = third.recv(200)
+            self.assertIn(b"429", data.split(b"\r\n")[0])                         # A hat sein Limit
+            other = self.conn()
+            other.sendall(b"GET /api/auth HTTP/1.0\r\nX-Forwarded-For: 203.0.113.8\r\n\r\n")
+            self.assertIn(b"200", other.recv(200).split(b"\r\n")[0])             # Absender B ist nicht betroffen
+            for s in held + [third, other]:
+                s.close()
