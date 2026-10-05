@@ -269,6 +269,28 @@ class Commands(unittest.TestCase):
             self.assertFalse(cam.public()["locked"])
         arun(go())
 
+    def test_network_can_be_changed_while_searching_but_not_the_mode(self):
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            cam = dm.cameras[ADDR]
+            for st in ("idle", "error", "searching", "connecting"):
+                cam.state = st
+                self.assertFalse(cam.public()["locked"], st)
+                r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "manual", "ssid": "Neu-" + st})
+                self.assertEqual(r, {"ok": True}, st)
+            for st in ("searching", "connecting"):
+                cam.state = st
+                r = await dm.handle({"cmd": "update", "addr": ADDR, "status_only": True})        # die Art hat die laufende Sitzung schon gelesen
+                self.assertIn("error", r, st)
+                self.assertTrue(cam.public()["mode_locked"], st)
+            for st in ("pairing", "preparing", "wifi", "configuring", "starting", "streaming", "status", "stopping"):
+                cam.state = st
+                self.assertTrue(cam.public()["locked"], st)
+                r = await dm.handle({"cmd": "update", "addr": ADDR, "ssid": "Nein"})
+                self.assertIn("error", r, st)
+        arun(go())
+
     def test_saved_networks_use_and_delete(self):
         async def go():
             d, dm = self.daemon()
@@ -619,6 +641,30 @@ class Session(unittest.TestCase):
                 return True
             await asyncio.sleep(0.02)
         return False
+
+    def test_network_typed_during_the_search_is_used(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            cam = dm.cameras[ADDR]
+            orig = cam.resolve_target
+            calls = []
+
+            def changing():                                                  # zwischen dem ersten und dem zweiten Lesen tippt jemand ein anderes Netz ein
+                calls.append(1)
+                if len(calls) == 2:
+                    cam.cfg["ssid"], cam.cfg["password"] = "Neues-Netz", "neu12345"
+                return orig()
+            cam.resolve_target = changing
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            by_id = {m.id: m for m in sim.sent}
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(by_id[dd.ID_WIFI].payload, dd.pack_string("Neues-Netz") + dd.pack_string("neu12345"))
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
 
     def test_full_session_streams_and_stops_cleanly(self):
         async def go():
