@@ -506,6 +506,11 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="btcard"><div class="ph">Wird geladen …</div></div>
 <div id="neterr" class="err"></div>
     <div id="upinfo" class="ph"></div>
+    <div class="sech">Zugriff auf diese Oberfläche</div>
+    <label class="chk"><input type="checkbox" id="ua_block"> Über fremde WLANs sperren</label>
+    <div class="ph" data-hlp>Die Oberfläche ist unverschlüsselt (HTTP). In einem WLAN, in dem die Box nur Gast ist (Hotel, Handy-Hotspot, fremdes Netz), kann dort jeder mitlesen. Ist der Schalter an, antwortet die Box in solchen WLANs nicht. Erreichbar bleiben Ethernet, der Hotspot der Box, USB und Tailscale (HTTPS). Wer sich aussperrt, schaltet den Schalter über Ethernet oder Tailscale wieder aus.</div>
+    <div id="ua_info" class="ph"></div>
+    <div id="ua_err" class="err"></div>
   </details>
 
   <details class="card wide" id="rcard">
@@ -1081,6 +1086,18 @@ async function srtlaCall(method,url,body){
   const r=await fetch(url,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});
   const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||"Fehler"); return j;
 }
+// Zugriff auf die Oberfläche über fremde WLANs sperren (Issue #25)
+async function uaLoad(){ try{ const r=await fetch("/api/uiaccess"); if(r.ok) uaRender(await r.json()); }catch(e){} }
+function uaRender(d){
+  const c=$("ua_block"); if(c!==document.activeElement) c.checked=!!d.block_client_wifi;
+  const l=d.client_wifi||[];
+  $("ua_info").textContent=l.length?`Gast-WLAN der Box: ${l.map(x=>x.iface+" ("+x.ip+")").join(", ")}`:"Die Box ist gerade in keinem Gast-WLAN.";
+}
+$("ua_block").addEventListener("change",async e=>{
+  $("ua_err").textContent="";
+  try{ uaRender(await srtlaCall("POST","/api/uiaccess",{block_client_wifi:e.target.checked})); }
+  catch(x){ $("ua_err").textContent=x.message; e.target.checked=!e.target.checked; }
+});
 let lastNet=null;
 function setRates(net){ lastNet=net; document.querySelectorAll("[data-rate]").forEach(e=>{ const r=net[e.dataset.rate]; e.textContent=r?fmt(r.tx_mbit):"–"; }); }
 $("b_ups").addEventListener("change",async e=>{
@@ -1989,6 +2006,7 @@ async function tick(){
     setRates(m.net);
     renderCams(m.cameras); renderCamLights(m.cameras);
     if(due("net","c_cams",15000)) netRender();
+    if(due("ua","netcard",20000)) uaLoad();
     if(due("dji","c_cams",20000)) await djiLoad();
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
     $("livehealth").innerHTML=m.alerts.length?m.alerts.map(a=>`<span class="${a.level}">${a.text}</span>`).join(" · "):'<span class="ok">● Alles im grünen Bereich</span>';
