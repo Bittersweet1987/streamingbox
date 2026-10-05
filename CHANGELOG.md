@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.101 (Beta)
+- Behoben: **"Freigeben" im privaten Tailscale-Netz brach mit "timed out after 40 seconds" ab.** Ist "Serve" (HTTPS) im Tailscale-Konto noch nicht freigeschaltet, gibt `tailscale serve` einen Link aus und wartet dann auf die Freischaltung. Die Box wartete 40 Sekunden, brach ab und warf die Ausgabe samt Link weg; angezeigt wurde nur die englische Fehlermeldung von Python. Jetzt wird die bis dahin gelesene Ausgabe ausgewertet: Die Oberfläche zeigt wie vorgesehen den Hinweis mit dem Link ("Öffne den Link, lasse Funnel AUS und klicke Enable HTTPS. Danach erneut freigeben."). Dasselbe gilt für die öffentliche Freigabe (Funnel).
+  - Annahme: Die Meldung kam, weil Serve im Konto noch nicht freigeschaltet war. Das ist aus der Meldung abgeleitet, **nicht an dieser Box geprüft**. Mit Tests (`tools/test_remote_install.py`, jetzt 7) nachgestellt, nicht gegen ein echtes Tailscale-Konto, in dem Serve noch aus ist.
+
 ## 0.9.100 (Beta)
 - Behoben: **Die Installation von Tailscale schlug auf manchen Boxen mit "Unable to locate package tailscale" fehl.** Die Paketliste der Tailscale-Quelle wurde ein einziges Mal geladen und das Ergebnis nicht geprüft; war apt gerade gesperrt (automatische Updates nach dem Start) oder schlug das Laden fehl, kannte apt das Paket nicht. Jetzt wird geprüft, ob apt das Paket kennt, und bis zu vier Mal im Abstand von 15 s wiederholt, zuletzt mit der ganzen Paketliste statt nur der Tailscale-Quelle. Bleibt es dabei, nennt die Meldung die Ausgabe von apt.
   - Die genaue Ursache auf der betroffenen Box ist nicht bekannt (die Ausgabe von apt wurde nicht mitgelesen). Auf der eigenen Test-Box läuft das Laden der Paketliste ohne Fehler. **Nicht an einer Box geprüft, bei der der Fehler auftrat**; nur mit Tests (`tools/test_remote_install.py`, 4).
