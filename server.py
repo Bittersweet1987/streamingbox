@@ -1474,6 +1474,12 @@ class SendControl:
         d = self._detail()
         return bool(self._active() and d.get("view_live") and not (d.get("failover") or {}).get("degraded"))
 
+    def view_degraded(self):
+        """Läuft die Sendung gerade im Notbetrieb (weniger Kameras als eingestellt)?"""
+        if self.demo:
+            return False
+        return bool(self._active() and (self._detail().get("failover") or {}).get("degraded"))
+
     def audio_live(self):
         """Dasselbe für die Tonquelle (braucht den Ton-Umschalter der laufenden Sendekette)."""
         return True if self.demo else bool(self.view_live() and self._detail().get("audio_live"))
@@ -1548,10 +1554,12 @@ class SendControl:
                 if os.stat(VIEW_STATE).st_mtime >= t0 - 0.2:
                     with open(VIEW_STATE) as f:
                         if f.read().split() == line.split():
+                            print(f"Ansicht live umgestellt ({line}), bestätigt nach {time.time() - t0:.2f} s", flush=True)    # im Journal: Zeit des Wechsels
                             return True
             except OSError:
                 pass
             time.sleep(0.1)
+        print(f"Ansicht ({line}) nicht bestätigt, Neustart der Sendung folgt", flush=True)
         return False
 
     def change_view(self, visible=None, audio=None, mute=None):
@@ -1576,6 +1584,13 @@ class SendControl:
         if self.view_live() and (not needs_audio or self.audio_live() or self.demo):
             if self.apply_view(hide, aud, new_mute):
                 return {"live": True, "restarted": False, "note": "", "view": self.view_state()}
+        if self.view_degraded():
+            # Notbetrieb (weniger Kameras als eingestellt): live geht nichts um, und ein Neustart bräche die Sendung ab. Gespeichert gilt es,
+            # sobald die Kameras zurück sind und die Sendung mit dem vollen Bild läuft.
+            print("Ansicht im Notbetrieb gespeichert, kein Neustart", flush=True)
+            if mute is not None and visible is None and audio is None:
+                raise ValueError("Stumm schalten geht im Notbetrieb nicht. Es gilt wieder, sobald alle Kameras da sind.")
+            return {"live": False, "restarted": False, "note": "Gespeichert. Gilt, sobald alle Kameras wieder da sind (Notbetrieb: ohne Neustart).", "view": None}
         if mute is not None and visible is None and audio is None:
             raise ValueError("Stumm schalten ging gerade nicht (die Sendekette kennt das noch nicht). Bitte die Sendung einmal neu starten.")
         restarted, note = self.restart_if_live()
@@ -5114,6 +5129,9 @@ class Handler(BaseHTTPRequestHandler):
                     if self.send.view_live() and (not audio_changed or self.send.audio_live()) and \
                             self.send.apply_view(hide, aud, bool(cur and cur["mute"])):
                         return self.reply(200, {"ok": True, "restarted": False, "note": "Gespeichert. Die Änderung wird live übernommen, ohne Neustart."})
+                    if self.send.view_degraded():
+                        print("Ansicht im Notbetrieb gespeichert, kein Neustart", flush=True)
+                        return self.reply(200, {"ok": True, "restarted": False, "note": "Gespeichert. Gilt, sobald alle Kameras wieder da sind (Notbetrieb: ohne Neustart)."})
                 if self.pipeline.cfg != before:
                     only_delay = {k: v for k, v in before.items() if k not in DELAY_KEYS} == \
                                  {k: v for k, v in self.pipeline.cfg.items() if k not in DELAY_KEYS}

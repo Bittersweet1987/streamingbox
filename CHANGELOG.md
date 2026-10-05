@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.89 (Beta)
+- Geändert: Im Notbetrieb (weniger Kameras als eingestellt) startet eine Änderung von Ton oder Bild-Einblendung die Sendung **nicht mehr neu** (vorher 5 bis 6 Sekunden Pause). Sie wird gespeichert und gilt, sobald alle Kameras zurück sind. Stumm schalten geht im Notbetrieb nicht (Hinweis).
+- Neu: Das Journal des Dienstes `pipbox` zeigt jeden Ton-/Ansichtswechsel mit Uhrzeit ("Ansicht live umgestellt ..., bestätigt nach x s" oder "nicht bestätigt, Neustart folgt"). So lassen sich Abbrüche der Sendung einem Wechsel zuordnen.
+- Hinweis: Abbrüche beim Ton-Wechsel an einer echten Box (5. Okt) sind nicht nachgestellt worden; der Umschalter lief mit den echten Streams und Verzögerungen in Tests ohne Stillstand.
+
 ## 0.9.88 (Beta)
 - Korrigiert: Schaltet man bei einer DJI-Kamera "Nur Akkustand lesen" ein, verschwindet ihr bisheriger eigener Eintrag in der Kameraliste. Vorher stand die Kamera doppelt da (als "HDMI" und mit ihrem Modellnamen), weil der Akku nun bei "HDMI" erscheint.
 - **Mit echter Action 5 geprüft** (5. Okt): Sie sendet per HDMI und liefert zugleich den Akkustand per Bluetooth; er erscheint bei der HDMI-Kamera. Offen: Verhalten über Stunden und wenn der Akku leer wird.
