@@ -327,6 +327,14 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="bar"><i id="membar" style="width:0"></i></div>
   </div>
     </div>
+    <details class="dsec" id="statdet"><summary>Details</summary>
+      <div class="statgrid">
+        <div class="statbox"><div class="sech">Senden</div><div id="det_send"></div></div>
+        <div class="statbox"><div class="sech">Prozessor</div><div id="det_cpu"></div></div>
+        <div class="statbox"><div class="sech">Temperaturen</div><div id="det_temp"></div></div>
+        <div class="statbox"><div class="sech">Speicherplatz</div><div id="det_disk"></div></div>
+      </div>
+    </details>
   </details>
 
   <details class="card wide" id="c_cams" open><summary><span class="sumh">Kameras</span></summary>
@@ -1926,10 +1934,36 @@ $("swcard").addEventListener("toggle",()=>{ if($("swcard").open) swLoad(false,tr
 (function swLoop(){ (swPending||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending?2000:8000)); })();
 // Nach dem automatischen Neuladen kurz bestätigen, dass das Update geklappt hat
 try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent=`✔ Update installiert: Die Box läuft jetzt mit Version ${v}.`; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}
+// "Details" im Status (Issue #26): nur gezeichnet, solange sie aufgeklappt sind
+function renderDetails(m){
+  if(!$("statdet").open) return;
+  const d=m.details||{}, drow=(l,v,t)=>`<div class="row" style="padding:2px 0"><span class="muted"${t?` title="${esc(t)}"`:""}>${l}</span><span>${v}</span></div>`;
+  const f1=x=>x==null||x<0?"–":(+x).toFixed(1), n0=x=>x==null||x<0?"–":String(Math.round(x));
+  const s=d.send;
+  $("det_send").innerHTML=!s?'<span class="muted">Keine Daten (die Sendung läuft nicht).</span>':
+    drow("Bitrate",`<b>${f1(s.send_mbps)}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
+    +drow("Laufzeit (Ping, RTT)",`<b>${f1(s.rtt_ms)}</b> ms`)
+    +Object.entries(m.uplinks||{}).filter(([n,u])=>u&&u.srtt!=null).map(([n,u])=>drow('<span class="muted">· '+esc(n)+'</span>',`${n0(u.srtt)} ms`)).join("")
+    +drow("Sendepuffer",`<b>${n0(s.snd_buf_ms)}</b> ms <span class="muted">(${n0(s.snd_buf_pkts)} Pakete)</span>`)
+    +drow("Neuübertragungen",`<b>${n0(s.retrans_total)}</b> <span class="muted">(${s.retrans_pct==null?"–":s.retrans_pct.toFixed(2)} %)</span>`)
+    +drow("Paketverlust",`<b>${n0(s.loss_total)}</b> <span class="muted">(${s.loss_pct==null?"–":s.loss_pct.toFixed(2)} %)</span>`)
+    +drow("Encoder-Bilder pro Sekunde",`<b>${f1(s.fps)}</b>`);
+  const cores=(m.cpu&&m.cpu.cores)||[], fr=(m.cpu&&m.cpu.freq_mhz)||[], ac=d.accel||{};
+  const bar=p=>`<div class="bar" style="margin:1px 0 3px"><i style="width:${Math.max(0,Math.min(100,p||0))}%"></i></div>`;
+  $("det_cpu").innerHTML=cores.map((c,i)=>drow(`Kern ${i}`,`<b>${fmt(c,0)}</b> % <span class="muted">${fr[i]?(fr[i]>=1000?(fr[i]/1000).toFixed(1)+" GHz":fr[i]+" MHz"):""}</span>`)+bar(c)).join("")
+    +(ac.gpu?drow("GPU",`<b>${ac.gpu.load_pct}</b> % <span class="muted">${ac.gpu.mhz} MHz</span>`)+bar(ac.gpu.load_pct):"")
+    +(ac.npu?drow("NPU",`<b>${ac.npu.load_pct}</b> % <span class="muted">${ac.npu.mhz} MHz</span>`)+bar(ac.npu.load_pct):"");
+  $("det_temp").innerHTML=(d.temps||[]).map(t=>drow(esc(t.name),`<b>${f1(t.c)}</b> °C`)).join("")||'<span class="muted">keine Daten</span>';
+  const k=d.disk;
+  $("det_disk").innerHTML=!k?'<span class="muted">keine Daten</span>':drow("Belegt",`<b>${f1(k.used_gb)}</b> GB <span class="muted">(${f1(k.used_pct)} %)</span>`)+bar(k.used_pct)
+    +drow("Frei",`<b>${f1(k.free_gb)}</b> GB`)+drow("Gesamt",`${f1(k.total_gb)} GB`);
+}
+$("statdet").addEventListener("toggle",()=>{ if($("statdet").open) tick(); });
 async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}
     const m=await resp.json();
+    renderDetails(m);
     $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":`höchster Kern ${fmt(m.cpu.max,0)} %`; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
     $("fanline").hidden=m.fan_pct==null; if(m.fan_pct!=null) $("fan").textContent=fmt(m.fan_pct,0);
