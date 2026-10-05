@@ -929,6 +929,13 @@ typedef struct {
   gboolean have_next;
   GstClockTime next_out, prev_pts;
   guint64 switches;
+  GMutex plock;                  /* schützt p_valid, p_max, p_rt (jeder Eingang schreibt seine, beim Umschalten liest ein anderer) */
+  gboolean p_valid[SEL_PADS];
+  gint64 p_max[SEL_PADS];        /* je Eingang: höchster Wert von (Zeitstempel - Laufzeit der Pipeline), langsam abfallend = der "pünktliche" Abstand */
+  gint64 p_rt[SEL_PADS];         /* Laufzeit der letzten Probe (für den Abfall) */
+  gint64 dropped_ns;             /* beim Umschalten verworfene Dauer des neuen Eingangs (Ton) */
+  gint drop_idx;                 /* für welchen Eingang dropped_ns gilt */
+  gboolean first_after_switch;   /* der nächste Puffer ist der erste nach dem Umschalten (Ton) */
 } PbPipSel;
 typedef struct { GstElementClass parent_class; } PbPipSelClass;
 G_DEFINE_TYPE(PbPipSel, pb_pip_sel, GST_TYPE_ELEMENT)
@@ -943,11 +950,18 @@ static void pb_sel_reset(PbPipSel *self) {
   self->sent_pad = -1;
   self->sent_start = self->sent_seg = self->resync = self->have_next = FALSE;
   self->offset = 0;
+  self->dropped_ns = 0;
+  self->drop_idx = -1;
+  self->first_after_switch = FALSE;
   self->next_out = self->prev_pts = GST_CLOCK_TIME_NONE;
   gst_caps_replace(&self->sent_caps, NULL);
   for (guint i = 0; i < SEL_PADS; i++)
     gst_caps_replace(&self->caps[i], NULL);
   g_mutex_unlock(&self->lock);
+  g_mutex_lock(&self->plock);
+  for (guint i = 0; i < SEL_PADS; i++)
+    self->p_valid[i] = FALSE;
+  g_mutex_unlock(&self->plock);
 }
 
 /* Datenstrom-Anfang, Format und Segment vor dem ersten Puffer (und bei geändertem Format) nach hinten schicken. Aufrufer hält lock. */
@@ -976,9 +990,47 @@ static gboolean pb_sel_push_sticky_locked(PbPipSel *self, gint idx) {
   return TRUE;
 }
 
+/* Laufzeit der Pipeline (Uhr minus Basiszeit), -1 solange es keine Uhr gibt. */
+static gint64 pb_sel_running_time(GstElement *el) {
+  GstClock *c = gst_element_get_clock(el);
+  if (!c)
+    return -1;
+  const gint64 r = (gint64) gst_clock_get_time(c) - (gint64) gst_element_get_base_time(el);
+  gst_object_unref(c);
+  return r;
+}
+
+#define SEL_P_DECAY_NS_PER_S 500000      /* p_max fällt um 0,5 ms je Sekunde: folgt einem Uhrenunterschied zwischen Quelle und Pipeline */
+#define SEL_MAX_AHEAD (5 * GST_SECOND)   /* weiter als so viel darf der neue Eingang nicht vor dem Ende des alten liegen (sonst nahtlos anschließen) */
+#define SEL_MAX_DROP (3 * GST_SECOND)    /* so viel vom neuen Eingang wird höchstens verworfen, bis er passt (sonst nahtlos anschließen) */
+
+/* Je Eingang den "pünktlichen" Abstand Zeitstempel zu Laufzeit nachführen (auch für nicht gewählte Eingänge). Puffer kommen stoßweise (die
+ * Warteschlange davor gibt gestaut frei): der späteste Puffer eines Stoßes ist der pünktliche, deshalb der höchste Wert, langsam abfallend. */
+static void pb_sel_sample(PbPipSel *self, gint idx, GstClockTime pts) {
+  if (!GST_CLOCK_TIME_IS_VALID(pts))
+    return;
+  const gint64 rt = pb_sel_running_time((GstElement *) self);
+  if (rt < 0)
+    return;
+  const gint64 sample = (gint64) pts - rt;
+  g_mutex_lock(&self->plock);
+  if (!self->p_valid[idx]) {
+    self->p_valid[idx] = TRUE;
+    self->p_max[idx] = sample;
+  } else {
+    const gint64 dt = rt > self->p_rt[idx] ? rt - self->p_rt[idx] : 0;
+    const gint64 decayed = self->p_max[idx] - (dt / GST_SECOND) * SEL_P_DECAY_NS_PER_S - (dt % GST_SECOND) * SEL_P_DECAY_NS_PER_S / GST_SECOND;
+    self->p_max[idx] = MAX(sample, decayed);
+  }
+  self->p_rt[idx] = rt;
+  g_mutex_unlock(&self->plock);
+}
+
 static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf) {
   PbPipSel *self = (PbPipSel *) parent;
   const gint idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(pad), "pbsel-idx"));
+  if (!self->tag_offset)                                           /* Ton: je Eingang den pünktlichen Zeitabstand führen (Bild nicht) */
+    pb_sel_sample(self, idx, GST_BUFFER_PTS(buf));
   if ((gint) (g_atomic_int_get(&self->state) & 0xF) != idx) {      /* nicht gewählt: sofort verwerfen, ohne zu warten */
     gst_buffer_unref(buf);
     return GST_FLOW_OK;
@@ -998,8 +1050,40 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
     }
     const GstClockTime pts = GST_BUFFER_PTS(buf);
     if (self->sent_pad >= 0) {
-      if (self->have_next && GST_CLOCK_TIME_IS_VALID(pts))
-        self->offset = (gint64) self->next_out - (gint64) pts;
+      if (self->have_next && GST_CLOCK_TIME_IS_VALID(pts)) {
+        /* Normalfall: Die Ausgangszeit schließt nahtlos an das Ende des alten Eingangs an. */
+        gint64 offset = (gint64) self->next_out - (gint64) pts;
+        if (!self->tag_offset) {
+          /* Ton: Zwischen dem letzten Puffer des alten und dem ersten des neuen Eingangs vergeht Zeit (gemessen 0,2 bis 0,7 s bei DJI-Ton). Nur
+           * nahtlos anzuschließen ließe die Ausgangszeit bei jedem Umschalten um diese Lücke hinter die Echtzeit zurückfallen (gemessen 7 s nach 19
+           * Umschaltungen); der Muxer gäbe das Bild dann nur noch stoßweise frei, bis der Ausgang stockt. Darum: der "pünktliche" Abstand der
+           * Ausgangszeit zur Laufzeit bleibt beim Umschalten gleich (Aufschlag alt + p_max alt - p_max neu). Was vom neuen Eingang dadurch vor dem
+           * Ende des alten läge (verspätet ausgelieferte Puffer), wird verworfen; der erste Puffer danach beginnt höchstens einen Puffer vor
+           * dem Ende (wird dort angesetzt). So schaukelt sich nichts auf, und die Zeit läuft nie rückwärts. */
+          g_mutex_lock(&self->plock);
+          const gboolean ok = self->p_valid[self->sent_pad] && self->p_valid[idx];
+          const gint64 ideal = self->offset + self->p_max[self->sent_pad] - self->p_max[idx];
+          g_mutex_unlock(&self->plock);
+          if (self->drop_idx != idx) {
+            self->drop_idx = idx;
+            self->dropped_ns = 0;
+          }
+          if (ok && ideal + (gint64) pts - (gint64) self->next_out < (gint64) SEL_MAX_AHEAD) {
+            GstClockTime dur = GST_BUFFER_DURATION_IS_VALID(buf) ? GST_BUFFER_DURATION(buf) : 0;
+            if ((gint64) pts + ideal + (gint64) dur <= (gint64) self->next_out && self->dropped_ns < (gint64) SEL_MAX_DROP) {
+              self->dropped_ns += dur ? (gint64) dur : 21 * GST_MSECOND;     /* liegt noch vor dem Ende des alten Eingangs: verwerfen */
+              g_mutex_unlock(&self->lock);
+              gst_buffer_unref(buf);
+              return GST_FLOW_OK;
+            }
+            if (self->dropped_ns < (gint64) SEL_MAX_DROP) {
+              offset = ideal;
+              self->first_after_switch = TRUE;
+            }
+          }
+        }
+        self->offset = offset;
+      }
       self->resync = TRUE;
       if (self->force_key)                                           /* Schnitt: der Encoder soll einen vollständigen Bildanfang setzen */
         gst_pad_push_event(self->src, gst_video_event_new_downstream_force_key_unit(
@@ -1007,6 +1091,7 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
       self->switches++;
     }
     self->sent_pad = idx;
+    self->dropped_ns = 0;
     self->prev_pts = GST_CLOCK_TIME_NONE;
   } else if (!self->sent_caps || (self->caps[idx] && !gst_caps_is_equal(self->sent_caps, self->caps[idx]))) {
     pb_sel_push_sticky_locked(self, idx);                            /* Format hat sich beim gewählten Eingang geändert */
@@ -1017,6 +1102,11 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
     gint64 o = (gint64) pts + self->offset;
     if (o < 0)
       o = 0;
+    if (self->first_after_switch) {                                  /* erster Puffer nach dem Umschalten (Ton): nicht vor das Ende des alten */
+      if (self->have_next && o < (gint64) self->next_out)
+        o = (gint64) self->next_out;
+      self->first_after_switch = FALSE;
+    }
     GST_BUFFER_PTS(buf) = (GstClockTime) o;
     GstClockTime dur = 0;
     if (GST_BUFFER_DURATION_IS_VALID(buf))
@@ -1145,6 +1235,7 @@ static void pb_sel_finalize(GObject *o) {
   for (guint i = 0; i < SEL_PADS; i++)
     gst_caps_replace(&self->caps[i], NULL);
   g_mutex_clear(&self->lock);
+  g_mutex_clear(&self->plock);
   G_OBJECT_CLASS(pb_pip_sel_parent_class)->finalize(o);
 }
 
@@ -1174,6 +1265,7 @@ static void pb_pip_sel_class_init(PbPipSelClass *klass) {
 
 static void pb_pip_sel_init(PbPipSel *self) {
   g_mutex_init(&self->lock);
+  g_mutex_init(&self->plock);
   self->sent_pad = -1;
   self->next_out = self->prev_pts = GST_CLOCK_TIME_NONE;
   self->src = gst_pad_new_from_static_template(&sel_src_tmpl, "src");
