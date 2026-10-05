@@ -1266,6 +1266,27 @@ class GracefulRelease(Session):
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
+    def test_status_only_cameras_connect_automatically_and_after_restart(self):
+        async def go():
+            sim = CameraSim(battery=33)
+            self.install({ADDR: sim})
+            d = tempfile.mkdtemp()
+            dm = dd.Daemon(d)
+            await dm.handle({"cmd": "add", "addr": ADDR, "name": "Action 5", "model": "Osmo Action 5 Pro", "kind": "action5"})
+            self.assertFalse(dm.cameras[ADDR].cfg["autoconnect"])
+            await dm.handle({"cmd": "update", "addr": ADDR, "status_only": True})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(cam.cfg["autoconnect"])                             # sofort an
+            self.assertTrue(await self.wait_state(cam, ("status",)), cam.detail)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            # alte Einstellung (vor dieser Änderung): status_only ohne autoconnect wird beim Laden nachgezogen
+            cfg = json.load(open(os.path.join(d, "dji-cameras.json")))
+            cfg["cameras"][ADDR]["autoconnect"] = False
+            json.dump(cfg, open(os.path.join(d, "dji-cameras.json"), "w"))
+            dm2 = dd.Daemon(d)
+            self.assertTrue(dm2.cameras[ADDR].cfg["autoconnect"])
+        arun(go())
+
     def test_status_only_fails_when_camera_goes_silent(self):
         async def go():
             sim = CameraSim()
