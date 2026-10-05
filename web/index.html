@@ -463,6 +463,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <option value="0">aus (Encoder startet neu, etwa 5 s ohne Bild)</option>
         <option value="2">Hauptbild und erstes kleines Bild</option>
         <option value="4">alle Kameras (mehr Rechenlast)</option></select></label>
+    <label class="muted piponly" style="display:block;margin-top:12px"><input type="checkbox" id="p_always"> Alle Kameras immer bereit (Beta): Kameras können jederzeit dazukommen, ausfallen und zurückkehren, ohne dass die Sendung neu startet. Fällt die Hauptkamera aus, übernimmt die nächste. Ohne Kamera sendet die Box Schwarz mit Stille. Dafür dekodiert die Box jede Kamera zweimal (mehr Rechenlast).</label>
     <div class="actions"><button id="p_save" type="button">Bildaufbau speichern</button><span class="muted" style="margin-left:.75rem">Läuft gerade eine Übertragung, wird sie bei einer Änderung kurz neu gestartet.</span></div>
     <div id="pipeerr" class="err"></div>
     <div id="pipeinfo" class="ph"></div>
@@ -1575,6 +1576,7 @@ async function pipeLoad(){
   if(document.activeElement.id!=="p_type") $("p_type").value=c.type;
   if(document.activeElement.id!=="p_auto") $("p_auto").checked=c.auto_failover!==false;
   if(document.activeElement.id!=="p_swap") $("p_swap").value=String(c.swap_cams||0);
+  if(document.activeElement.id!=="p_always") $("p_always").checked=!!c.always_ready;
   posFree={1:{x:c.x??500,y:c.y??500},2:{x:c.x2??500,y:c.y2??500},3:{x:c.x3??500,y:c.y3??500}};
   [1,2,3].forEach(k=>{ pipStyles[k]=Object.assign(STYLE_DEF(),(c.styles||{})[k]||{}); pipStyles[k].crop=Object.assign({l:0,r:0,t:0,b:0},pipStyles[k].crop); pipStyles[k].border=Object.assign(STYLE_DEF().border,pipStyles[k].border); pipStyles[k].opacity=100; delete pipStyles[k].border.radius; styleFill(k); });
   pipConstrain({main:c.main,pip:c.pip,pip2:c.pip2,pip3:c.pip3,c1:c.corner,c2:c.corner2??2,c3:c.corner3??0});
@@ -1624,7 +1626,7 @@ $("pipecard").addEventListener("change",async e=>{
 });
 async function pipSave(){
   $("pipeerr").textContent="";
-  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size1").value,size_pct2:+$("p_size2").value,size_pct3:+$("p_size3").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,styles:pipStyles,...delayBody()};
+  const body={type:$("p_type").value,main:$("p_main").value,pip:$("p_pip").value,corner:+$("p_corner").value,pip2:$("p_pip2").value,corner2:+$("p_corner2").value,pip3:$("p_pip3").value,corner3:+$("p_corner3").value,x:posFree[1].x,y:posFree[1].y,x2:posFree[2].x,y2:posFree[2].y,x3:posFree[3].x,y3:posFree[3].y,size_pct:+$("p_size1").value,size_pct2:+$("p_size2").value,size_pct3:+$("p_size3").value,audio:$("p_audio").value,auto_failover:$("p_auto").checked,swap_cams:+$("p_swap").value,always_ready:$("p_always").checked,styles:pipStyles,...delayBody()};
   try{ const r=await srtlaCall("POST","/api/pipeline",body); pipeDirty=false; pipDelayDirty=false; $("pipeerr").textContent=(r&&r.note)||"Gespeichert."; if(r&&r.restarted) pipWatchRestart((r.note||"Gespeichert.")); }catch(x){ $("pipeerr").textContent=x.message; }
   pipeLoad();
 }
@@ -1644,7 +1646,7 @@ async function pipWatchRestart(base){
   }
 }
 $("p_save").addEventListener("click",pipSave);
-pipeLoad(); setInterval(()=>{ if(due("pipe","pipecard",30000)&&!["p_main","p_pip","p_type","p_corner","p_pip2","p_corner2","p_pip3","p_corner3","p_size1","p_size2","p_size3","p_auto","p_delay","n_delay","p_delay1","n_delay1","p_delay2","n_delay2","p_delay3","n_delay3","p_audio"].includes(document.activeElement.id)) pipeLoad(); },5000);
+pipeLoad(); setInterval(()=>{ if(due("pipe","pipecard",30000)&&!["p_main","p_pip","p_type","p_corner","p_pip2","p_corner2","p_pip3","p_corner3","p_size1","p_size2","p_size3","p_auto","p_always","p_delay","n_delay","p_delay1","n_delay1","p_delay2","n_delay2","p_delay3","n_delay3","p_audio"].includes(document.activeElement.id)) pipeLoad(); },5000);
 
 const LIVE_LABEL={stopped:"Nicht live",starting:"Startet…",running:"LIVE",restarting:"Verbindung wird neu aufgebaut…",stopping:"Wird beendet…",refused:"Nicht gestartet"};
 let sendData=null, pendIgnored="";
