@@ -94,6 +94,12 @@ def get(url, limit=100000):
         return r.read(limit + 1)[:limit]
 
 
+def has_candidate(env):
+    """Kennt apt das Paket tailscale (hat es eine Version zum Installieren)?"""
+    r = subprocess.run(["apt-cache", "policy", "tailscale"], env=env, capture_output=True, text=True, timeout=60)
+    return r.returncode == 0 and re.search(r"^\s*Candidate:\s*(?!\(none\))\S", r.stdout, re.M) is not None
+
+
 def do_install():
     if installed():
         status(state="idle", message="Tailscale ist schon installiert.")
@@ -114,8 +120,20 @@ def do_install():
     os.chmod(SOURCE, 0o644)
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
     status(step="Aktualisiere die Paketliste (nur Tailscale)")
-    subprocess.run(["apt-get", "update", "-o", "Dir::Etc::sourcelist=sources.list.d/tailscale.list",
-                    "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0"], env=env, capture_output=True, timeout=300)
+    # Die Paketliste muss das Paket kennen, sonst meldet apt "Unable to locate package". Ein anderer apt-Lauf (automatische Updates
+    # nach dem Start) sperrt die Listen kurz; deshalb mehrere Versuche, und als letzter Ausweg die ganze Paketliste statt nur der Tailscale-Quelle.
+    out = ""
+    only = ["apt-get", "update", "-o", "Dir::Etc::sourcelist=sources.list.d/tailscale.list", "-o", "Dir::Etc::sourceparts=-",
+            "-o", "APT::Get::List-Cleanup=0"]
+    for i, cmd in enumerate([only] * 4 + [["apt-get", "update"]]):
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+        out = (r.stdout + r.stderr)[-300:].replace("\n", " ")
+        if has_candidate(env):
+            break
+        if i < 4:
+            time.sleep(15)
+    else:
+        raise RuntimeError("Die Installation von Tailscale ist fehlgeschlagen: " + out)
     status(step="Installiere Tailscale")
     r = subprocess.run(["apt-get", "install", "-y", "--no-install-recommends", "-o", "DPkg::Lock::Timeout=120", "tailscale"],
                        env=env, capture_output=True, text=True, timeout=900)
