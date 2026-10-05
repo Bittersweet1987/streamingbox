@@ -1009,6 +1009,8 @@ class Daemon:
         migrated = not os.path.exists(self.config_file) and bool(saved.get("cameras"))
         for addr, cfg in (saved.get("cameras") or {}).items():
             if isinstance(cfg, dict):
+                if cfg.get("status_only"):
+                    cfg["autoconnect"] = True         # Nur-Akku-Kameras lesen immer mit, auch nach einem Neustart des Dienstes
                 self.cameras[addr] = Camera(self, addr, cfg)
                 if migrated:
                     self._note_connection(cfg)
@@ -1130,6 +1132,8 @@ class Daemon:
         if not str(cfg.get("name", "")).strip():
             cfg["name"] = cfg.get("model") or cam.addr
         cfg["name"] = cfg["name"].strip()[:40]
+        if cfg.get("status_only"):
+            cfg["autoconnect"] = True
         if cfg.get("resolution") not in RESOLUTIONS:
             cfg["resolution"] = "1080p"
         if cfg.get("fps") not in FPS:
@@ -1200,7 +1204,7 @@ class Daemon:
             if "ssid" in req or "password" in req:
                 self._note_connection(cam.cfg)
             self.sanitize(cam)
-            if req.get("autoconnect") is True:
+            if req.get("autoconnect") is True or req.get("status_only") is True:
                 cam.manual_off = False
                 if not cam.running():
                     cam.start()

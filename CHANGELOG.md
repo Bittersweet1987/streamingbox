@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.92 (Beta)
+- Geändert: Eine Kamera im Modus "Nur Akkustand lesen" verbindet sich immer automatisch, auch nach einem Neustart des Bluetooth-Dienstes oder einem Update (vorher stand sie danach getrennt da und der Akku fehlte im Status). Das Häkchen "Automatisch verbinden" entfällt bei diesen Kameras. Eine bestehende Einstellung ohne automatisches Verbinden wird beim Laden nachgezogen.
+
 ## 0.9.91 (Beta)
 - Behoben: **Abbruch der Sendung nach mehreren Ton-Wechseln** (Ton-Knopf in der Fußleiste, Tausch, Ton-Quelle in der Pipeline-Karte). Ursache: Beim Wechsel der Tonquelle schloss die Ausgangszeit des Tons nahtlos an das Ende der alten Quelle an. Zwischen dem letzten Ton-Puffer der alten und dem ersten der neuen Kamera vergehen aber 0,2 bis 0,7 s (DJI liefert den Ton stoßweise). Bei jedem Wechsel fiel der Ton so ein Stück hinter die Echtzeit zurück (gemessen: 7 s nach 19 Wechseln). Der Muxer gab das Bild dann nur noch stoßweise frei, die Bitrate brach ein, bis `belacoder` den Ausgang für stehend hielt und neu startete.
   - Jetzt führt der Umschalter für jeden Tonweg den "pünktlichen" Zeitabstand zur Echtzeit und hält ihn beim Wechsel ein. Was vom neuen Weg dadurch vor dem Ende des alten läge (verspätet ausgelieferte Puffer), wird verworfen; die Zeit läuft nie rückwärts. Gemessen mit dem echten `belacoder` und den echten Kamera-Streams der Box (ohne Netz, `tools/boxtest_switch_belacoder.sh`): vorher Stillstand nach 13 bis 22 Wechseln, jetzt 45 Wechsel in 6 Minuten ohne Stillstand (auch mit Bildtausch dazwischen); auf der laufenden Sendekette 36 Ton-Wechsel ohne Neustart. Die Tests der Ansicht (`boxtest_e2e_view.py`, Tausch und klassisch) laufen mit dem neuen Baustein durch.
