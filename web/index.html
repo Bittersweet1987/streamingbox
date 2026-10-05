@@ -39,6 +39,14 @@ main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-templ
 .unit{font-size:13px;color:var(--muted);font-weight:400}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--bar);transition:width .5s}
+.prog{margin:10px 0 2px}
+.prog .bar{height:10px}
+.prog .bar>i{background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 8px,transparent 8px 16px);background-size:22.6px 22.6px;animation:progmove 1s linear infinite}
+@keyframes progmove{to{background-position:22.6px 0}}
+@media (prefers-reduced-motion:reduce){.prog .bar>i{animation:none}}
+.progline{display:flex;justify-content:space-between;gap:10px;margin-top:4px;font-size:13px}
+.progline .progtxt{min-width:0;overflow-wrap:anywhere}
+.progline .progel{white-space:nowrap;font-variant-numeric:tabular-nums}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--ok)}
 .dot.off{background:var(--crit)}
 .dot.wait{background:var(--warn)}
@@ -567,6 +575,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button id="sw_install" type="button" class="warnbtn" disabled>Update installieren</button>
       <button id="sw_rollback" type="button" class="sec" hidden>Zurück zur vorherigen Version</button>
     </div>
+    <div id="swprog" class="prog" hidden><div class="bar"><i></i></div><div class="progline"><span><b class="progpct"></b> <span class="progtxt"></span></span><span class="progel muted"></span></div></div>
     <div id="sw_msg" class="ph"></div>
   </details>
 
@@ -579,7 +588,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button id="u_run" type="button" class="warnbtn">Updates installieren</button>
       <button id="u_reboot" type="button" class="sec">Neu starten</button>
     </div>
-    <div id="updbar" class="bar" style="margin-top:10px" hidden><i id="updbari" style="width:0"></i></div>
+    <div id="updprog" class="prog" hidden><div class="bar"><i></i></div><div class="progline"><span><b class="progpct"></b> <span class="progtxt"></span></span><span class="progel muted"></span></div></div>
     <div id="updmsg" class="ph"></div>
     <details id="upddet" class="sens"><summary class="muted">Protokoll</summary><pre id="updlog"></pre></details>
   </details>
@@ -630,6 +639,12 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   <div class="footlinks">© 2026 IRL4YOU · MIT-Lizenz (Ordner srtla: AGPL-3.0) · <a href="https://irl4you.de" target="_blank" rel="noopener noreferrer">Webseite</a> · <a href="https://discord.gg/nrBCEarMup" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://github.com/IRL4YOU/irl4you-pip" target="_blank" rel="noopener noreferrer">Quellcode auf GitHub</a> · <a href="https://github.com/IRL4YOU/irl4you-pip/blob/main/NOTICE.md" target="_blank" rel="noopener noreferrer">Drittprojekte (Moblin, BELABOX)</a></div></footer>
 <script>
 const $=id=>document.getElementById(id);
+// Nach einem Neustart der Oberfläche (zum Beispiel durch ein Software-Update) kennt die Box die Anmeldung dieses Browsers evtl. nicht mehr: Jede Abfrage
+// bekommt dann 401. Dann die Seite neu laden, damit die Anmeldeseite erscheint (statt dass die alte Seite mit altem Stand stehen bleibt).
+// Läuft gerade ein Update (pbUpdating), lädt die Seite NICHT beim ersten 401 neu, sondern zeigt den Fortschritt weiter und lädt erst nach dem Ende neu.
+var pbUpdating=0;
+(function(){ const f=window.fetch.bind(window); let gone=false;
+  window.fetch=function(u,o){ return f(u,o).then(r=>{ if(r.status===401&&!gone&&!pbUpdating&&String(u).indexOf("/api/")===0&&String(u).indexOf("/api/login")!==0){ gone=true; location.reload(); } return r; }); }; })();
 // Abfragen sparen die Box: Im Hintergrund-Tab ruht alles, zugeklappte Karten fragen nur selten nach.
 const _last={};
 function due(key,card,idleMs){
@@ -739,6 +754,25 @@ $("logout").addEventListener("click",async()=>{await fetch("/api/logout",{method
 const UPD_LABEL={check:"Suche",autocheck:"Suche",dry:"Probelauf",run:"Update",reboot:"Neustart"};
 const LOC=()=>window.PB_I18N?PB_I18N.locale():"de-DE";
 const fmtT=t=>t?new Date(t*1000).toLocaleString(LOC()):"nie";
+// Fortschrittsanzeige für beide Update-Karten (System-Updates der BELABOX und Software-Update der IRL4YOU BOX): Balken mit Bewegung, Prozent,
+// aktueller Schritt und laufende Zeit. pct 0 = noch unbekannt (nur der laufende Balken).
+function progSet(id,show,pct,text,since){
+  const b=$(id); if(!b) return;
+  b.hidden=!show; if(!show){ b.dataset.since=""; return; }
+  if(!b.dataset.since||since) b.dataset.since=String(since||b.dataset.since||Date.now());
+  b.querySelector(".bar>i").style.width=Math.max(4,Math.min(100,pct||0))+"%";
+  b.querySelector(".progpct").textContent=pct>0?pct+" %":"";
+  b.querySelector(".progtxt").textContent=text||"";
+  progTick();
+}
+function progTick(){
+  document.querySelectorAll(".prog:not([hidden])").forEach(b=>{
+    const s=+b.dataset.since; if(!s) return;
+    const sec=Math.max(0,Math.floor((Date.now()-s)/1000)), el=b.querySelector(".progel");
+    el.textContent="⏱ "+Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0");
+  });
+}
+setInterval(progTick,1000);
 function renderUpdate(u){
   const v=u.versions||{}, busy=u.state==="running"||u.state==="rebooting";
   const lines=[
@@ -754,11 +788,11 @@ function renderUpdate(u){
     dot.hidden=!n;
     if(n){ const t=[u.last_check?`BELABOX-Systemupdates: ${n} Pakete verfügbar (Stand ${fmtT(u.last_check)}).`:`BELABOX-Systemupdates: ${n} Pakete verfügbar.`,u.would_reboot?"Danach ist ein Neustart nötig.":"",u.streaming?"Einspielen geht nicht während der Übertragung.":"Zu den Systemupdates."].filter(Boolean).join(" "); dot.title=t; dot.setAttribute("aria-label",t); } }
   const p=u.progress, show=u.state==="running"&&p&&p.total>0;
-  $("updbar").hidden=!show;
-  if(show){ const pct=Math.round(100*(p.downloading+p.unpacking+p.setting_up)/(3*p.total)); $("updbari").style.width=pct+"%"; }
+  if(show) progSet("updprog",true,Math.round(100*(p.downloading+p.unpacking+p.setting_up)/(3*p.total)),`Laden ${p.downloading}/${p.total}, Entpacken ${p.unpacking}/${p.total}, Einrichten ${p.setting_up}/${p.total}`,(u.started||0)*1000);
+  else progSet("updprog",u.state==="running",0,"",(u.started||0)*1000);                      // läuft, aber noch ohne Zahlen: nur der laufende Balken
   let msg="";
   if(!u.helper_installed) msg="Update-Helfer ist auf der Box nicht installiert.";
-  else if(u.state==="running") msg=(UPD_LABEL[u.mode]||"Aktion")+" läuft…"+(show?` Laden ${p.downloading}/${p.total}, Entpacken ${p.unpacking}/${p.total}, Einrichten ${p.setting_up}/${p.total}`:"");
+  else if(u.state==="running") msg=(UPD_LABEL[u.mode]||"Aktion")+" läuft…";
   else if(u.state==="rebooting") msg="Die Box startet neu. Diese Seite lädt nach dem Start wieder.";
   else if(u.reboot_pending) msg="Neustart nötig, damit der neue Kernel/Netzwerkteile aktiv werden.";
   else if(u.message) msg=u.message;
@@ -1877,11 +1911,13 @@ let swFirst=null, swPending=0;
 // das Ergebnis feststeht (neue Version läuft: Seite lädt von selbst neu; abgelehnt oder fehlgeschlagen; nach 15 Minuten). Früher hing das Neuladen an dem Zustand
 // "installiert gerade", der kurz nach dem Klick noch nicht gesetzt war: dann blieb die alte Seite stehen und man musste selbst neu laden.
 const SW_TERMINAL=["failed","refused","rolledback"];
+let swSaw=false;                                  // wurde "installiert gerade" schon gesehen?
 function swBegin(text){
-  swPending=Date.now();
+  swPending=pbUpdating=Date.now(); swSaw=false;
   ["sw_install","sw_check","sw_switch","sw_rollback"].forEach(id=>$(id).disabled=true);          // sofort sperren, damit nichts doppelt ausgelöst wird
   $("sw_badge").textContent="läuft …"; $("sw_badge").className="badge attn";
   $("sw_msg").textContent=text; $("sw_msg").style.color="";
+  progSet("swprog",true,0,"Update wird gestartet",swPending);
 }
 // Gliedert den Text der Änderungen (Auszug aus der CHANGELOG.md): Überschrift je Version, Aufzählungspunkte, fette Stichworte, Code. Der Text wird zuerst
 // maskiert; nur die hier erzeugten Auszeichnungen gelangen ins Dokument.
@@ -1898,20 +1934,48 @@ function fmtNotes(t){
   });
   close(); return out;
 }
+// Ende des Updates: Fortschritt voll zeigen, dann die Seite einmal neu laden (danach erscheint bei Bedarf die Anmeldung)
+function swFinish(cur){
+  pbUpdating=swPending=0;
+  if(cur){ try{ sessionStorage.setItem("pb_updated",cur); }catch(e){} }
+  progSet("swprog",true,100,"");
+  $("sw_msg").textContent="Das Update ist fertig. Die Seite lädt neu und zeigt bei Bedarf die Anmeldung."; $("sw_msg").style.color="";
+  $("sw_badge").textContent="fertig"; $("sw_badge").classList.remove("attn"); $("sw_badge").classList.add("ok");
+  setTimeout(()=>location.reload(),2000);
+}
+// Ohne Anmeldung (die Oberfläche ist neu gestartet und kennt diesen Browser nicht mehr): nur Zustand, Schritt und Prozent
+async function swPublic(){
+  let p; try{ const r=await fetch("/api/swprogress"); p=await r.json(); }catch(e){ $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
+  if(p.state==="installing"){
+    swSaw=true; progSet("swprog",true,p.progress,p.step);
+    $("sw_msg").textContent="Die Oberfläche startet gerade neu, das Update läuft weiter. Die Seite lädt danach von selbst neu."; return; }
+  if(p.state==="done"||p.state==="rolledback"){ swFinish(); return; }
+  if(p.state==="failed"||p.state==="refused"){
+    pbUpdating=swPending=0; progSet("swprog",false);
+    $("sw_msg").textContent="Das Update ist fehlgeschlagen. Die Seite lädt neu; nach der Anmeldung steht die Meldung in dieser Karte."; $("sw_msg").style.color="var(--crit)";
+    setTimeout(()=>location.reload(),4000); return; }
+  if(Date.now()-pbUpdating>120000) location.reload();           // nichts mehr zu sehen: nicht ewig warten
+}
 async function swLoad(force,fresh){
-  let d;
-  try{ d=await srtlaCall("GET","/api/swupdate"+(force?"?check=1":(fresh?"?fresh=1":""))); }
-  catch(e){ if(swPending) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
+  let d, r;
+  try{ r=await fetch("/api/swupdate"+(force?"?check=1":(fresh?"?fresh=1":""))); }
+  catch(e){ if(pbUpdating) swPublic(); return; }
+  if(r.status===401){ if(pbUpdating) swPublic(); return; }          // sonst lädt der Wächter am Seitenanfang neu
+  d=await r.json().catch(()=>null);
+  if(!r.ok||!d){ if(pbUpdating) $("sw_msg").textContent="Die Oberfläche startet gerade neu, einen Moment …"; return; }
   if(swFirst===null) swFirst=d.current;
+  const installing=d.state==="installing";
+  if(installing){ swSaw=true; if(!pbUpdating) pbUpdating=Date.now(); }
+  progSet("swprog",installing||!!swPending&&!["failed","refused"].includes(d.state)&&!(d.state==="done"||d.state==="rolledback"),d.progress||0,d.step||"Update wird gestartet",pbUpdating);
+  if(pbUpdating&&!swPending&&!installing){ pbUpdating=0; progSet("swprog",false); }      // ein Update von einem anderen Gerät ist zu Ende (ohne neue Version)
+  if(swFirst!==d.current&&!installing){            // eine neue Version läuft und nichts wird mehr installiert: Seite neu laden (auch bei einem Update von einem anderen Gerät)
+    swFinish(d.current); return;
+  }
   if(swPending){
     const age=Date.now()-swPending;
-    if(swFirst!==d.current){                       // die neue Version läuft: Seite von selbst neu laden, damit die Änderungen sichtbar sind
-      try{ sessionStorage.setItem("pb_updated",d.current); }catch(e){}
-      location.reload(); return;
-    }
-    if(age>10000&&SW_TERMINAL.includes(d.state)) swPending=0;                // abgelehnt oder fehlgeschlagen (ältere Meldungen in den ersten Sekunden zählen nicht)
-    else if(age>25000&&d.state==="done") swPending=0;                          // fertig, aber ohne neue Version
-    else if(age>900000) swPending=0;                                            // nach 15 Minuten aufgeben, damit nie etwas dauerhaft gesperrt bleibt
+    if((d.state==="done"||(d.state==="rolledback"&&swFirst!==d.current))&&(swSaw||age>25000)){ swFinish(d.current); return; }
+    if(age>10000&&SW_TERMINAL.includes(d.state)){ swPending=pbUpdating=0; progSet("swprog",false); }   // abgelehnt oder fehlgeschlagen (ältere Meldungen in den ersten Sekunden zählen nicht)
+    else if(age>900000){ swPending=pbUpdating=0; progSet("swprog",false); }                            // nach 15 Minuten aufgeben, damit nie etwas dauerhaft gesperrt bleibt
   }
   { const dot=$("hdr_upd");                      // gelber Punkt in der Kopfleiste, solange eine neuere Version auf GitHub liegt
     dot.hidden=!d.newer;
@@ -1930,7 +1994,7 @@ async function swLoad(force,fresh){
   let msg="";
   if(!d.helper_installed) msg="Der Update-Helfer ist nicht installiert. Bitte install.sh einmal erneut ausführen.";
   else if(d.error) msg=d.error;
-  else if(busy) msg=(d.state==="installing"?(d.step||"Update läuft"):"Update wird gestartet")+" … Die Seite lädt danach von selbst neu.";
+  else if(busy) msg=(d.state==="installing"?"Das Update läuft":"Update wird gestartet")+" … Die Seite lädt danach von selbst neu.";
   else if(d.state==="done"||d.state==="rolledback") msg=d.message;
   else if(d.state==="refused"||d.state==="failed") msg=d.message;
   else if(d.sending&&d.newer) msg="Update gesperrt: Es wird gerade gesendet.";
@@ -1963,7 +2027,7 @@ $("sw_switch").addEventListener("click",async()=>{
   if(!confirm(`Auf Version ${x.version} wechseln?\n\n`+(older?`ACHTUNG: Das ist eine ÄLTERE Version als die installierte (${swCurrent}). Neuere Funktionen und Korrekturen fehlen dann.\n\n`:"")
       +"• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu.\n• Die jetzige Version wird vorher gesichert, Sie können wieder zurück.")) return;
   swBegin("Wechsel wird gestartet …");
-  try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); }catch(e){ swPending=0; $("sw_msg").textContent=e.message; $("sw_msg").style.color="var(--crit)"; }
+  try{ await srtlaCall("POST","/api/swupdate",{action:"switch",version:x.version,older,confirm:true}); }catch(e){ swPending=pbUpdating=0; progSet("swprog",false); $("sw_msg").textContent=e.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
 try{ const hd=document.querySelector("header"), setH=()=>document.documentElement.style.setProperty("--hdrh",hd.offsetHeight+"px");   // Höhe der festen Kopfleiste für den Scroll-Abstand der Karten
@@ -1974,18 +2038,18 @@ $("sw_check").addEventListener("click",()=>{ $("sw_msg").textContent="Suche …"
 $("sw_install").addEventListener("click",async()=>{
   if(!confirm("Software-Update installieren?\n\n• Es darf KEINE Übertragung laufen.\n• Die Oberfläche startet dabei kurz neu (etwa eine halbe Minute).\n• Kameras und Einstellungen bleiben erhalten; der Kamera-Dienst startet nur neu, wenn sich seine Dateien ändern.\n• Die jetzige Version wird gesichert, Sie können zurückgehen.")) return;
   swBegin("Update wird gestartet …");
-  try{ await srtlaCall("POST","/api/swupdate",{action:"install",confirm:true}); }catch(x){ swPending=0; $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
+  try{ await srtlaCall("POST","/api/swupdate",{action:"install",confirm:true}); }catch(x){ swPending=pbUpdating=0; progSet("swprog",false); $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
 $("sw_rollback").addEventListener("click",async()=>{
   if(!confirm("Zur vorherigen Version zurückgehen?\n\nDie Oberfläche startet dabei kurz neu. Es darf nicht gesendet werden.")) return;
   swBegin("Wird zurückgestellt …");
-  try{ await srtlaCall("POST","/api/swupdate",{action:"rollback",confirm:true}); }catch(x){ swPending=0; $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
+  try{ await srtlaCall("POST","/api/swupdate",{action:"rollback",confirm:true}); }catch(x){ swPending=pbUpdating=0; progSet("swprog",false); $("sw_msg").textContent=x.message; $("sw_msg").style.color="var(--crit)"; }
   setTimeout(()=>swLoad(false),1500);
 });
 swLoad(false,true);                                                   // beim Öffnen der Seite: eine Antwort, die nicht älter als fünf Minuten ist (neue Version sofort sichtbar)
 $("swcard").addEventListener("toggle",()=>{ if($("swcard").open) swLoad(false,true); });   // und beim Aufklappen der Karte
-(function swLoop(){ (swPending||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending?2000:8000)); })();
+(function swLoop(){ (swPending||pbUpdating||due("sw","swcard",60000)?swLoad(false):Promise.resolve()).finally(()=>setTimeout(swLoop,swPending||pbUpdating?2000:8000)); })();
 // Nach dem automatischen Neuladen kurz bestätigen, dass das Update geklappt hat
 try{ const v=sessionStorage.getItem("pb_updated"); if(v){ sessionStorage.removeItem("pb_updated"); const t=$("updtoast"); t.textContent=`✔ Update installiert: Die Box läuft jetzt mit Version ${v}.`; t.hidden=false; setTimeout(()=>t.hidden=true,9000); } }catch(e){}
 // "Details" im Status (Issue #26): nur gezeichnet, solange sie aufgeklappt sind
