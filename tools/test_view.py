@@ -283,6 +283,18 @@ class ChangeView(unittest.TestCase):
             self.assertFalse(send.view_live())
             self.assertFalse(send.audio_live())
 
+    def test_degraded_chain_saves_without_restart(self):
+        send = self.make(active=True)
+        send.restart_if_live = mock.Mock(return_value=(True, "neu"))
+        with mock.patch.object(send, "_detail", lambda: {"view_live": True, "audio_live": True, "failover": {"degraded": True}}):
+            r = send.change_view(audio="pip")
+            self.assertFalse(r["restarted"])
+            self.assertIn("Notbetrieb", r["note"])
+            self.assertEqual(send.pipeline.cfg["audio"], "pip")                    # gespeichert
+            with self.assertRaises(ValueError):
+                send.change_view(mute=True)
+        send.restart_if_live.assert_not_called()
+
     def test_start_resets_mute_in_the_file(self):
         send = self.make(active=False)
         with open(os.path.join(self.d, server.VIEW_FILE), "w") as f:
