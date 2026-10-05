@@ -3054,6 +3054,7 @@ class SwUpdate:
         here = os.path.dirname(os.path.abspath(__file__))
         self.version = (read(os.path.join(here, "VERSION"), "") or "0.0.0").strip()
         self.fake = {}
+        self.fake_t0 = 0.0
 
     CONTENTS = "https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/%s?ref=main"
 
@@ -3209,10 +3210,44 @@ class SwUpdate:
                         "relation": "aktuell" if v == self.version else ("neuer" if vkey(v) > vkey(self.version) else "älter")})
         return res
 
+    @staticmethod
+    def _pct(st):
+        p = st.get("progress")
+        return p if isinstance(p, int) and not isinstance(p, bool) and 0 <= p <= 100 else 0
+
+    def demo_fake(self):
+        """Demo: ein vorgetäuschtes Update, dessen Fortschritt über einige Sekunden läuft (für die Ansicht ohne Box)."""
+        t0 = self.fake_t0
+        steps = ((0, 2, "Lade die neue Version von GitHub"), (2, 22, "Prüfe das Archiv"), (3, 30, "Sichere die jetzige Version"),
+                 (4, 36, "Installiere Version %s" % "9.9.9"), (6, 58, "Kopiere Programme und Oberfläche"), (8, 78, "Prüfe den SRTLA-Sender (wird neu gebaut, wenn er sich geändert hat)"),
+                 (10, 95, "Starte die Dienste neu"))
+        age = time.time() - t0
+        if age >= 12:
+            return {"state": "done", "message": "Demo: Update vorgetäuscht.", "time": int(time.time()), "progress": 100}
+        cur = [x for x in steps if x[0] <= age][-1]
+        return {"state": "installing", "step": cur[2], "progress": cur[1], "time": int(time.time())}
+
+    def progress_public(self):
+        """Nur Zustand, Schritt und Prozent des Updates, ohne Anmeldung abrufbar: Beim Update startet die Oberfläche neu und kennt die Anmeldung des
+        Browsers danach evtl. nicht mehr; die Seite zeigt den Fortschritt trotzdem weiter und lädt erst nach dem Ende neu. Keine Version, keine Adressen."""
+        if self.demo:
+            st = self.demo_fake() if self.fake_t0 else {}
+        else:
+            try:
+                with open(self.STATUS) as f:
+                    st = json.load(f)
+            except (OSError, ValueError):
+                st = {}
+        state = st.get("state") if st.get("state") in ("installing", "done", "rolledback", "failed", "refused") else "idle"
+        if state != "installing" and (not st.get("time") or time.time() - st["time"] > 6 * 3600):
+            state = "idle"
+        step = st.get("step", "")
+        return {"state": state, "step": step if state == "installing" and isinstance(step, str) else "", "progress": self._pct(st)}
+
     def status(self, force=False, fresh=False):
         chk = self.check(force, fresh)
         if self.demo:
-            st = dict(self.fake) or {}
+            st = (self.demo_fake() if self.fake_t0 else dict(self.fake)) or {}
         else:
             try:
                 with open(self.STATUS) as f:
@@ -3224,7 +3259,7 @@ class SwUpdate:
                "error": chk.get("error", ""), "checked_at": chk.get("checked_at"),
                "newer": bool(latest and vkey(latest) > vkey(self.version)),
                "state": st.get("state", "idle"), "step": st.get("step", ""), "message": st.get("message", ""),
-               "frm": st.get("frm", ""), "to": st.get("to", "")}
+               "frm": st.get("frm", ""), "to": st.get("to", ""), "progress": self._pct(st)}
         if st.get("state") in ("installing", "refused", "done", "rolledback", "failed") and st.get("time") \
                 and st["state"] != "installing" and time.time() - st["time"] > 6 * 3600:
             out["state"], out["message"] = "idle", ""             # alte Meldung nach 6 Stunden ausblenden
@@ -3264,7 +3299,7 @@ class SwUpdate:
                 raise ValueError("Das ist eine ältere Version. Bitte ausdrücklich bestätigen.")
             version = v
         if self.demo:
-            self.fake = {"state": "done", "message": "Demo: Update vorgetäuscht.", "time": int(time.time())}
+            self.fake_t0 = time.time()
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -5289,6 +5324,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.auth.mode == "demo":
                 out["demo_password"] = Auth.DEMO_PASSWORD     # nur in der Vorschau: die Anmeldeseite füllt es vor
             return self.reply(200, out)
+        if path == "/api/swprogress":
+            return self.reply(200, self.swupdate.progress_public())
         if not self.authed():
             return self.reply(401, {"error": "nicht angemeldet"})
         if path == "/api/metrics":
