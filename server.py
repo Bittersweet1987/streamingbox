@@ -21,6 +21,7 @@ import re
 import secrets
 import shutil
 import socket
+import sys
 import ssl
 import stat
 import subprocess
@@ -4996,6 +4997,14 @@ class LimitedHTTPServer(ThreadingHTTPServer):
                 self._senders[ip] = n
             else:
                 self._senders.pop(ip, None)
+
+    def handle_error(self, request, client_address):
+        """Ein Gegenüber, das die Verbindung abbricht oder zu langsam ist (Issue #25), ist kein Fehler des Dienstes: kein Traceback im Journal
+        (sonst wird das Protokoll bei vielen abgeschnittenen Anfragen unlesbar)."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError, socket.timeout)) or (isinstance(exc, OSError) and exc.errno in (9, 32, 54, 104)):
+            return
+        super().handle_error(request, client_address)
 
     def process_request_thread(self, request, client_address):
         try:

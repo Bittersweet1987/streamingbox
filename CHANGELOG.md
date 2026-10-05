@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.98 (Beta)
+- Sicherheit, letzte Kleinigkeit zu Issue #25: Eine abgeschnittene oder zu langsame Anfrage schrieb Tracebacks ins Journal (ValueError "Die Anfrage ist unvollständig", danach BrokenPipeError beim Antworten). Abgebrochene Verbindungen und Zeitüberschreitungen des Gegenübers werden jetzt still verworfen, echte Fehler des Dienstes bleiben sichtbar. Test: `QuietErrors` in `tools/test_security.py`.
+
 ## 0.9.97 (Beta)
 - Korrigiert: **NPU-Auslastung** in "Details" zeigte immer 100 %. Der Frequenzregler der NPU (rknpu_ondemand) meldet auch im Leerlauf 100 %; die echte Last (0 %) steht nur in debugfs und das liest nur root. Jetzt steht dort "–" mit Erklärung (Tooltip) und die Frequenz; die GPU-Auslastung stimmt (Mali-Regler).
 - Mit der echten Box geprüft (nach 0.9.96): Die Kennzahlen-Datei von `belacoder` liefert Bitrate, RTT, Sendepuffer, Neuübertragungen, Verlust und 29 bis 30 Bilder pro Sekunde; Temperaturen, GPU, Speicherplatz stimmen. Beobachtung: Neuübertragungen und Verlust lagen kurz nach dem Start bei etwa 5 % (Summe seit Verbindungsbeginn).
