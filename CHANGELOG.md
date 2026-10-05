@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.93 (Beta)
+- Sicherheit (Meldung von romestylez, Issue #25):
+  - **Anmeldesperre:** Der Fehlversuch wird jetzt vor der Prüfung gezählt. Vorher kamen bei vielen gleichzeitigen Anmeldungen alle an der Sperre vorbei (60 gleichzeitige Anfragen = 53 Prüfungen statt 5). Dazu laufen höchstens 2 Passwortprüfungen (je ein node-Prozess mit bcrypt) gleichzeitig; weitere bekommen sofort "bitte gleich noch einmal versuchen" (429) und zählen nicht als Fehlversuch. Ein gelungenes Anmelden wird nicht gezählt.
+  - **HTTP-Server:** Verbindungen ohne Aktivität werden nach 15 s beendet, der Inhalt einer Anfrage darf insgesamt höchstens 15 s brauchen (vorher blieb "Content-Length: 4000, aber 1 Byte" unbegrenzt offen und die Oberfläche war nicht mehr erreichbar). Höchstens 64 Verbindungen gleichzeitig, davon 16 je Absender.
+  - **Erreichbarkeit:** Die Oberfläche nimmt nur noch Anfragen aus Loopback, privaten Netzen, Link-Local, 100.64.0.0/10 (Tailscale) und IPv6-ULA an; öffentliche Quelladressen werden ohne Antwort getrennt (`--allow-public` hebt das auf). Der Tailscale-Proxy (Serve/Funnel) kommt von Loopback und ist nicht betroffen.
+  - **Nicht gelöst:** Die Oberfläche lauscht weiter unverschlüsselt (HTTP) auf allen Schnittstellen, auch in fremden WLANs, über die die Box sendet; dort gehen Passwort und Sitzung im Klartext. Das steht jetzt ehrlich in KONZEPT.md und README (nur über Tailscale/HTTPS benutzen). Ein Schalter "über fremde WLANs sperren" ist offen (Fremdnetz-Erkennung fehlt noch).
+  - Tests: `tools/test_security.py` (12).
+
 ## 0.9.92 (Beta)
 - Geändert: Eine Kamera im Modus "Nur Akkustand lesen" verbindet sich immer automatisch, auch nach einem Neustart des Bluetooth-Dienstes oder einem Update (vorher stand sie danach getrennt da und der Akku fehlte im Status). Das Häkchen "Automatisch verbinden" entfällt bei diesen Kameras. Eine bestehende Einstellung ohne automatisches Verbinden wird beim Laden nachgezogen.
 

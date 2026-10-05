@@ -1785,6 +1785,7 @@ class CameraStore:
 SESSION_SECONDS = 12 * 3600
 REMEMBER_SECONDS = 30 * 24 * 3600     # "Angemeldet bleiben": überlebt Updates und Neustarts
 MAX_FAILS, FAIL_WINDOW = 5, 300
+MAX_CHECKS = 2            # so viele Passwortprüfungen (je ein node-Prozess mit bcrypt oder PBKDF2) laufen höchstens gleichzeitig
 
 
 class Auth:
@@ -1819,6 +1820,7 @@ class Auth:
         self.store_path = os.path.join(state_dir, "sessions.json")
         self.fails = {}
         self.lock = threading.Lock()
+        self.checks = threading.BoundedSemaphore(MAX_CHECKS)
         os.makedirs(state_dir, exist_ok=True)
         self.cfg = None
         try:
@@ -1928,6 +1930,46 @@ class Auth:
         with self.lock:
             self.fails.setdefault(ip, []).append(time.time())
 
+    def reserve(self, ip):
+        """Zählt einen Versuch SOFORT, vor der Prüfung (Issue #25): Wurde erst nach der Prüfung gezählt, kamen bei vielen gleichzeitigen Anmeldungen
+        alle an der Sperre vorbei. Gibt die Marke des Versuchs zurück oder None, wenn die Sperre schon greift. Ein gelungener oder nicht
+        durchgeführter Versuch wird mit unreserve zurückgenommen, ein falsches Passwort bleibt gezählt."""
+        now = time.time()
+        with self.lock:
+            f = [t for t in self.fails.get(ip, []) if now - t < FAIL_WINDOW]
+            if len(f) >= MAX_FAILS:
+                self.fails[ip] = f
+                return None
+            f.append(now)
+            self.fails[ip] = f
+            return now
+
+    def unreserve(self, ip, mark):
+        with self.lock:
+            f = self.fails.get(ip, [])
+            if mark in f:
+                f.remove(mark)
+
+    def check_password(self, ip, verify):
+        """Führt verify() (die eigentliche Prüfung) mit der Sperre aus: erst zählen, höchstens MAX_CHECKS Prüfungen gleichzeitig, falsch bleibt
+        gezählt. verify gibt wahr/falsch zurück. Sperre und Überlastung melden PermissionError (-> 429), ohne eine Prüfung zu starten."""
+        mark = self.reserve(ip)
+        if mark is None:
+            raise PermissionError("Zu viele Versuche, bitte 5 Minuten warten")
+        if not self.checks.acquire(blocking=False):
+            self.unreserve(ip, mark)
+            raise PermissionError("Die Box prüft gerade andere Anmeldungen, bitte gleich noch einmal versuchen")
+        try:
+            good = verify()
+        except BaseException:
+            self.unreserve(ip, mark)            # die Prüfung selbst ging schief (nicht das Passwort): nicht als Fehlversuch zählen
+            raise
+        finally:
+            self.checks.release()
+        if good:
+            self.unreserve(ip, mark)
+        return good
+
     WAITING_MSG = "Auf der BELABOX ist noch kein Passwort gesetzt. Bitte zuerst in der BELABOX-Oberfläche eines festlegen."
 
     def set_password(self, code, pw, ip):
@@ -1935,10 +1977,7 @@ class Auth:
             raise ValueError(self.WAITING_MSG)
         if self.configured or not self.setup_code:
             raise ValueError("Passwort ist schon gesetzt")
-        if self.throttled(ip):
-            raise PermissionError("Zu viele Versuche, bitte 5 Minuten warten")
-        if not hmac.compare_digest(code or "", self.setup_code):
-            self.fail(ip)
+        if not self.check_password(ip, lambda: hmac.compare_digest(code or "", self.setup_code)):
             raise ValueError("Setup-Code falsch")
         if len(pw or "") < 10:
             raise ValueError("Passwort: mindestens 10 Zeichen")
@@ -1958,16 +1997,12 @@ class Auth:
     def login(self, pw, ip, remember=False):
         if not self.configured:
             raise ValueError(self.WAITING_MSG if self.mode == "belabox-wartet" else "Noch kein Passwort gesetzt")
-        if self.throttled(ip):
-            raise PermissionError("Zu viele Versuche, bitte 5 Minuten warten")
         bh = self.bela_hash()
         if bh:
-            good = self.bela_ok(pw or "", bh)
+            verify = lambda: self.bela_ok(pw or "", bh)
         else:
-            good = hmac.compare_digest(self._hash(pw or "", bytes.fromhex(self.cfg["salt"])),
-                                       bytes.fromhex(self.cfg["hash"]))
-        if not good:
-            self.fail(ip)
+            verify = lambda: hmac.compare_digest(self._hash(pw or "", bytes.fromhex(self.cfg["salt"])), bytes.fromhex(self.cfg["hash"]))
+        if not self.check_password(ip, verify):
             raise ValueError("Passwort falsch")
         tok = secrets.token_urlsafe(32)
         with self.lock:
@@ -4830,7 +4865,62 @@ class SettingsTransfer:
         return self.wifi.import_saved(d["networks"])
 
 
+def source_allowed(ip):
+    """Darf diese Adresse die Oberfläche erreichen? Nur eigene und private Netze: Loopback (Tailscale-Proxy), private Adressbereiche, Link-Local,
+    Carrier-Grade-NAT (100.64.0.0/10, dort liegt auch Tailscale) und IPv6-ULA. Eine öffentliche Quelladresse heißt: die Oberfläche hängt
+    versehentlich im Internet (z. B. Portfreigabe, Modem mit öffentlicher Adresse); die KONZEPT.md sagt "nur privat erreichbar" (Issue #25)."""
+    try:
+        a = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    if isinstance(a, ipaddress.IPv6Address) and a.ipv4_mapped:
+        a = a.ipv4_mapped
+    return bool(a.is_loopback or a.is_private or a.is_link_local or (a.version == 4 and a in ipaddress.ip_network("100.64.0.0/10")))
+
+
+class LimitedHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer mit Grenzen (Issue #25): höchstens MAX_CONN Verbindungen zugleich, davon höchstens PER_IP je Absender (ein einzelner
+    Client mit lauter halb offenen Anfragen sperrt so nicht alle anderen aus), und keine Quelladressen aus dem öffentlichen Internet."""
+    daemon_threads = True
+    request_queue_size = 64
+    MAX_CONN = 64
+    PER_IP = 16
+    allow_public = False
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._conn_lock = threading.Lock()
+        self._conns = {}
+        self._total = 0
+
+    def verify_request(self, request, client_address):
+        ip = client_address[0]
+        if not self.allow_public and not source_allowed(ip):
+            return False
+        with self._conn_lock:
+            if self._total >= self.MAX_CONN or self._conns.get(ip, 0) >= self.PER_IP:
+                return False
+            self._conns[ip] = self._conns.get(ip, 0) + 1
+            self._total += 1
+        return True
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            ip = client_address[0]
+            with self._conn_lock:
+                self._total -= 1
+                n = self._conns.get(ip, 1) - 1
+                if n > 0:
+                    self._conns[ip] = n
+                else:
+                    self._conns.pop(ip, None)
+
+
 class Handler(BaseHTTPRequestHandler):
+    timeout = 15              # eine Verbindung, die so lange nichts sendet, wird beendet (Issue #25: halb offene Anfragen blieben ewig offen)
+    BODY_SECONDS = 15.0       # so lange darf der Inhalt einer Anfrage insgesamt brauchen (nicht nur je Teilstück)
     sampler = None
     cams = None
     auth = None
@@ -4882,7 +4972,28 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("ungültige Länge")
         if n > limit:
             raise ValueError("Die Anfrage ist zu groß")
-        return json.loads(self.rfile.read(n) or b"{}")
+        return json.loads(self.read_body(n) or b"{}")
+
+    def read_body(self, n):
+        """Liest n Bytes, insgesamt höchstens BODY_SECONDS lang (ein Absender, der alle paar Sekunden ein Byte schickt, hält sonst die Verbindung offen)."""
+        end = time.monotonic() + self.BODY_SECONDS
+        buf = b""
+        while len(buf) < n:
+            left = end - time.monotonic()
+            if left <= 0:
+                raise ValueError("Die Anfrage kam zu langsam")
+            conn = getattr(self, "connection", None)
+            if conn is None:                                      # ohne Verbindung (Tests mit nachgestellter Anfrage): einfach lesen
+                return self.rfile.read(n)
+            conn.settimeout(left)
+            try:
+                chunk = self.rfile.read1(n - len(buf))
+            except OSError:
+                raise ValueError("Die Anfrage kam zu langsam")
+            if not chunk:
+                raise ValueError("Die Anfrage ist unvollständig")
+            buf += chunk
+        return buf
 
     def send_bytes(self, code, body, ctype, cookie=None, headers=None):
         self.send_response(code)
@@ -5213,6 +5324,7 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8780)
     ap.add_argument("--demo", action="store_true", help="Beispielwerte statt /proc")
+    ap.add_argument("--allow-public", action="store_true", help=argparse.SUPPRESS)      # auch öffentliche Quelladressen annehmen (sonst nur Loopback und private Netze, Issue #25)
     ap.add_argument("--state", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"),
                     help="Ordner für Passwort-Hash und Kameraliste")
     ap.add_argument("--bela-config", default="", help="belaUI config.json: BELABOX-Passwort mitbenutzen")
@@ -5264,7 +5376,8 @@ def main():
                 print("auto_add:", e)
             time.sleep(3)
     threading.Thread(target=watcher, daemon=True).start()
-    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    LimitedHTTPServer.allow_public = args.allow_public
+    srv = LimitedHTTPServer((args.host, args.port), Handler)
     print(f"PIPBOX auf http://{args.host}:{args.port} (demo={args.demo})")
     srv.serve_forever()
 
