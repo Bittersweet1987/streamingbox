@@ -1996,8 +1996,50 @@ class UpdateNotes(unittest.TestCase):
         self.assertIn("setHtml(n,fmtNotes(d.notes))", h)
         self.assertNotIn('n.textContent=d.newer?d.notes:""', h)                       # nicht mehr als roher Text
         self.assertIn("swPending", h)                                                  # Sperre und Neuladen hängen an einem Zustand, der nicht von selbst zurückgesetzt wird
-        self.assertIn("location.reload()", h[h.index("async function swLoad"):][:1500])
+        self.assertIn("location.reload()", h[h.index("function swFinish"):][:700])          # am Ende des Updates einmal neu laden
+        self.assertIn("swFinish(", h[h.index("async function swLoad"):][:2600])
         self.assertNotIn("swWasInstalling", h)
+
+    def test_page_keeps_showing_progress_while_the_interface_restarts(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn("!pbUpdating", h[:h.index("</script>", h.index("var pbUpdating"))])        # beim Update kein Neuladen beim ersten 401
+        self.assertIn("/api/swprogress", h[h.index("async function swPublic"):][:400])
+        for card in ("swprog", "updprog"):                                                   # beide Update-Karten haben dieselbe Anzeige
+            self.assertIn('id="%s" class="prog"' % card, h)
+        self.assertIn("function progSet(", h)
+
+
+class UpdateProgress(unittest.TestCase):
+    """Fortschritt des Software-Updates: Prozent im Zustand, öffentlicher Abruf ohne Version und Adressen."""
+
+    def make(self, st):
+        d = tempfile.mkdtemp()
+        sw = server.SwUpdate(d, False, None)
+        sw.STATUS = os.path.join(d, "status.json")
+        if st is not None:
+            with open(sw.STATUS, "w") as f:
+                json.dump(st, f)
+        return sw
+
+    def test_public_view_has_only_state_step_and_percent(self):
+        sw = self.make({"state": "installing", "step": "Kopiere Programme und Oberfläche", "progress": 58, "time": int(time.time()),
+                        "frm": "0.9.1", "to": "0.9.2", "version": "0.9.2", "message": "intern"})
+        self.assertEqual(sw.progress_public(), {"state": "installing", "step": "Kopiere Programme und Oberfläche", "progress": 58})
+
+    def test_public_view_finished_old_and_garbage(self):
+        now = int(time.time())
+        self.assertEqual(self.make({"state": "done", "time": now, "progress": 100, "step": "x"}).progress_public(), {"state": "done", "step": "", "progress": 100})
+        self.assertEqual(self.make({"state": "done", "time": now - 7 * 3600, "progress": 100}).progress_public()["state"], "idle")    # alte Meldung
+        self.assertEqual(self.make(None).progress_public(), {"state": "idle", "step": "", "progress": 0})
+        for bad in (-5, 101, "50", True, None):
+            self.assertEqual(self.make({"state": "installing", "progress": bad, "time": now}).progress_public()["progress"], 0)
+        self.assertEqual(self.make({"state": "bogus", "time": now}).progress_public()["state"], "idle")
+
+    def test_progress_endpoint_works_without_login(self):
+        src = open(os.path.join(os.path.dirname(HERE), "server.py"), encoding="utf-8").read()
+        i = src.index('path == "/api/swprogress"')
+        self.assertLess(i, src.index('if not self.authed():', i - 200) + 400)                  # vor der Anmeldeprüfung
+        self.assertLess(src.index('path == "/api/swprogress"'), src.index('if path == "/api/metrics"'))
 
 
 class DeviceNaming(unittest.TestCase):
