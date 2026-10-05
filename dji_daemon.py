@@ -420,7 +420,13 @@ class Camera:
         self.leaving = False          # der Dienst wird beendet: Sitzung ohne Stopp des Streams verlassen, Verbindung ordentlich trennen
 
     def locked(self):
-        """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet."""
+        """Die Verbindung (das Netz) der Kamera darf nicht geändert werden, solange sie verbunden ist oder sendet. Beim Suchen und beim Aufbau der
+        Bluetooth-Verbindung geht es noch: das Netz wird erst kurz vor der Übergabe an die Kamera gelesen (Schritt "preparing"). Sonst wäre die
+        Eingabe bei einer Kamera, die nicht gefunden wird und alle 30 Sekunden neu sucht, jedes zweite Mal gesperrt."""
+        return self.state not in ("idle", "error", "searching", "connecting") or self.publishing
+
+    def mode_locked(self):
+        """Die Art (Stream oder nur Akku) lässt sich nur ändern, solange keine Sitzung läuft: die Sitzung hat sie beim Start gelesen."""
         return self.state not in ("idle", "error") or self.publishing
 
     def set_state(self, state, detail=""):
@@ -437,7 +443,7 @@ class Camera:
                   "battery": self.battery, "charging": self.charging,
                   "battery_age": int(time.time() - self.battery_at) if self.battery_at else None,
                   "in_range": time.time() - self.last_seen < 30,
-                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked()})
+                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked()})
         return c
 
     def resolve_target(self):
@@ -664,6 +670,9 @@ class Camera:
             if self.stop_requested:
                 return
 
+            if not cfg.get("status_only"):
+                # Netz, Passwort und Adresse jetzt noch einmal lesen: während des Suchens und Verbindens darf man sie ändern (siehe locked)
+                ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
             self.set_state("wifi", ssid)
             await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
             resp = await wait_for(ID_WIFI, 30)
@@ -1188,7 +1197,7 @@ class Daemon:
         if cam is None:
             return {"error": "Unbekannte Kamera"}
         if cmd == "update":
-            if cam.locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
+            if cam.mode_locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
                 return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
             if cam.locked() and any(k in req for k in NETWORK_FIELDS):
                 return {"error": "Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}

@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.103 (Beta)
+- Behoben: **Die Felder der Verbindung einer DJI-Kamera ("Netze in der Nähe", "Netze suchen", WLAN-Name, Passwort) ließen sich oft nicht anklicken.** Ursache (auf der Box abgelesen): Wird eine Kamera nicht gefunden, sucht sie alle 30 Sekunden neu (15 s "Sucht", dann 15 s "Fehler"). Während des Suchens waren die Felder gesperrt, die Eingabe also nur jede zweite Viertelminute möglich, und ein angefangener Eintrag wurde gesperrt. Jetzt sind die Felder beim Suchen und beim Aufbau der Bluetooth-Verbindung frei; gesperrt bleiben sie ab dem Koppeln, solange die Kamera verbunden ist oder sendet (wie bisher; der Hinweis "Zuerst trennen" steht dann über den Feldern).
+  - Dazu liest die Kamera-Sitzung Netz, Passwort und Adresse **kurz vor der Übergabe an die Kamera noch einmal** (vorher nur beim Start der Sitzung, vor dem Suchen). Eine Änderung während des Suchens gilt also noch für diesen Versuch.
+  - Die Art (Stream oder "Nur Akkustand lesen") bleibt gesperrt, solange eine Sitzung läuft, auch beim Suchen, weil die Sitzung sie beim Start liest.
+  - Tests: `tools/test_dji_service.py` (+2, 119): Sperre je Zustand, Netz-Änderung beim Suchen wird verwendet. **Mit einer echten Kamera nicht geprüft.**
+
 ## 0.9.102 (Beta)
 - Neu: **Netze in der Nähe zur Auswahl beim Einrichten einer DJI-Kamera.** Im Abschnitt "Verbindung" der Kamera (bei "Manuell" oder jeder Verbindung ohne eigenes WLAN der Box) gibt es unter "Gespeicherte Netze" jetzt **"Netze in der Nähe"**: eine Auswahlliste der WLANs, die die WLAN-Karte der Box zuletzt gefunden hat (nach Signalstärke, mit Schloss bei verschlüsselten Netzen). Netz wählen, Passwort eingeben, fertig. Ist das Netz schon gespeichert, gilt sein gespeichertes Passwort. Der Knopf "Netze suchen" über der Liste sucht neu.
   - Gesucht wird **im Vorfeld einmal von selbst**, sobald eine Kamera ein eigenes WLAN braucht und noch keine Suche vorliegt, und nur, wenn gerade nicht gesendet wird (danach höchstens alle 5 Minuten wieder, wenn die Liste leer blieb). Eine Suche kann eine laufende WLAN-Verbindung der Box kurz stören. Läuft auf der Karte ein Hotspot, sucht sie nicht (dann bleibt die Liste leer; die Karte "Verbindungen" nennt den Grund).
