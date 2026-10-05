@@ -173,7 +173,10 @@ class Feeders:
                 cmd = feeder_cmd(key, slot, self.rtmp_port, self.rtmp_app)
                 p = self.popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             except (OSError, ValueError) as e:
-                self.log(f"send: Zubringer {slot} nicht startbar ({type(e).__name__})")
+                if st.get("warned") != type(e).__name__:          # einmal melden statt alle 5 s
+                    st["warned"] = type(e).__name__
+                    self.log(f"send: Zubringer {slot} nicht startbar ({type(e).__name__}"
+                             + (": gst-launch-1.0 fehlt, Paket gstreamer1.0-tools)" if isinstance(e, FileNotFoundError) else ")"))
                 if st["stop"].wait(5):
                     return
                 continue

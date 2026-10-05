@@ -312,6 +312,9 @@ def prepare():
         raise Refuse("Der Bildaufbau konnte nicht erzeugt werden (Kamera-Schlüssel ungültig)")
     keys = configured_keys(cfg)
     always = bool(server.PipelineStore.always_plan(cfg))               # "alle Kameras immer bereit": kein Notbetrieb, keine Neustarts bei Kamerawechsel
+    note = server.PipelineStore.always_blocker(cfg)                    # Schalter an, aber nicht möglich: normaler Modus, mit Hinweis
+    if note:
+        print(f"send: {note}", flush=True)
     auto = bool(cfg.get("auto_failover", True)) and len(keys) > 1 and not always      # mit nur einer Kamera gibt es nichts umzuschalten
     live = live_keys() if (auto or always) else None
     if always:
@@ -340,7 +343,7 @@ def prepare():
         f.write(f"{mn * 1000}\n{mx * 1000}")
     with open(f"{WORK}/ips", "w") as f:
         f.write("\n".join(ips) + "\n")
-    return sv, lat, mn, mx, ips, {"cfg": cfg, "layout": used, "auto": auto, "always": always,
+    return sv, lat, mn, mx, ips, {"cfg": cfg, "layout": used, "auto": auto, "always": always, "always_note": note,
                                   "spread": "all" if st.get("spread") == "all" else "best",
                                   "sig": server.srtla_signature(srt)}
 
@@ -450,7 +453,7 @@ class Sender:
                     "restarts": dict(self.restarts), "last": self.last, "last_age": int(time.time() - self.last_at) if self.last_at else None, "time": int(time.time()),
                     "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
                     "view_live": VIEW_LIVE, "audio_live": AUDIO_LIVE,
-                    "applied": self.plan.get("sig")}
+                    "applied": self.plan.get("sig"), "always_note": self.plan.get("always_note")}
         if self.always is not None:
             keys = configured_keys(self.plan["cfg"])
             st = self.always_state or {}

@@ -633,6 +633,11 @@ def plugin_fill():
     return _FILL["ok"]
 
 
+def feeder_tool():
+    """Pfad von gst-launch-1.0 (Paket gstreamer1.0-tools) oder None: Die Zubringer von "alle Kameras immer bereit" brauchen es. Ein frisches BELABOX-Image bringt es nicht mit."""
+    return shutil.which("gst-launch-1.0")
+
+
 _VIEW = {"mtime": None, "ok": True}
 VIEW_ENABLED = True          # Ansicht im Betrieb (Issue #19): Fußleiste am Handy; ohne passenden Baustein (plugin_view) bleibt es beim Neustart
 
@@ -1112,7 +1117,7 @@ class PipelineStore:
         sind in der Tauschgruppe und alle Töne laufen über den Ton-Umschalter. cams: die Kameras beim Aufbau; ein Kamerawechsel an einem Platz braucht keinen
         Neustart (der Zubringer holt dann den Stream der neuen Kamera)."""
         c = cls._safe_cfg(cfg)
-        if c["type"] != "pip" or c.get("always_ready") is not True or not KEY_RE.match(c.get("main", "")) or not plugin_swap() or not plugin_fill():
+        if c["type"] != "pip" or c.get("always_ready") is not True or not KEY_RE.match(c.get("main", "")) or not plugin_swap() or not plugin_fill() or not feeder_tool():
             return None
         pip, pip2, pip3, multi = cls._layout(c)
         if not pip:
@@ -1127,6 +1132,18 @@ class PipelineStore:
         nums = [0, 1, 2 if pip2 else 15, 3 if pip3 else 15]
         return {"cams": cams, "group": len(cams), "audio_pos": pos, "asel": True, "always": True,
                 "state": nums[0] | nums[1] << 4 | nums[2] << 8 | nums[3] << 12, "line": " ".join(map(str, nums))}
+
+    @classmethod
+    def always_blocker(cls, cfg):
+        """Warum "alle Kameras immer bereit" trotz Schalter nicht gilt (Text für die Anzeige), sonst None. Die Sendung läuft dann im normalen Modus weiter."""
+        c = cls._safe_cfg(cfg)
+        if c["type"] != "pip" or c.get("always_ready") is not True or cls.always_plan(cfg):
+            return None
+        if not feeder_tool():
+            return "Alle Kameras immer bereit ist nicht aktiv: Das Programm gst-launch-1.0 fehlt (Paket gstreamer1.0-tools). Die Sendung läuft im normalen Modus. Ein Software-Update installiert das Paket."
+        if not plugin_swap() or not plugin_fill():
+            return "Alle Kameras immer bereit ist nicht aktiv: Der Überlagerungs-Baustein ist noch nicht auf dem neuen Stand. Die Sendung läuft im normalen Modus. Ein Software-Update baut ihn neu."
+        return "Alle Kameras immer bereit ist nicht aktiv: Die Kameras des Bildaufbaus passen nicht dazu (jede Kamera nur einmal, mindestens ein kleines Bild). Die Sendung läuft im normalen Modus."
 
     AUDIO_POS = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}
 
