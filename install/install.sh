@@ -170,13 +170,13 @@ PY
     # Wird nur gebaut, wenn ein Patch neuer ist; schlägt das fehl, bleibt die bisherige Fassung (oder das BELABOX-Original) aktiv.
     install -d /opt/pipbox/belacoder
     bc_changed=0
-    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch; do
+    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch; do
       cmp -s "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp" || bc_changed=1
     done
     [ -x /opt/pipbox/bin/belacoder ] || bc_changed=1
     if [ "$bc_changed" = 1 ]; then
       if sh "$HERE/belacoder/build.sh"; then
-        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch; do
+        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch; do
           install -m 644 "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp"
         done
       else
