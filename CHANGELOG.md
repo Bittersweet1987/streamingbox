@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.91 (Beta)
+- Behoben: **Abbruch der Sendung nach mehreren Ton-Wechseln** (Ton-Knopf in der Fußleiste, Tausch, Ton-Quelle in der Pipeline-Karte). Ursache: Beim Wechsel der Tonquelle schloss die Ausgangszeit des Tons nahtlos an das Ende der alten Quelle an. Zwischen dem letzten Ton-Puffer der alten und dem ersten der neuen Kamera vergehen aber 0,2 bis 0,7 s (DJI liefert den Ton stoßweise). Bei jedem Wechsel fiel der Ton so ein Stück hinter die Echtzeit zurück (gemessen: 7 s nach 19 Wechseln). Der Muxer gab das Bild dann nur noch stoßweise frei, die Bitrate brach ein, bis `belacoder` den Ausgang für stehend hielt und neu startete.
+  - Jetzt führt der Umschalter für jeden Tonweg den "pünktlichen" Zeitabstand zur Echtzeit und hält ihn beim Wechsel ein. Was vom neuen Weg dadurch vor dem Ende des alten läge (verspätet ausgelieferte Puffer), wird verworfen; die Zeit läuft nie rückwärts. Gemessen mit dem echten `belacoder` und den echten Kamera-Streams der Box (ohne Netz, `tools/boxtest_switch_belacoder.sh`): vorher Stillstand nach 13 bis 22 Wechseln, jetzt 45 Wechsel in 6 Minuten ohne Stillstand (auch mit Bildtausch dazwischen); auf der laufenden Sendekette 36 Ton-Wechsel ohne Neustart. Die Tests der Ansicht (`boxtest_e2e_view.py`, Tausch und klassisch) laufen mit dem neuen Baustein durch.
+  - Gilt ab dem nächsten Start der Sendung (der Baustein wird beim Update neu gebaut).
+  - Hinweis: Sind die Verzögerungen der Kameras nicht aufeinander abgestimmt, springt der Ton beim Wechsel um diesen Unterschied (ein Stück fehlt oder ist kurz still). Die Verzögerungen sollten so stehen, dass die Quellen gleichzeitig ankommen (siehe Kamerakarte).
+  - Nicht geprüft: lange Läufe über Stunden und Bild-Wechsel allein ohne Ton.
+
 ## 0.9.90 (Beta)
 - Sprachen: Alle neuen Texte seit 0.9.85 sind jetzt in allen 14 Sprachen übersetzt (maschinell, nicht von Muttersprachlern geprüft). Der Test verlangt wieder vollständige Wörterbücher.
 
