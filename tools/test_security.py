@@ -314,3 +314,22 @@ class HttpDeadlines(unittest.TestCase):
             self.assertIn(b"200", other.recv(200).split(b"\r\n")[0])             # Absender B ist nicht betroffen
             for s in held + [third, other]:
                 s.close()
+
+
+class QuietErrors(unittest.TestCase):
+    def test_cut_connections_leave_no_traceback(self):
+        """Issue #25 (letzte Kleinigkeit): Eine abgeschnittene Anfrage schrieb ValueError und BrokenPipeError ins Journal."""
+        srv = server.LimitedHTTPServer(("127.0.0.1", 0), server.Handler)
+        with mock.patch("socketserver.BaseServer.handle_error") as base:
+            for exc in (BrokenPipeError(), ConnectionResetError(), socket.timeout(), TimeoutError(), OSError(32, "x")):
+                try:
+                    raise exc
+                except OSError:
+                    srv.handle_error(None, ("127.0.0.1", 1))
+            self.assertEqual(base.call_count, 0)                                    # still
+            try:
+                raise RuntimeError("echter Fehler")
+            except RuntimeError:
+                srv.handle_error(None, ("127.0.0.1", 1))
+            self.assertEqual(base.call_count, 1)                                    # ein echter Fehler bleibt sichtbar
+        srv.server_close()
