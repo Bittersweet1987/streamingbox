@@ -94,12 +94,6 @@ def get(url, limit=100000):
         return r.read(limit + 1)[:limit]
 
 
-def has_candidate(env):
-    """Kennt apt das Paket tailscale (hat es eine Version zum Installieren)?"""
-    r = subprocess.run(["apt-cache", "policy", "tailscale"], env=env, capture_output=True, text=True, timeout=60)
-    return r.returncode == 0 and re.search(r"^\s*Candidate:\s*(?!\(none\))\S", r.stdout, re.M) is not None
-
-
 def do_install():
     if installed():
         status(state="idle", message="Tailscale ist schon installiert.")
@@ -120,20 +114,8 @@ def do_install():
     os.chmod(SOURCE, 0o644)
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
     status(step="Aktualisiere die Paketliste (nur Tailscale)")
-    # Die Paketliste muss das Paket kennen, sonst meldet apt "Unable to locate package". Ein anderer apt-Lauf (automatische Updates
-    # nach dem Start) sperrt die Listen kurz; deshalb mehrere Versuche, und als letzter Ausweg die ganze Paketliste statt nur der Tailscale-Quelle.
-    out = ""
-    only = ["apt-get", "update", "-o", "Dir::Etc::sourcelist=sources.list.d/tailscale.list", "-o", "Dir::Etc::sourceparts=-",
-            "-o", "APT::Get::List-Cleanup=0"]
-    for i, cmd in enumerate([only] * 4 + [["apt-get", "update"]]):
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
-        out = (r.stdout + r.stderr)[-300:].replace("\n", " ")
-        if has_candidate(env):
-            break
-        if i < 4:
-            time.sleep(15)
-    else:
-        raise RuntimeError("Die Installation von Tailscale ist fehlgeschlagen: " + out)
+    subprocess.run(["apt-get", "update", "-o", "Dir::Etc::sourcelist=sources.list.d/tailscale.list",
+                    "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0"], env=env, capture_output=True, timeout=300)
     status(step="Installiere Tailscale")
     r = subprocess.run(["apt-get", "install", "-y", "--no-install-recommends", "-o", "DPkg::Lock::Timeout=120", "tailscale"],
                        env=env, capture_output=True, text=True, timeout=900)
@@ -173,27 +155,19 @@ def do_login():
         status(state="idle", step="", login_url="", message="Verbunden.")
 
 
-def run_wait(cmd, timeout):
-    """Befehl ausführen. Gibt (Rückgabecode, Ausgabe) zurück; bei Zeitüberschreitung (None, bis dahin gelesene Ausgabe).
-    Wartet "tailscale serve" auf die Freischaltung im Konto, gibt es den Link aus und blockiert; den braucht die Oberfläche."""
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return r.returncode, r.stdout + r.stderr
-    except subprocess.TimeoutExpired as e:
-        return None, "".join(x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
-
-
 def do_serve_on():
     status(state="working", step="Gebe die Oberfläche im privaten Netz frei", message="", hint_url="")
-    rc, out = run_wait(["tailscale", "serve", "--bg", f"--https=443", f"http://127.0.0.1:{PORT}"], 40)
+    r = subprocess.run(["tailscale", "serve", "--bg", f"--https=443", f"http://127.0.0.1:{PORT}"], capture_output=True,
+                       text=True, timeout=40)
+    out = r.stdout + r.stderr
     if "not enabled on your tailnet" in out or "enable" in out.lower() and "visit" in out.lower():
         m = URL_RE.search(out)
         status(state="needs_serve", step="", hint_url=m.group(0) if m else "",
                message="Tailscale muss die Funktion „Serve“ (HTTPS) für dein Netz einmal freischalten. Öffne den Link, lasse "
                        "„Funnel“ AUS und klicke „Enable HTTPS“. Danach erneut freigeben.")
         return
-    if rc != 0:
-        raise RuntimeError("Freigabe fehlgeschlagen: " + (out[-150:].replace("\n", " ") or "timeout"))
+    if r.returncode != 0:
+        raise RuntimeError("Freigabe fehlgeschlagen: " + out[-150:].replace("\n", " "))
     status(state="idle", step="", hint_url="", message="Die Oberfläche ist im privaten Tailscale-Netz erreichbar.")
 
 
@@ -225,15 +199,16 @@ def funnel_active(cfg=None):
 
 def do_funnel_on():
     status(state="working", step="Gebe die Oberfläche öffentlich im Internet frei (Funnel)", message="", hint_url="")
-    rc, out = run_wait(["tailscale", "funnel", "--bg", "--yes", str(PORT)], 40)
-    if rc != 0 or not funnel_active():
+    r = subprocess.run(["tailscale", "funnel", "--bg", "--yes", str(PORT)], capture_output=True, text=True, timeout=40)
+    out = r.stdout + r.stderr
+    if r.returncode != 0 or not funnel_active():
         low = out.lower()
         if "funnel" in low and ("not enabled" in low or "not available" in low or "enable" in low or "policy" in low or "visit" in low):
             m = URL_RE.search(out)
             status(state="needs_funnel", step="", hint_url=m.group(0) if m else "",
                    message="Tailscale muss „Funnel“ (und HTTPS) für dein Netz einmal erlauben. Öffne den Link, erlaube es und versuche es dann erneut.")
             return
-        raise RuntimeError("Funnel fehlgeschlagen: " + (out[-150:].replace("\n", " ") or "timeout"))
+        raise RuntimeError("Funnel fehlgeschlagen: " + out[-150:].replace("\n", " "))
     log("Funnel an (ohne Zeitgrenze)")
     status(state="idle", step="", hint_url="",
            message="Die Oberfläche ist öffentlich im Internet erreichbar. Die Freigabe bleibt an, auch nach einem Neustart der Box, bis sie beendet wird.")
@@ -242,7 +217,7 @@ def do_funnel_on():
 def do_funnel_off(message="Die öffentliche Freigabe ist beendet. Die Oberfläche bleibt im privaten Tailscale-Netz erreichbar."):
     status(state="working", step="Beende die öffentliche Freigabe", message="")
     ts("funnel", "reset", timeout=30)                        # setzt die Freigaben zurück; danach nur die der Oberfläche wieder im PRIVATEN Netz
-    run_wait(["tailscale", "serve", "--bg", "--https=443", f"http://127.0.0.1:{PORT}"], 40)
+    subprocess.run(["tailscale", "serve", "--bg", "--https=443", f"http://127.0.0.1:{PORT}"], capture_output=True, text=True, timeout=40)
     if funnel_active():
         raise RuntimeError("Die öffentliche Freigabe ließ sich nicht beenden. Bitte in einer Konsole auf der Box: sudo tailscale funnel reset")
     log("Funnel aus")
