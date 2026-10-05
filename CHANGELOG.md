@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.106 (Beta)
+- Neu: **Das Protokollpaket (Karte "Protokolle") enthält jetzt den Zustand der Tailscale-Freigaben** (`tailscale serve status` und `tailscale funnel status`) und aus dem Journal von Tailscale nur die Zeilen zu Freigabe, Zertifikat, Anmeldung und Fehlern (der Rest ist Rauschen). Anlass: Auf einer Box ging die öffentliche Freigabe (Funnel) angeblich immer wieder verloren; im bisherigen Paket stand dazu nichts vom Tailscale-Dienst, nur das Protokoll unseres Helfers (dort: Funnel an um 14:32, danach nur noch von Hand "aus" und "an" um 15:10 und 15:59 UTC, nichts von selbst).
+  - **Die Ursache für das Verlieren der Freigabe ist damit nicht gefunden oder behoben**: Unser Code beendet Funnel nie von selbst; nur der Knopf "Beenden" tut das. Das neue Paket soll zeigen, ob die Freigabe in Tailscale wirklich verschwindet (dann steht es in `funnel status`) und was der Dienst dazu meldet. Die Namen und Adressen sind wie bisher bereinigt.
+  - Test: `tools/test_logs.py` (+1).
+
+
 ## 0.9.105 (Beta)
 - Geändert: **Die Verbindung einer DJI-Kamera (Auswahl der Verbindung, Netze in der Nähe, gespeicherte Netze, WLAN-Name, Passwort, Adresse, "Löschen") lässt sich jetzt jederzeit ändern, auch wenn die Kamera verbunden ist oder streamt.** Vorher war der ganze Bereich gesperrt, solange die Kamera verbunden war ("Zuerst trennen"), und bei einer Kamera, die nicht gefunden wird, zusätzlich jede zweite Viertelminute. Der Bereich "Bild und Stream" war nie gesperrt.
   - Eine Änderung gilt **ab der nächsten Verbindung** der Kamera; die laufende bleibt bestehen. Ist die Kamera verbunden, steht darüber ein Hinweis.
