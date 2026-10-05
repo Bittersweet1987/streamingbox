@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.109 (Beta)
+- **Testversion auf Wunsch: Der Tailscale-Teil ist wieder auf dem Stand von 0.9.94.** Anlass: Nach einem Neustart war die Box mit 0.9.94 (und frisch angemeldetem Tailscale) sofort öffentlich erreichbar, mit 0.9.107 (ebenfalls frisch angemeldet) nicht. Wir wollen sehen, ob es an unserem Tailscale-Teil liegt.
+  - Zurückgesetzt auf 0.9.94: der Helfer `install/pipbox-remote.py` (damit entfallen die mehrfachen Versuche beim Laden der Paketliste aus 0.9.100 und das Auswerten des Freischalt-Links bei Zeitüberschreitung aus 0.9.101), die Klasse `Remote` in `server.py` und die Karte "Fernzugriff" (damit entfällt die Prüfung der öffentlichen Adresse aus 0.9.108).
+  - **Folgen:** Auf einer Box ohne Tailscale kann die Installation wieder mit "Unable to locate package tailscale" scheitern, und "Freigeben" kann wieder mit "timed out after 40 seconds" enden, wenn Serve oder Funnel im Konto noch nicht freigeschaltet sind. Wer Tailscale schon eingerichtet hat, merkt davon nichts.
+  - Unverändert bleiben alle anderen Neuerungen (auch die Tailscale-Zeilen im Protokollpaket und die Tailscale-Aufnahmen beim Update).
+  - **Erwartung ehrlich gesagt:** Der Tailscale-Teil läuft nur, wenn man in der Karte etwas drückt oder die Karte öffnet, nicht beim Start der Box. Ich erwarte daher keinen Unterschied beim Neustart. Der Test zeigt, ob das stimmt.
+  - Die zugehörigen Tests (`tools/test_remote_install.py`, `tools/test_remote_public.py`) sind dabei zu Platzhaltern geworden; die alten stehen in der Git-Historie (0.9.108).
+
+
 ## 0.9.108 (Beta)
 - Geändert: **Die Karte "Fernzugriff" meldet die öffentliche Freigabe (Funnel) erst als fertig, wenn die öffentliche Adresse wirklich antwortet.** Bisher stand "freigegeben", sobald die Einstellung gesetzt war, obwohl Tailscale nach dem Anmelden oder Umschalten erst Zertifikat und Adresse im Internet vorbereitet. Die Adresse ging dann noch eine Weile nicht, und die Karte sagte trotzdem "freigegeben".
   - Die Box prüft jetzt selbst: Sie löst den Namen über einen öffentlichen Namensdienst (1.1.1.1, dann 8.8.8.8) auf, verbindet sich mit dem Zertifikat der Adresse und ruft die Startseite ab (Weg: von der Box ins Internet zu Tailscale und zurück). Das Ergebnis erscheint in der Karte: "Die öffentliche Adresse wird geprüft …", "… antwortet noch nicht. Tailscale bereitet gerade Zertifikat und Adresse vor … Bitte nicht aus- und wieder einschalten" oder "… antwortet." Solange sie nicht antwortet, steht im Kopf "wird vorbereitet" statt "freigegeben". Bis zur ersten Antwort wird alle 8 Sekunden geprüft, danach alle 2 Minuten.
