@@ -860,7 +860,7 @@ function djiCardHtml(c){
     <label class="f">Name<input class="d-name" maxlength="40" value="${esc(djiName(c))}"></label>
     <details class="dsec" data-sec="conn"${op("conn")}><summary>Verbindung <span class="muted dsum-conn"></span></summary>
       <label class="f">Verbindung der Kamera<select class="d-wifi"><option value="">– wählen –</option>${netOpts}${missing}<option value="manual"${c.wifi_ifname==="manual"?" selected":""}>Manuell (WLAN-Name, Passwort, Adresse)</option></select></label>
-      <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist oder sendet. Zuerst trennen.</div>
+      <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Kamera ist verbunden. Änderungen an der Verbindung gelten ab der nächsten Verbindung, die laufende bleibt bestehen.</div>
       <div class="ph" style="margin-top:4px">Ein WLAN-Hotspot oder -Netz der Box: Die Kamera bekommt Name und Passwort selbst. Jede andere Verbindung (Ethernet, USB-Router, Modem): Hier den WLAN-Namen und das Passwort eintragen, dem die Kamera beitreten soll. Die Adresse der Box kommt aus der gewählten Verbindung.</div>
       <div class="d-manual dnet"${djiNeedsNet(c)?"":" hidden"}>
         <div class="f d-savedrow"${(c.saved||[]).length?"":" hidden"}><span class="flh"><span>Gespeicherte Netze</span><button type="button" class="flb crit d-saveddel">Löschen</button></span><select class="d-saved"><option value="">– gespeicherte Netze –</option>${saved}</select></div>
@@ -924,10 +924,9 @@ function djiDynamic(){
     card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });
     card.querySelector(".d-auto").closest("label").hidden=!!c.status_only;     // Nur-Akku-Kameras verbinden immer automatisch      // ohne Stream gibt es nichts zu verbinden und einzustellen
     card.querySelector(".d-disconnect").disabled=!active;
-    card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel,.d-nearby,.d-nearscan").forEach(f=>{ f.disabled=!!c.locked; });
     djiNearby(card);
     card.querySelector(".d-lockhint").hidden=!c.locked;
-    const ss=card.querySelector(".d-ssid"); if(ss&&ss!==document.activeElement&&ss.value!==(c.ssid||"")) ss.value=c.ssid||"";   // z. B. vom Dienst vorgeschlagenes WLAN derselben Verbindung
+    const ss=card.querySelector(".d-ssid"); if(ss&&ss!==document.activeElement&&!djiPend[c.addr]&&ss.value!==(c.ssid||"")) ss.value=c.ssid||"";   // z. B. vom Dienst vorgeschlagenes WLAN derselben Verbindung
     const sv=card.querySelector(".d-saved");
     if(sv&&sv!==document.activeElement){
       const names=(c.saved||[]), have=[...sv.options].slice(1).map(o=>o.value);
@@ -1012,6 +1011,9 @@ $("djicams").addEventListener("change",e=>{
       t.value=""; card.querySelector(".d-pw").focus(); }
   } else if(cl.contains("d-saved")){ if(t.value){ card.querySelector(".d-ssid").value=t.value; card.querySelector(".d-pw").value="";
       djiCmd({cmd:"use_saved",addr,ssid:t.value}).then(()=>djiLoad()); } }
+  else if(cl.contains("d-ssid")) djiUpdate(addr,{ssid:t.value});
+  else if(cl.contains("d-pw")) djiUpdate(addr,{password:t.value});
+  else if(cl.contains("d-ip")) djiUpdate(addr,{ip:t.value});
   else if(cl.contains("d-res")) djiUpdate(addr,{resolution:t.value});
   else if(cl.contains("d-fps")) djiUpdate(addr,{fps:parseInt(t.value)});
   else if(cl.contains("d-stab")) djiUpdate(addr,{stabilization:t.value});
@@ -1022,9 +1024,12 @@ $("djicams").addEventListener("input",e=>{
   const addr=djiAddr(e); if(!addr) return; const t=e.target, cl=t.classList;
   if(cl.contains("d-br")){ const v=parseFloat(t.value); if(v>=0.5&&v<=16) djiUpdate(addr,{bitrate:Math.round(v*1000)}); }
   else if(cl.contains("d-name")){ if(t.value.trim()) djiUpdate(addr,{name:t.value.trim()}); }
-  else if(cl.contains("d-ssid")) djiUpdate(addr,{ssid:t.value});
-  else if(cl.contains("d-pw")) djiUpdate(addr,{password:t.value});
-  else if(cl.contains("d-ip")) djiUpdate(addr,{ip:t.value});
+  else if(cl.contains("d-ssid")||cl.contains("d-pw")||cl.contains("d-ip")){
+    // Verbindet oder streamt die Kamera gerade, speichern wir erst beim Verlassen des Feldes ("change"): Reißt der Stream ab und die Kamera verbindet sich neu,
+    // soll sie nie einen halb getippten Netznamen lesen. Sonst wie bisher bei jedem Tastendruck.
+    const cam=(djiData.cameras||[]).find(x=>x.addr===addr)||{}; if(cam.locked) return;
+    djiUpdate(addr,cl.contains("d-ssid")?{ssid:t.value}:(cl.contains("d-pw")?{password:t.value}:{ip:t.value}));
+  }
 });
 $("djicams").addEventListener("click",async e=>{
   const addr=djiAddr(e); if(!addr) return; const cl=e.target.classList;
