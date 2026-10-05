@@ -253,8 +253,15 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .dcam .dright{white-space:nowrap;flex:0 0 auto;font-size:13px}
 .dcam .dbody{padding:0 0 12px}
 .dcam .dsub{font-size:13px;margin-bottom:4px}
-.dcam label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
-.dcam label.f input,.dcam label.f select{width:100%}
+.dcam label.f,.dcam div.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px;min-width:0}
+.dcam label.f input,.dcam label.f select,.dcam div.f select{width:100%}
+.dcam .flh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;min-height:20px}
+.dcam .flb{background:none;border:0;padding:0 2px;font-size:12px;font-weight:400;color:var(--accent);cursor:pointer;white-space:nowrap}
+.dcam .flb.crit{color:var(--crit)}
+.dcam .flb:disabled{opacity:.4;cursor:default}
+.dcam .dnet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px}
+@media (max-width:560px){.dcam .dnet{grid-template-columns:minmax(0,1fr)}}
+.dcam .dnet[hidden],.dcam div.f[hidden],.dcam label.f[hidden]{display:none}
 .dcam .chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
 .dcam .dsec{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
 .dcam .dsec>summary{cursor:pointer;font-size:13px;padding:4px 0}
@@ -821,8 +828,9 @@ function djiCardHtml(c){
       <label class="f">Verbindung der Kamera<select class="d-wifi"><option value="">– wählen –</option>${netOpts}${missing}<option value="manual"${c.wifi_ifname==="manual"?" selected":""}>Manuell (WLAN-Name, Passwort, Adresse)</option></select></label>
       <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Verbindung lässt sich nicht ändern, solange die Kamera verbunden ist oder sendet. Zuerst trennen.</div>
       <div class="ph" style="margin-top:4px">Ein WLAN-Hotspot oder -Netz der Box: Die Kamera bekommt Name und Passwort selbst. Jede andere Verbindung (Ethernet, USB-Router, Modem): Hier den WLAN-Namen und das Passwort eintragen, dem die Kamera beitreten soll. Die Adresse der Box kommt aus der gewählten Verbindung.</div>
-      <div class="d-manual"${djiNeedsNet(c)?"":" hidden"}>
-        <label class="f d-savedrow"${(c.saved||[]).length?"":" hidden"}>Gespeicherte Netze<span style="display:flex;gap:6px"><select class="d-saved"><option value="">– gespeicherte Netze –</option>${saved}</select><button type="button" class="del d-saveddel">Löschen</button></span></label>
+      <div class="d-manual dnet"${djiNeedsNet(c)?"":" hidden"}>
+        <div class="f d-savedrow"${(c.saved||[]).length?"":" hidden"}><span class="flh"><span>Gespeicherte Netze</span><button type="button" class="flb crit d-saveddel">Löschen</button></span><select class="d-saved"><option value="">– gespeicherte Netze –</option>${saved}</select></div>
+        <div class="f d-nearrow"><span class="flh"><span>Netze in der Nähe</span><button type="button" class="flb d-nearscan">Netze suchen</button></span><select class="d-nearby"><option value="">– Netz wählen –</option></select></div>
         <label class="f">WLAN-Name der Kamera<input class="d-ssid" maxlength="32" autocomplete="off" value="${esc(c.ssid||"")}"></label>
         <label class="f">WLAN-Passwort<input class="d-pw" type="password" maxlength="63" autocomplete="new-password" placeholder=""></label>
         <label class="f d-iprow"${other?" hidden":""}>Adresse der Box in diesem Netz<input class="d-ip" maxlength="45" value="${esc(c.ip||"")}"></label>
@@ -837,8 +845,31 @@ function djiCardHtml(c){
     </details>
   </div></details>`;
 }
+// Netze in der Nähe: Ergebnis der letzten Suche der WLAN-Karte (Karte "Verbindungen"). Gesucht wird einmal von selbst (alle 5 Minuten höchstens, nur ohne
+// Sendung), sonst auf Knopfdruck, damit eine Suche die Verbindung nicht stört.
+let nearAuto=0;
+function nearNets(){
+  const seen=new Set(), out=[];
+  for(const n of ((typeof wifiData!=="undefined"&&wifiData&&wifiData.scan&&wifiData.scan.nets)||[]).slice().sort((a,b)=>(b.signal||0)-(a.signal||0)))
+    if(n.ssid&&!seen.has(n.ssid)){ seen.add(n.ssid); out.push(n); }
+  return out;
+}
+function nearAutoScan(){            // im Vorfeld suchen: sobald eine Kamera ein eigenes WLAN braucht und noch keine Suche vorliegt (nicht während der Sendung)
+  if(nearAuto&&Date.now()-nearAuto>300000) nearAuto=0;
+  if(typeof wifiData==="undefined"||!wifiData||!$("w_if").value||nearNets().length||nearAuto||(typeof sendData!=="undefined"&&sendData&&sendData.active)||!(djiData.cameras||[]).some(djiNeedsNet)) return;
+  nearAuto=Date.now(); srtlaCall("POST","/api/wifi",{action:"scan",iface:$("w_if").value}).then(()=>[3000,8000].forEach(ms=>setTimeout(wifiLoad,ms))).catch(()=>{});
+}
+function djiNearby(card){
+  const man=card.querySelector(".d-manual"), sel=card.querySelector(".d-nearby"); if(!man||!sel||man.hidden||man.offsetParent===null) return;
+  const nets=nearNets();
+  const sig=JSON.stringify(nets.map(n=>[n.ssid,Math.round((n.signal||0)/10),n.security]));
+  if(sel.dataset.sig===sig||document.activeElement===sel) return;
+  sel.dataset.sig=sig;
+  sel.innerHTML='<option value="">'+(nets.length?"– Netz wählen –":"– keine Netze gefunden –")+'</option>'+nets.map(n=>`<option value="${esc(n.ssid)}">${esc(n.ssid)} · ${n.security&&n.security!=="offen"?"🔒 ":""}${n.signal} %</option>`).join("");
+}
 function djiDynamic(){
   const d=djiData, box=$("djicams");
+  nearAutoScan();
   for(const c of (d.cameras||[])){
     const card=box.querySelector(`.dcam[data-addr="${c.addr}"]`); if(!card) continue;
     let [txt,step]=DJI_STATE[c.state]||[c.state,0], col=c.state==="streaming"||c.state==="status"?"var(--ok)":c.state==="error"?"var(--crit)":c.state==="idle"?"var(--muted)":c.state==="pairing"?"var(--warn)":"var(--accent)";
@@ -859,7 +890,8 @@ function djiDynamic(){
     card.querySelectorAll(".dsec").forEach(x=>{ x.hidden=!!c.status_only; });
     card.querySelector(".d-auto").closest("label").hidden=!!c.status_only;     // Nur-Akku-Kameras verbinden immer automatisch      // ohne Stream gibt es nichts zu verbinden und einzustellen
     card.querySelector(".d-disconnect").disabled=!active;
-    card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel").forEach(f=>{ f.disabled=!!c.locked; });
+    card.querySelectorAll(".d-wifi,.d-ssid,.d-pw,.d-ip,.d-saved,.d-saveddel,.d-nearby,.d-nearscan").forEach(f=>{ f.disabled=!!c.locked; });
+    djiNearby(card);
     card.querySelector(".d-lockhint").hidden=!c.locked;
     const ss=card.querySelector(".d-ssid"); if(ss&&ss!==document.activeElement&&ss.value!==(c.ssid||"")) ss.value=c.ssid||"";   // z. B. vom Dienst vorgeschlagenes WLAN derselben Verbindung
     const sv=card.querySelector(".d-saved");
@@ -940,6 +972,10 @@ $("djicams").addEventListener("change",e=>{
     const other=(djiData.wifi_options||[]).some(o=>o.ifname===t.value&&(o.type==="other"||o.secret_missing));
     card.querySelector(".d-manual").hidden=!(t.value==="manual"||other); card.querySelector(".d-iprow").hidden=other;
     djiUpdate(addr,{wifi_ifname:t.value});
+  } else if(cl.contains("d-nearby")){ if(t.value){ const cam=(djiData.cameras||[]).find(x=>x.addr===addr)||{};
+      card.querySelector(".d-ssid").value=t.value; card.querySelector(".d-pw").value="";
+      if((cam.saved||[]).includes(t.value)) djiCmd({cmd:"use_saved",addr,ssid:t.value}).then(()=>djiLoad()); else djiUpdate(addr,{ssid:t.value,password:""});
+      t.value=""; card.querySelector(".d-pw").focus(); }
   } else if(cl.contains("d-saved")){ if(t.value){ card.querySelector(".d-ssid").value=t.value; card.querySelector(".d-pw").value="";
       djiCmd({cmd:"use_saved",addr,ssid:t.value}).then(()=>djiLoad()); } }
   else if(cl.contains("d-res")) djiUpdate(addr,{resolution:t.value});
@@ -961,6 +997,7 @@ $("djicams").addEventListener("click",async e=>{
   if(cl.contains("d-remove")){ if(confirm("Diese Kamera entfernen? Der Eintrag in der Kameraliste bleibt und lässt sich dort löschen.")&&await djiCmd({cmd:"remove",addr})) { djiStruct=""; tick(); } }
   else if(cl.contains("d-saveddel")){ const sel=e.target.closest(".d-savedrow").querySelector(".d-saved");
     if(sel.value&&confirm("Dieses gespeicherte Netz löschen?")) await djiCmd({cmd:"delete_saved",addr,ssid:sel.value}); }
+  else if(cl.contains("d-nearscan")){ nearAuto=Date.now(); wifiDo({action:"scan",iface:$("w_if").value},"Suche läuft …"); e.target.closest(".d-nearrow").querySelector(".d-nearby").dataset.sig=""; return; }
   else if(cl.contains("d-connect")) await djiCmd({cmd:"connect",addr});
   else if(cl.contains("d-reconnect")) await djiCmd({cmd:"reconnect",addr});
   else if(cl.contains("d-disconnect")) await djiCmd({cmd:"disconnect",addr});
