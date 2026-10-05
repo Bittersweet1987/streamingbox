@@ -3502,7 +3502,15 @@ class DjiService:
                 cam = None                                    # die Kamera der Liste gehört dem HDMI-Eingang, nicht umbenennen
             if cam and str(req["name"]).strip() and cam["name"] != str(req["name"]).strip()[:40]:
                 self.cams.update(cam["id"], name=str(req["name"]))
+        old_key = None
+        if cmd == "update" and req.get("status_only") is True and self.cams:
+            old_key = (self._config().get(str(req.get("addr", "")).upper()) or {}).get("rtmp_key")
         res = self._call(req)
+        if old_key and old_key.startswith("dji-") and not res.get("error"):
+            # Der Akku erscheint nun bei der HDMI-Kamera: der bisherige eigene Eintrag der Kamera in der Kameraliste entfällt
+            cam = next((c for c in self.cams.cams if c["key"] == old_key), None)
+            if cam:
+                self.cams.remove(cam["id"])
         if cmd == "add" and res.get("key") and self.cams:
             self._ensure_listed([{"rtmp_key": res["key"], "model": req.get("model"), "name": req.get("name")}])
         return {k: v for k, v in res.items() if k not in ("reply_to", "token")}
