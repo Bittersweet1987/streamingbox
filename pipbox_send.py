@@ -23,6 +23,7 @@ import time
 
 sys.path.insert(0, "/opt/pipbox")
 import server  # noqa: E402  (nur Prüf- und Erzeugungsfunktionen, startet nichts)
+import pipbox_always  # noqa: E402  (Zubringer und Auswahl im Modus "alle Kameras immer bereit")
 
 STATE = "/var/lib/pipbox"
 BELACODER = "/opt/pipbox/bin/belacoder"      # belacoder mit tolerantem Regler (belacoder/), sonst das Original aus dem Suchpfad
@@ -250,7 +251,7 @@ def write_pipeline(cfg):
     global DELAY_LIVE, DELAY_LIVE_PIPS, SWAP_BASE, VIEW_LIVE, AUDIO_LIVE
     DELAY_LIVE = "pbctl" in text
     DELAY_LIVE_PIPS = "pip-queue=" in text or "cam1=" in text
-    plan = server.PipelineStore.swap_plan(cfg) if "pbpipsel" in text else None
+    plan = (server.PipelineStore.always_plan(cfg) or server.PipelineStore.swap_plan(cfg)) if "pbpipsel" in text else None
     SWAP_BASE = {"cams": plan["cams"], "group": plan["group"]} if plan else None
     try:
         os.unlink(server.SWAP_STATE)              # Rückmeldung der letzten Sendekette ist veraltet
@@ -310,9 +311,16 @@ def prepare():
     if not server.PipelineStore(os.devnull).build(cfg):
         raise Refuse("Der Bildaufbau konnte nicht erzeugt werden (Kamera-Schlüssel ungültig)")
     keys = configured_keys(cfg)
-    auto = bool(cfg.get("auto_failover", True)) and len(keys) > 1      # mit nur einer Kamera gibt es nichts umzuschalten
-    live = live_keys() if auto else None
-    if auto and live is not None:
+    always = bool(server.PipelineStore.always_plan(cfg))               # "alle Kameras immer bereit": kein Notbetrieb, keine Neustarts bei Kamerawechsel
+    auto = bool(cfg.get("auto_failover", True)) and len(keys) > 1 and not always      # mit nur einer Kamera gibt es nichts umzuschalten
+    live = live_keys() if (auto or always) else None
+    if always:
+        if live is not None and not (set(keys) & live):
+            raise Refuse("Keine Kamera sendet gerade an die Box")
+        auto = False
+    if always:
+        eff, used = cfg, tuple(keys)
+    elif auto and live is not None:
         eff, used = effective_cfg(cfg, live)
         if eff is None:
             raise Refuse("Es sendet nur eine deaktivierte Kamera an die Box" if live else "Keine Kamera sendet gerade an die Box")
@@ -332,7 +340,7 @@ def prepare():
         f.write(f"{mn * 1000}\n{mx * 1000}")
     with open(f"{WORK}/ips", "w") as f:
         f.write("\n".join(ips) + "\n")
-    return sv, lat, mn, mx, ips, {"cfg": cfg, "layout": used, "auto": auto,
+    return sv, lat, mn, mx, ips, {"cfg": cfg, "layout": used, "auto": auto, "always": always,
                                   "spread": "all" if st.get("spread") == "all" else "best",
                                   "sig": server.srtla_signature(srt)}
 
@@ -344,6 +352,14 @@ class Sender:
         self.plan = plan
         self.fo = Failover(plan["cfg"], plan["layout"]) if plan["auto"] else None
         self.layout = tuple(plan["layout"])
+        self.always = None
+        if plan.get("always"):
+            self.always = pipbox_always.Controller(
+                load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file,
+                delay_values=server.PipelineStore.delay_values, cam_live_path=server.CAM_LIVE,
+                select_name=server.SWAP_SELECT, delay_name="main-delay-ms",
+                feeders=pipbox_always.Feeders(log=lambda m: print(m, flush=True)), log=lambda m: print(m, flush=True))
+        self.always_state = {}
         self.waiting = False
         self.senv = None
         self._ups_t = 0
@@ -435,6 +451,13 @@ class Sender:
                     "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
                     "view_live": VIEW_LIVE, "audio_live": AUDIO_LIVE,
                     "applied": self.plan.get("sig")}
+        if self.always is not None:
+            keys = configured_keys(self.plan["cfg"])
+            st = self.always_state or {}
+            data["failover"] = {"auto": True, "always": True, "layout": [k for k in st.get("slots", []) if k], "configured": keys,
+                                "inactive": list(self.plan["cfg"].get("inactive") or []), "waiting": False, "degraded": False, "wait": {},
+                                "live": st.get("alive", []), "main": st.get("main")}
+            data["always"] = True
         if self.fo is not None:
             keys = configured_keys(self.plan["cfg"])
             data["failover"] = {"auto": True, "layout": list(self.layout), "configured": keys, "inactive": list(self.plan["cfg"].get("inactive") or []),
@@ -508,10 +531,13 @@ class Sender:
         self.spawn("srtla_send", self.args("srtla_send"), env=senv)
         self.write_status()          # Zustand "startet" sofort sichtbar machen
         self.wait_links_ready()
+        if self.always is not None:
+            self.always.start()                     # Zubringer zuerst: die Eingänge der Kette (udpsrc) bekommen dann gleich Daten
+            self.sync_swap_base()
         self.spawn("belacoder", self.args("belacoder"), env=env)
         with self.lock:
             self.state = "running"
-        print("send: Sendekette gestartet", flush=True)
+        print("send: Sendekette gestartet" + (" (alle Kameras immer bereit)" if self.always is not None else ""), flush=True)
         while not self.stop_ev.is_set():
             if self.fo is not None:
                 try:
@@ -556,10 +582,30 @@ class Sender:
                     self.refresh_uplinks()
             except Exception as e:           # eine kaputte Einstellung darf die Übertragung nie beenden
                 print(f"send: Netze konnten nicht neu gelesen werden ({type(e).__name__})", flush=True)
-            self.write_status()
-            self.flush_stats()
-            self.stop_ev.wait(2)
+            if self.always is None:
+                self.write_status()
+                self.flush_stats()
+                self.stop_ev.wait(2)
+            else:
+                # "alle Kameras immer bereit": Belegung der Kameras alle 0,5 s nachführen (Ausfall der Hauptkamera: Wechsel innerhalb von etwa 2 s),
+                # Anzeige und Statistik wie bisher alle 2 s
+                try:
+                    self.always_state = self.always.tick()
+                    self.sync_swap_base()
+                except Exception as e:                  # die Auswahl darf die Übertragung nie beenden
+                    print(f"send: Kameraauswahl: Fehler {type(e).__name__}", flush=True)
+                if time.monotonic() - getattr(self, "_slow_t", 0) >= 2:
+                    self._slow_t = time.monotonic()
+                    self.write_status()
+                    self.flush_stats()
+                self.stop_ev.wait(0.5)
         self.shutdown()
+
+    def sync_swap_base(self):
+        """Die Kameras je Platz (für die Verzögerungsdatei der Oberfläche) im Zustand der Sendekette führen: sie können sich im Betrieb ändern."""
+        global SWAP_BASE
+        if self.always is not None and SWAP_BASE is not None:
+            SWAP_BASE = {"cams": list(self.always.binder.slot_key), "group": SWAP_BASE["group"]}      # ein Schlüssel je Platz, "" = frei
 
     def refresh_inactive(self):
         """Wurde in der Oberfläche eine Kamera deaktiviert oder wieder aktiviert, gilt das sofort für die automatische Umschaltung, ohne Neustart der Sendung."""
@@ -646,6 +692,8 @@ class Sender:
         with self.lock:
             self.state = "stopping"
         self.write_status()
+        if self.always is not None:
+            self.always.stop()
         for name in ("belacoder", "srtla_send"):
             p = self.procs.get(name)
             if p and p.poll() is None:
@@ -656,7 +704,7 @@ class Sender:
                 time.sleep(0.2)
             if p.poll() is None:
                 p.kill()
-        for f in (STATUS, STATS, BC_STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE):
+        for f in (STATUS, STATS, BC_STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE, server.CAM_LIVE):
             try:
                 os.remove(f)
             except OSError:

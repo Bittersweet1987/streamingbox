@@ -612,6 +612,27 @@ def plugin_swap():
     return _SWAP["ok"]
 
 
+_FILL = {"mtime": None, "ok": True}
+FEED_PORT = 9410            # "alle Kameras immer bereit": Zubringer je Platz (0 bis 3) geben Bild an Port FEED_PORT + 2*Platz und Ton an +1 weiter (nur Loopback)
+FEED_VIDEO_CAPS = "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000"
+FEED_AUDIO_CAPS = "audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved"
+FEED_FILL_VIDEO = "video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1"
+CAM_LIVE = "/run/pipbox-send/cam-live"       # pbctl meldet hier, welche Plätze gerade Bilder liefern ("1 0 1 0")
+
+
+def plugin_fill():
+    """Kann der installierte Baustein den Ausgang bei fehlendem Eingang füllen (Eigenschaft fill-caps von pbpipsel)? Ohne Baustein (Entwicklungsrechner) ja."""
+    try:
+        mt = os.stat(PLUGIN_SO).st_mtime
+        if _FILL["mtime"] != mt:
+            with open(PLUGIN_SO, "rb") as f:
+                data = f.read()
+            _FILL.update(mtime=mt, ok=b"fill-caps" in data and b"live-file" in data)
+    except OSError:
+        return True
+    return _FILL["ok"]
+
+
 _VIEW = {"mtime": None, "ok": True}
 VIEW_ENABLED = True          # Ansicht im Betrieb (Issue #19): Fußleiste am Handy; ohne passenden Baustein (plugin_view) bleibt es beim Neustart
 
@@ -827,7 +848,7 @@ class PipelineStore:
     DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0, "always_ready": False}
     Q = "queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040"
 
     def __init__(self, path):
@@ -915,7 +936,8 @@ class PipelineStore:
         cfg = {"type": t, "main": main, "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False, "swap_cams": 0}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": req.get("auto_failover", True) is not False, "swap_cams": 0,
+               "always_ready": t == "pip" and req.get("always_ready") is True}
         cfg["styles"] = clean_styles(req.get("styles"), self.cfg.get("styles"), strict=True)       # Deckkraft, Beschnitt, Rahmen je kleinem Bild
         if t == "pip":
             try:
@@ -1039,6 +1061,7 @@ class PipelineStore:
         num("swap_cams", 0, 4)
         if out["swap_cams"] not in (2, 4):
             out["swap_cams"] = 0
+        out["always_ready"] = out.get("always_ready") is True and out.get("type") == "pip"
         out["type"] = "pip" if out.get("type") == "pip" else "single"
         out["styles"] = clean_styles(out.get("styles"))
         if "inactive" in out:
@@ -1080,6 +1103,29 @@ class PipelineStore:
         pos = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}[audio]
         nums = [0, 1, 2 if pip2 else 15, 3 if pip3 else 15]
         return {"cams": cams, "group": group, "audio_pos": pos, "asel": pos < 0 or pos + 1 < group,
+                "state": nums[0] | nums[1] << 4 | nums[2] << 8 | nums[3] << 12, "line": " ".join(map(str, nums))}
+
+    @classmethod
+    def always_plan(cls, cfg):
+        """Plan für "alle Kameras immer bereit" (Issue #19) oder None. Jede Kamera hat einen Platz (0 = Hauptbild beim Aufbau, 1 bis 3 = kleine Bilder), an
+        dem ein Zubringer (pipbox_always.py) ihren Stream aus dem RTMP-Server weiterreicht; die Sendekette selbst hat nie eine Quelle, die ausfällt. Alle Kameras
+        sind in der Tauschgruppe und alle Töne laufen über den Ton-Umschalter. cams: die Kameras beim Aufbau; ein Kamerawechsel an einem Platz braucht keinen
+        Neustart (der Zubringer holt dann den Stream der neuen Kamera)."""
+        c = cls._safe_cfg(cfg)
+        if c["type"] != "pip" or c.get("always_ready") is not True or not KEY_RE.match(c.get("main", "")) or not plugin_swap() or not plugin_fill():
+            return None
+        pip, pip2, pip3, multi = cls._layout(c)
+        if not pip:
+            return None
+        cams = [c["main"], c["pip"]] + ([c["pip2"]] if pip2 else []) + ([c["pip3"]] if pip3 else [])
+        if len(set(cams)) != len(cams):
+            return None
+        audio = c.get("audio", "main")
+        if audio == "pip2" and not pip2 or audio == "pip3" and not pip3 or audio not in ("main", "pip", "pip2", "pip3"):
+            audio = "main"
+        pos = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}[audio]
+        nums = [0, 1, 2 if pip2 else 15, 3 if pip3 else 15]
+        return {"cams": cams, "group": len(cams), "audio_pos": pos, "asel": True, "always": True,
                 "state": nums[0] | nums[1] << 4 | nums[2] << 8 | nums[3] << 12, "line": " ".join(map(str, nums))}
 
     AUDIO_POS = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}
@@ -1197,7 +1243,7 @@ class PipelineStore:
             th = d + FRAME_MS if d else 0
             return (f"queue name={name} max-size-time={(th + 500) * 1000000} max-size-buffers={0 if d else 30} "
                     f"leaky=downstream" + (f" min-threshold-time={th * 1000000}" if d else ""))
-        plan = self.swap_plan(c) if pip else None
+        plan = (self.always_plan(c) or self.swap_plan(c)) if pip else None
         if plan:
             return self._build_dual(c, plan, base, small, xy, pip2, pip3, sty)
         out.append(f"rtmpsrc location={base}/{c['main']} do-timestamp=true !\nflvdemux name=demux\n")
@@ -1279,11 +1325,14 @@ class PipelineStore:
         Kamera zu allen ihren Warteschlangen (vfq = Bild groß, vsq = Bild klein, aq = Ton)."""
         q = self.Q
         cams, group, ap = plan["cams"], plan["group"], plan["audio_pos"]
+        always = bool(plan.get("always"))          # Eingänge von den Zubringern (udpsrc, enden nie) statt rtmpsrc ! flvdemux
         # Größe des kleinen Bildes je Kamera: die der Stelle, an der sie beim Aufbau steht (Stelle 1 bis 3); die Hauptkamera bekommt die der Stelle 1.
         # Beim Tausch folgt die Größe der Kamera, nicht der Stelle (der Decoder verkleinert fest auf diese Größe).
         sizes = [pip_size(c["size_pct"]), pip_size(c["size_pct2"]), pip_size(c["size_pct3"])]
         out = []
-        out.append(f"pbpipsel name=vsel tag-offset=true force-key=true state={plan['state']} !\n"
+        fillv = f' fill-caps="{FEED_FILL_VIDEO}"' if always else ""
+        filla = f' fill-caps="{FEED_AUDIO_CAPS}"' if always else ""
+        out.append(f"pbpipsel name=vsel tag-offset=true force-key=true state={plan['state']}{fillv} !\n"
                    "identity name=v_delay signal-handoffs=TRUE !\nvideo/x-raw,format=NV12 !\n"
                    f"pbpipmix name=pipmix follow-tag=true corner={c['corner']}{xy(c, 'x', 'y', c['corner'])} width-pct={c['size_pct']}{sty(0, 1)}"
                    + (f" slot2=1 corner2={c['corner2']}{xy(c, 'x2', 'y2', c['corner2'])}{sty(1, 2)}" if pip2 else "")
@@ -1298,22 +1347,31 @@ class PipelineStore:
         for i, key in enumerate(cams):
             d = int(c.get(DELAY_KEYS[i], 0) or 0)
             items = [f"vsq{i}:s"]
-            out.append(f"rtmpsrc location={base}/{key} do-timestamp=true !\nflvdemux name=dm{i}\n")
+            vport, aport = FEED_PORT + 2 * i, FEED_PORT + 2 * i + 1
+            if always:
+                vsrc = (f'udpsrc port={vport} address=127.0.0.1 buffer-size=8388608 do-timestamp=true caps="{FEED_VIDEO_CAPS}" !\n'
+                        "rtph264depay ! h264parse config-interval=-1 !\n")
+            else:
+                out.append(f"rtmpsrc location={base}/{key} do-timestamp=true !\nflvdemux name=dm{i}\n")
+                vsrc = f"dm{i}.video !\n"
             w, h = sizes[max(i - 1, 0)]
             small_chain = (f"{small(f'vsq{i}', DELAY_KEYS[i])} !\nh264parse ! {small_decode(w, h)}"
                            f"queue max-size-time=300000000 max-size-buffers=2 leaky=downstream ! pbpipsink slot={(i + 3) % 4}\n")
             if i < group:
                 qv = f"{q} name=vfq{i}" + (f" min-threshold-time={(d + FRAME_MS) * 1000000}" if d else "")
-                out.append(f"dm{i}.video !\ntee name=vt{i}\n")
+                out.append(f"{vsrc}tee name=vt{i}\n")
                 out.append(f"vt{i}. !\n{qv} !\nh264parse ! mppvideodec !\nvideo/x-raw,format=NV12 !\nvsel.sink_{i}\n")
                 out.append(f"vt{i}. !\n{small_chain}")
                 items.insert(0, f"vfq{i}:v")
             else:
-                out.append(f"dm{i}.video !\n{small_chain}")
+                out.append(f"{vsrc}{small_chain}")
             qa = f"{q} name=aq{i}" + (f" min-threshold-time={d * 1000000}" if d else "")
             if plan["asel"] and i < group:
-                out.append(f"dm{i}.audio !\n{qa} !\naacparse ! avdec_aac ! audioconvert ! audioresample quality=10 sinc-filter-mode=1 !\n"
-                           f"audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved ! asel.sink_{i}\n")
+                if always:                                           # der Zubringer liefert den Ton schon als PCM (48 kHz, Stereo)
+                    out.append(f'udpsrc port={aport} address=127.0.0.1 buffer-size=1048576 do-timestamp=true caps="{FEED_AUDIO_CAPS}" !\n{qa} !\nasel.sink_{i}\n')
+                else:
+                    out.append(f"dm{i}.audio !\n{qa} !\naacparse ! avdec_aac ! audioconvert ! audioresample quality=10 sinc-filter-mode=1 !\n"
+                               f"audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved ! asel.sink_{i}\n")
                 items.append(f"aq{i}:a")
             elif not plan["asel"] and i == ap + 1:
                 out.append(f"dm{i}.audio !\n{qa} !\naacparse ! avdec_aac ! identity name=a_delay signal-handoffs=TRUE !\n{opus} ! {q} ! mux.\n")
@@ -1322,9 +1380,10 @@ class PipelineStore:
                 out.append(f"dm{i}.audio !\n{mute}")
             queues.append(f" cam{i}={','.join(items)}")
         if plan["asel"]:
-            out.append(f"pbpipsel name=asel state={0 if ap < 0 else ap + 1} !\nidentity name=a_delay signal-handoffs=TRUE !\n"
+            out.append(f"pbpipsel name=asel state={0 if ap < 0 else ap + 1}{filla} !\nidentity name=a_delay signal-handoffs=TRUE !\n"
                        f"{vol}opusenc bitrate=128000 ! opusparse ! {q} ! mux.\n")
-        out.append("pbctl name=pbctl selector=vsel" + (" audio-selector=asel" if plan["asel"] else "") + f" audio-pos={ap}" + "".join(queues) + "\n")
+        out.append("pbctl name=pbctl selector=vsel" + (" audio-selector=asel" if plan["asel"] else "") + f" audio-pos={ap}" + "".join(queues)
+                   + (f" live-file={CAM_LIVE}" if always else "") + "\n")
         out.append("mpegtsmux name=mux !\nappsink name=appsink\n")
         return "\n".join(out)
 
@@ -1346,6 +1405,25 @@ def view_only_change(a, b):
             c["styles"][k] = dict(c["styles"][k], visible=True)
         return c
     return a.get("type") == "pip" and norm(a) == norm(b)
+
+
+def always_compatible(a, b):
+    """Unterscheiden sich zwei Bildaufbau-Einstellungen nur in Dingen, die die Sendekette im Modus "alle Kameras immer bereit" ohne Neustart übernimmt?
+    Das sind: welche Kamera an welchem Platz ist (die Zahl der kleinen Bilder muss gleich bleiben), Verzögerungen, Tonquelle, "Bild einblenden",
+    deaktivierte Kameras, automatisches Umschalten. Alles andere (Art, Ecken, Größen, Stile, Schalter selbst) ändert den Aufbau."""
+    def norm(c):
+        c = dict(c)
+        for k in ("main", "pip", "pip2", "pip3"):
+            c[k] = bool(c.get(k))
+        for k in DELAY_KEYS:
+            c.pop(k, None)
+        for k in ("audio", "inactive", "auto_failover", "swap_cams"):
+            c.pop(k, None)
+        c["styles"] = clean_styles(c.get("styles"))
+        for k in STYLE_SLOTS:
+            c["styles"][k] = dict(c["styles"][k], visible=True)
+        return c
+    return a.get("type") == "pip" and b.get("type") == "pip" and a.get("always_ready") is True and b.get("always_ready") is True and norm(a) == norm(b)
 
 
 class SendControl:
@@ -1544,6 +1622,12 @@ class SendControl:
         d = self._detail()
         return bool(self._active() and d.get("view_live") and not (d.get("failover") or {}).get("degraded"))
 
+    def always_live(self):
+        """Läuft die Sendekette im Modus "alle Kameras immer bereit" (Kamerawechsel und Rückkehr ohne Neustart)?"""
+        if self.demo:
+            return False
+        return bool(self._active() and self._detail().get("always"))
+
     def view_degraded(self):
         """Läuft die Sendung gerade im Notbetrieb (weniger Kameras als eingestellt)?"""
         if self.demo:
@@ -1594,6 +1678,17 @@ class SendControl:
                  "slot": slot_of[k], "main": slot_of[k] == 0, "hidden": slot_of[k] > 0 and bool(hide >> (slot_of[k] - 1) & 1),
                  "inactive": slot_of[k] > 0 and k in (c.get("inactive") or [])} for k in keys]
         options = [k for k in order if place[k]]
+        if self.always_live():
+            # "alle Kameras immer bereit": Knöpfe und Tonwahl nur für Kameras, deren Bilder gerade ankommen; das Hauptbild ist, wer es jetzt wirklich ist
+            fo = self._detail().get("failover") or {}
+            live = set(fo.get("live") or [])
+            effmain = fo.get("main")
+            cams = [dict(x, main=(x["key"] == effmain) if effmain else x["main"]) for x in cams if x["key"] in live or x["key"] == effmain]
+            options = [k for k in options if place[k] in live or place[k] == effmain]
+            if place.get(src) not in live and options:
+                src = options[0]
+            if src not in options:
+                options = [src]
         aud_key = place[src]
         return {"cams": cams,
                 "audio": {"src": src, "key": aud_key, "name": (listed.get(aud_key) or {}).get("name") or aud_key, "mute": mute,
@@ -5494,7 +5589,7 @@ class Handler(BaseHTTPRequestHandler):
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
                     raise ValueError("Kamera unbekannt")
                 shown = self.pipeline.swap_main_pip(with_key)
-                if self.send.swap_live():
+                if self.send.always_live() or self.send.swap_live():
                     note = "Getauscht, ohne Unterbrechung."
                     if shown:                      # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
                         hide, aud = PipelineStore.view_values(self.pipeline.cfg)
@@ -5509,6 +5604,13 @@ class Handler(BaseHTTPRequestHandler):
                 before["styles"] = clean_styles(before.get("styles"))        # eine unveränderte Einstellung ohne Stile gilt nicht als Änderung
                 self.pipeline.set(d, [c["key"] for c in self.cams.cams])
                 restarted, note = (False, "")
+                if self.pipeline.cfg != before and self.send.always_live() and always_compatible(before, self.pipeline.cfg):
+                    # "alle Kameras immer bereit": der Sende-Dienst liest die Einstellung und übernimmt Zuordnung und Verzögerung selbst; Ansicht und Ton stellt pbctl
+                    hide, aud = PipelineStore.view_values(self.pipeline.cfg)
+                    cur = self.send.view_state()
+                    if (hide, aud) != PipelineStore.view_values(before):
+                        self.send.apply_view(hide, aud, bool(cur and cur["mute"]))
+                    return self.reply(200, {"ok": True, "restarted": False, "note": "Gespeichert. Die Änderung gilt sofort, ohne Neustart."})
                 if self.pipeline.cfg != before and view_only_change(before, self.pipeline.cfg):
                     # nur "Bild einblenden" und/oder die Tonquelle geändert: im Betrieb ohne Neustart übernehmen, wenn die Sendekette das kann
                     hide, aud = PipelineStore.view_values(self.pipeline.cfg)
