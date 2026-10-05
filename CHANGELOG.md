@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.90 (Beta)
+- Sprachen: Alle neuen Texte seit 0.9.85 sind jetzt in allen 14 Sprachen übersetzt (maschinell, nicht von Muttersprachlern geprüft). Der Test verlangt wieder vollständige Wörterbücher.
+
 ## 0.9.89 (Beta)
 - Geändert: Im Notbetrieb (weniger Kameras als eingestellt) startet eine Änderung von Ton oder Bild-Einblendung die Sendung **nicht mehr neu** (vorher 5 bis 6 Sekunden Pause). Sie wird gespeichert und gilt, sobald alle Kameras zurück sind. Stumm schalten geht im Notbetrieb nicht (Hinweis).
 - Neu: Das Journal des Dienstes `pipbox` zeigt jeden Ton-/Ansichtswechsel mit Uhrzeit ("Ansicht live umgestellt ..., bestätigt nach x s" oder "nicht bestätigt, Neustart folgt"). So lassen sich Abbrüche der Sendung einem Wechsel zuordnen.
