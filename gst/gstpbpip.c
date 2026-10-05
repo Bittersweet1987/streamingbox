@@ -942,11 +942,55 @@ typedef struct {
   gint pend_idx;                 /* Ton: Eingang, auf den gerade gewartet wird (-1: keiner) */
   gint64 pend_since;             /* Laufzeit, seit der auf pend_idx gewartet wird */
   GstBuffer *held;               /* Ton: der letzte Puffer wird einen Schritt zurückgehalten, damit er beim Umschalten ausgeblendet werden kann */
+  /* Ausgang am Leben halten ("immer bereit"): liefert der gewählte Eingang nichts, schickt ein Faden schwarze Bilder / Stille im Takt */
+  GstCaps *fill_caps;            /* Format, bevor ein Eingang eines geliefert hat (leer: kein Füllen) */
+  GThread *fill_thread;
+  volatile gint fill_run;
+  gint64 last_push_rt;           /* Laufzeit, zu der zuletzt ECHTE Daten weitergegeben wurden (-1: noch keine) */
+  gboolean after_fill;           /* zuletzt wurde gefüllt: der nächste echte Puffer darf nicht vor das Ende des Gefüllten */
+  gboolean filling;              /* es wird gerade gefüllt */
+  gint64 fill_rt0;               /* Ton: Laufzeit und Ausgangszeit bei Beginn des Füllens (die Stille läuft in Echtzeit) */
+  GstClockTime fill_out0;
 } PbPipSel;
 typedef struct { GstElementClass parent_class; } PbPipSelClass;
 G_DEFINE_TYPE(PbPipSel, pb_pip_sel, GST_TYPE_ELEMENT)
 
-enum { SEL_0, SEL_STATE, SEL_TAG, SEL_KEY };
+enum { SEL_0, SEL_STATE, SEL_TAG, SEL_KEY, SEL_FILL };
+
+/* Wann zuletzt ein Bild je Kamera (Nummer des Eingangs) am Bild-Umschalter ankam, in Laufzeit der Pipeline (-1: noch keins). Der Ton-Umschalter
+ * liest es, um zu wissen, ob die Kamera da ist (der DJI-Ton kommt stoßweise, darum zählt das Bild); pbctl meldet es der Oberfläche. Es gibt
+ * höchstens eine Sendekette je Prozess. */
+static GMutex pb_live_lock;
+static gint64 pb_live_rt[SEL_PADS] = { -1, -1, -1, -1 };
+#define LIVE_DEAD_NS (1500 * GST_MSECOND)       /* so lange ohne Bild gilt eine Kamera als nicht da (Anzeige und Wechsel der Hauptkamera) */
+#define FILL_VIDEO_AFTER (500 * GST_MSECOND)    /* Bild: so lange ohne Bild vom gewählten Eingang, dann schwarze Bilder */
+#define FILL_AUDIO_AFTER (150 * GST_MSECOND)    /* Ton: so lange ohne Ton, wenn das Bild der Kamera fehlt, dann Stille */
+#define FILL_DEAD (700 * GST_MSECOND)           /* Ton: so lange fehlt das Bild einer Kamera, dann gilt ihr Ton als weg */
+#define FILL_AUDIO_LONG (3 * GST_SECOND)        /* Ton: so lange ohne Ton, auch wenn das Bild da ist (Kamera ohne Mikrofon), dann Stille */
+
+static void pb_live_touch(gint idx, gint64 rt) {
+  if (idx < 0 || idx >= SEL_PADS)
+    return;
+  g_mutex_lock(&pb_live_lock);
+  pb_live_rt[idx] = rt;
+  g_mutex_unlock(&pb_live_lock);
+}
+
+static gint64 pb_live_get(gint idx) {
+  if (idx < 0 || idx >= SEL_PADS)
+    return -1;
+  g_mutex_lock(&pb_live_lock);
+  const gint64 v = pb_live_rt[idx];
+  g_mutex_unlock(&pb_live_lock);
+  return v;
+}
+
+static void pb_live_reset(void) {
+  g_mutex_lock(&pb_live_lock);
+  for (guint i = 0; i < SEL_PADS; i++)
+    pb_live_rt[i] = -1;
+  g_mutex_unlock(&pb_live_lock);
+}
 
 static GstStaticPadTemplate sel_sink_tmpl = GST_STATIC_PAD_TEMPLATE("sink_%u", GST_PAD_SINK, GST_PAD_REQUEST, GST_STATIC_CAPS_ANY);
 static GstStaticPadTemplate sel_src_tmpl = GST_STATIC_PAD_TEMPLATE("src", GST_PAD_SRC, GST_PAD_ALWAYS, GST_STATIC_CAPS_ANY);
@@ -964,6 +1008,8 @@ static void pb_sel_reset(PbPipSel *self) {
   self->pend_idx = -1;
   gst_clear_buffer(&self->held);
   self->next_out = self->prev_pts = GST_CLOCK_TIME_NONE;
+  self->last_push_rt = -1;
+  self->after_fill = self->filling = FALSE;
   gst_caps_replace(&self->sent_caps, NULL);
   for (guint i = 0; i < SEL_PADS; i++)
     gst_caps_replace(&self->caps[i], NULL);
@@ -1120,9 +1166,163 @@ static GstFlowReturn pb_sel_gap_locked(PbPipSel *self, gint rate, gint ch, GstCl
   return ret;
 }
 
+/* ---- Füllen ("immer bereit"): Liefert der gewählte Eingang nichts (Kamera weg, noch nicht da), hält ein Faden den Ausgang am Leben, damit Encoder
+ * und Muxer nie auf einen Eingang warten und die Sendung nicht neu startet. Bild: schwarze Bilder im Takt der Bildrate; Ton: Stille in Echtzeit.
+ * Kommt der Eingang zurück, schließen die echten Puffer ohne Rückwärtssprung an (after_fill). Nur mit der Eigenschaft fill-caps. */
+
+/* Datenstrom-Anfang, Format und Segment für das Füllen (Aufrufer hält lock). caps: das zu sendende Format. */
+static gboolean pb_sel_push_sticky_fill_locked(PbPipSel *self, GstCaps *caps) {
+  if (!self->sent_start) {
+    gchar *sid = g_strdup_printf("pbpipsel/%p", (void *) self);
+    GstEvent *ev = gst_event_new_stream_start(sid);
+    g_free(sid);
+    gst_event_set_group_id(ev, gst_util_group_id_next());
+    if (!gst_pad_push_event(self->src, ev))
+      return FALSE;
+    self->sent_start = TRUE;
+  }
+  if (!self->sent_caps || !gst_caps_is_equal(self->sent_caps, caps)) {
+    if (!gst_pad_push_event(self->src, gst_event_new_caps(caps)))
+      return FALSE;
+    gst_caps_replace(&self->sent_caps, caps);
+  }
+  if (!self->sent_seg) {
+    GstSegment seg;
+    gst_segment_init(&seg, GST_FORMAT_TIME);
+    if (!gst_pad_push_event(self->src, gst_event_new_segment(&seg)))
+      return FALSE;
+    self->sent_seg = TRUE;
+  }
+  return TRUE;
+}
+
+static void pb_sel_fill_video(PbPipSel *self, gint64 rt) {
+  g_mutex_lock(&self->lock);
+  GstCaps *caps = self->sent_caps ? self->sent_caps : self->fill_caps;
+  GstVideoInfo vi;
+  if (!caps || !gst_video_info_from_caps(&vi, caps) || GST_VIDEO_INFO_FORMAT(&vi) != GST_VIDEO_FORMAT_NV12) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  if (self->last_push_rt < 0 && !self->filling) {                    /* die Frist beginnt erst, wenn die Sendekette läuft */
+    self->last_push_rt = rt;
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  if (!self->filling && (GstClockTime) (rt - self->last_push_rt) < FILL_VIDEO_AFTER) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  gint fn = GST_VIDEO_INFO_FPS_N(&vi), fd = GST_VIDEO_INFO_FPS_D(&vi);
+  if (fn <= 0 || fd <= 0) {
+    fn = 30;
+    fd = 1;
+  }
+  const GstClockTime dur = gst_util_uint64_scale(GST_SECOND, (guint64) fd, (guint64) fn);
+  if (!pb_sel_push_sticky_fill_locked(self, caps)) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  const guint state = g_atomic_int_get(&self->state);
+  if (!self->have_next) {
+    self->next_out = (GstClockTime) rt;
+    self->have_next = TRUE;
+  }
+  const gint64 target = rt + self->offset;                           /* dahin gehörten die echten Bilder jetzt */
+  for (guint n = 0; n < 30 && (gint64) self->next_out <= target; n++) {
+    GstBuffer *b = gst_buffer_new_and_alloc(GST_VIDEO_INFO_SIZE(&vi));
+    GstMapInfo m;
+    if (!gst_buffer_map(b, &m, GST_MAP_WRITE)) {
+      gst_buffer_unref(b);
+      break;
+    }
+    const gsize y_off = GST_VIDEO_INFO_PLANE_OFFSET(&vi, 0), uv_off = GST_VIDEO_INFO_PLANE_OFFSET(&vi, 1);
+    memset(m.data + y_off, 16, uv_off - y_off);                      /* schwarz (Y 16, U/V 128) */
+    memset(m.data + uv_off, 128, m.size - uv_off);
+    gst_buffer_unmap(b, &m);
+    GST_BUFFER_PTS(b) = self->next_out;
+    GST_BUFFER_DTS(b) = self->next_out;
+    GST_BUFFER_DURATION(b) = dur;
+    if (self->tag_offset)
+      GST_BUFFER_OFFSET(b) = STATE_MARK | (guint64) (state & 0xFFFF);
+    if (self->resync) {
+      GST_BUFFER_FLAG_SET(b, GST_BUFFER_FLAG_DISCONT);
+      self->resync = FALSE;
+    }
+    self->next_out += dur;
+    self->filling = TRUE;
+    self->after_fill = TRUE;
+    if (gst_pad_push(self->src, b) != GST_FLOW_OK)
+      break;
+  }
+  g_mutex_unlock(&self->lock);
+}
+
+static void pb_sel_fill_audio(PbPipSel *self, gint64 rt) {
+  g_mutex_lock(&self->lock);
+  GstCaps *caps = self->sent_caps ? self->sent_caps : self->fill_caps;
+  gint rate = 0, ch = 0;
+  const GstStructure *st = caps && gst_caps_get_size(caps) ? gst_caps_get_structure(caps, 0) : NULL;
+  if (!st || g_strcmp0(gst_structure_get_name(st), "audio/x-raw") != 0 || g_strcmp0(gst_structure_get_string(st, "format"), "S16LE") != 0 ||
+      !gst_structure_get_int(st, "rate", &rate) || !gst_structure_get_int(st, "channels", &ch) || rate < 8000 || ch < 1 || ch > 8) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  if (self->last_push_rt < 0 && !self->filling) {
+    self->last_push_rt = rt;
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  const gint target = (gint) (g_atomic_int_get(&self->state) & 0xF);
+  const gint64 vl = pb_live_get(target);
+  const gboolean cam_dead = vl >= 0 && (GstClockTime) (rt - vl) > FILL_DEAD;       /* das Bild der Kamera fehlt: ihr Ton ist weg */
+  const GstClockTime quiet = (GstClockTime) (rt - self->last_push_rt);
+  if (!self->filling && !((cam_dead && quiet >= FILL_AUDIO_AFTER) || quiet >= FILL_AUDIO_LONG)) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  if (!pb_sel_push_sticky_fill_locked(self, caps)) {
+    g_mutex_unlock(&self->lock);
+    return;
+  }
+  if (!self->filling) {                                              /* Beginn: ab dem Ende des letzten Puffers in Echtzeit weiter */
+    self->filling = TRUE;
+    self->fill_rt0 = rt;
+    if (!self->have_next) {
+      self->next_out = (GstClockTime) rt;
+      self->have_next = TRUE;
+    }
+    self->fill_out0 = self->next_out;
+  }
+  self->after_fill = TRUE;
+  const GstClockTime to = self->fill_out0 + (GstClockTime) (rt - self->fill_rt0);
+  pb_sel_gap_locked(self, rate, ch, to);
+  g_mutex_unlock(&self->lock);
+}
+
+static gpointer pb_sel_fill_thread(gpointer data) {
+  PbPipSel *self = data;
+  while (g_atomic_int_get(&self->fill_run)) {
+    g_usleep(10000);
+    const gint64 rt = pb_sel_running_time((GstElement *) self);
+    if (rt < 0 || !self->fill_caps)
+      continue;
+    if (self->tag_offset)
+      pb_sel_fill_video(self, rt);
+    else
+      pb_sel_fill_audio(self, rt);
+  }
+  return NULL;
+}
+
 static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf) {
   PbPipSel *self = (PbPipSel *) parent;
   const gint idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(pad), "pbsel-idx"));
+  if (self->tag_offset) {                                          /* Bild: vermerken, dass diese Kamera da ist (auch wenn sie nicht gewählt ist) */
+    const gint64 rt0 = pb_sel_running_time((GstElement *) self);
+    if (rt0 >= 0)
+      pb_live_touch(idx, rt0);
+  }
   if (!self->tag_offset)                                           /* Ton: je Eingang den typischen Zeitabstand führen (Bild nicht) */
     pb_sel_sample(self, idx, GST_BUFFER_PTS(buf));
   /* Ton: Wurde ein anderer Eingang gewählt, spielt der bisherige weiter, bis ein passender Puffer des neuen kommt (kein Loch, keine Stille). */
@@ -1223,6 +1423,19 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
         o = (gint64) self->next_out;
       self->first_after_switch = FALSE;
     }
+    if (self->after_fill) {                                          /* der Eingang ist nach dem Füllen zurück: nahtlos an das Gefüllte anschließen */
+      if (self->have_next && o < (gint64) self->next_out)
+        o = (gint64) self->next_out;
+      else if (audio_fx && self->have_next && o > (gint64) self->next_out + SEL_SILENCE_MIN) {
+        const GstFlowReturn gr = pb_sel_gap_locked(self, a_rate, a_ch, (GstClockTime) o);    /* Ton: Lücke bis zum ersten echten Puffer mit Stille füllen */
+        if (gr != GST_FLOW_OK) {
+          g_mutex_unlock(&self->lock);
+          gst_buffer_unref(buf);
+          return gr;
+        }
+      }
+      self->after_fill = FALSE;
+    }
     GST_BUFFER_PTS(buf) = (GstClockTime) o;
     GstClockTime dur = 0;
     if (GST_BUFFER_DURATION_IS_VALID(buf))
@@ -1244,6 +1457,8 @@ static GstFlowReturn pb_sel_chain(GstPad *pad, GstObject *parent, GstBuffer *buf
   if (self->tag_offset)
     GST_BUFFER_OFFSET(buf) = STATE_MARK | (guint64) (state & 0xFFFF);
   GstFlowReturn ret;
+  self->filling = FALSE;                                             /* echte Daten: es wird nicht mehr gefüllt, die Frist beginnt neu */
+  self->last_push_rt = pb_sel_running_time((GstElement *) self);
   if (audio_fx) {                                                    /* Ton: einen Puffer zurückhalten (Ausblendung beim nächsten Umschalten) */
     if (self->fade_in) {
       buf = pb_sel_fade(buf, TRUE, a_ch);
@@ -1348,9 +1563,23 @@ static void pb_sel_release_pad(GstElement *el, GstPad *pad) {
 }
 
 static GstStateChangeReturn pb_sel_change_state(GstElement *el, GstStateChange t) {
-  if (t == GST_STATE_CHANGE_READY_TO_PAUSED)
-    pb_sel_reset((PbPipSel *) el);
-  return GST_ELEMENT_CLASS(pb_pip_sel_parent_class)->change_state(el, t);
+  PbPipSel *self = (PbPipSel *) el;
+  if (t == GST_STATE_CHANGE_READY_TO_PAUSED) {
+    pb_sel_reset(self);
+    if (self->tag_offset)
+      pb_live_reset();
+  }
+  if (t == GST_STATE_CHANGE_PAUSED_TO_PLAYING && !self->fill_thread && self->fill_caps) {
+    g_atomic_int_set(&self->fill_run, 1);
+    self->fill_thread = g_thread_new("pbsel-fill", pb_sel_fill_thread, self);
+  }
+  GstStateChangeReturn r = GST_ELEMENT_CLASS(pb_pip_sel_parent_class)->change_state(el, t);
+  if ((t == GST_STATE_CHANGE_PLAYING_TO_PAUSED || t == GST_STATE_CHANGE_READY_TO_NULL) && self->fill_thread) {
+    g_atomic_int_set(&self->fill_run, 0);
+    g_thread_join(self->fill_thread);
+    self->fill_thread = NULL;
+  }
+  return r;
 }
 
 static void pb_sel_set_property(GObject *o, guint id, const GValue *v, GParamSpec *ps) {
@@ -1359,6 +1588,16 @@ static void pb_sel_set_property(GObject *o, guint id, const GValue *v, GParamSpe
     case SEL_STATE: g_atomic_int_set(&self->state, g_value_get_uint(v)); break;
     case SEL_TAG: self->tag_offset = g_value_get_boolean(v); break;
     case SEL_KEY: self->force_key = g_value_get_boolean(v); break;
+    case SEL_FILL: {
+      const gchar *txt = g_value_get_string(v);
+      GstCaps *c = txt && *txt ? gst_caps_from_string(txt) : NULL;
+      g_mutex_lock(&self->lock);
+      gst_caps_replace(&self->fill_caps, c);
+      g_mutex_unlock(&self->lock);
+      if (c)
+        gst_caps_unref(c);
+      break;
+    }
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, ps);
   }
 }
@@ -1369,6 +1608,13 @@ static void pb_sel_get_property(GObject *o, guint id, GValue *v, GParamSpec *ps)
     case SEL_STATE: g_value_set_uint(v, g_atomic_int_get(&self->state)); break;
     case SEL_TAG: g_value_set_boolean(v, self->tag_offset); break;
     case SEL_KEY: g_value_set_boolean(v, self->force_key); break;
+    case SEL_FILL: {
+      g_mutex_lock(&self->lock);
+      gchar *t = self->fill_caps ? gst_caps_to_string(self->fill_caps) : NULL;
+      g_mutex_unlock(&self->lock);
+      g_value_take_string(v, t);
+      break;
+    }
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, ps);
   }
 }
@@ -1379,6 +1625,7 @@ static void pb_sel_finalize(GObject *o) {
   for (guint i = 0; i < SEL_PADS; i++)
     gst_caps_replace(&self->caps[i], NULL);
   gst_clear_buffer(&self->held);
+  gst_caps_replace(&self->fill_caps, NULL);
   g_mutex_clear(&self->lock);
   g_mutex_clear(&self->plock);
   G_OBJECT_CLASS(pb_pip_sel_parent_class)->finalize(o);
@@ -1399,6 +1646,9 @@ static void pb_pip_sel_class_init(PbPipSelClass *klass) {
   g_object_class_install_property(oc, SEL_KEY,
       g_param_spec_boolean("force-key", "Bildanfang erzwingen", "beim Umschalten dem Encoder einen vollständigen Bildanfang nahelegen",
                            FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property(oc, SEL_FILL,
+      g_param_spec_string("fill-caps", "Format zum Füllen", "Format (Bild: video/x-raw NV12 mit Größe und Bildrate; Ton: audio/x-raw S16LE), mit dem der Ausgang bei fehlendem Eingang mit "
+                          "schwarzen Bildern / Stille am Leben gehalten wird. Leer: kein Füllen.", NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   gst_element_class_set_static_metadata(ec, "IRL4YOU PiP Umschalter", "Generic",
       "Wählt einen von bis zu vier Eingängen, ohne den Datenstrom zu unterbrechen", "IRL4YOU");
   gst_element_class_add_static_pad_template(ec, &sel_sink_tmpl);
@@ -1413,6 +1663,7 @@ static void pb_pip_sel_init(PbPipSel *self) {
   g_mutex_init(&self->plock);
   self->sent_pad = -1;
   self->pend_idx = -1;
+  self->last_push_rt = -1;
   self->next_out = self->prev_pts = GST_CLOCK_TIME_NONE;
   self->src = gst_pad_new_from_static_template(&sel_src_tmpl, "src");
   gst_element_add_pad(GST_ELEMENT(self), self->src);
@@ -1427,6 +1678,9 @@ typedef struct {
   gchar *selector, *audio_selector, *select_file, *state_file;
   gint audio_pos;                 /* -1: Ton der Hauptkamera, 0 bis 2: Ton der Kamera an dieser Stelle */
   gchar *view_file, *view_state_file, *mixer_name, *volume_name;   /* Ansicht im Betrieb: Sichtbarkeit, Tonquelle, Stumm (siehe pb_ctl_poll_view) */
+  gchar *live_file;               /* Hier meldet pbctl, welche Kameras gerade Bilder liefern: vier Zahlen 0/1 (Kamera 0 bis 3) */
+  gchar live_last[16];
+  gint64 live_written_rt;
   gchar *style_base[3];           /* Stil der Stellen 1 bis 3, wie die Pipeline ihn gebaut hat (beim ersten Durchlauf gemerkt) */
   gboolean view_inited;
   gint view_hide;                 /* zuletzt gestellt: Bit 0 bis 2 = kleines Bild an Stelle 1 bis 3 ausgeblendet */
@@ -1440,7 +1694,7 @@ typedef struct { GstElementClass parent_class; } PbCtlClass;
 G_DEFINE_TYPE(PbCtl, pb_ctl, GST_TYPE_ELEMENT)
 
 enum { CTL_0, CTL_FILE, CTL_VQ, CTL_AQ, CTL_PQ, CTL_P2Q, CTL_P3Q, CTL_CAM0, CTL_CAM1, CTL_CAM2, CTL_CAM3,
-       CTL_SEL, CTL_ASEL, CTL_SELFILE, CTL_STATEFILE, CTL_VIEWFILE, CTL_VIEWSTATE, CTL_MIXER, CTL_VOLUME, CTL_APOS };
+       CTL_SEL, CTL_ASEL, CTL_SELFILE, CTL_STATEFILE, CTL_VIEWFILE, CTL_VIEWSTATE, CTL_MIXER, CTL_VOLUME, CTL_APOS, CTL_LIVE };
 
 /* Wartezeit einer benannten queue setzen. Hauptbild/Ton: Zeitlimit großzügig. Kleine Bilder: die queue hat
  * leaky=downstream und ein Zeitlimit; bei Verzögerung wird das Limit entsprechend angehoben. */
@@ -1745,10 +1999,37 @@ static void pb_ctl_poll_delay(PbCtl *self) {
   }
 }
 
+/* Welche Kameras liefern gerade Bilder? Vier Zahlen "1 0 1 0" in live-file, nur bei Änderung und alle 2 s (damit man sieht, dass pbctl lebt). */
+static void pb_ctl_publish_live(PbCtl *self) {
+  if (!self->live_file || !*self->live_file)
+    return;
+  const gint64 rt = pb_sel_running_time((GstElement *) self);
+  if (rt < 0)
+    return;
+  gchar txt[16];
+  for (gint i = 0; i < SEL_PADS; i++) {
+    const gint64 v = pb_live_get(i);
+    txt[i * 2] = (v >= 0 && (GstClockTime) (rt - v) <= LIVE_DEAD_NS) ? '1' : '0';
+    txt[i * 2 + 1] = i == SEL_PADS - 1 ? '\n' : ' ';
+  }
+  txt[SEL_PADS * 2] = 0;
+  if (strcmp(txt, self->live_last) == 0 && rt - self->live_written_rt < 2 * GST_SECOND)
+    return;
+  gchar *tmp = g_strdup_printf("%s.tmp", self->live_file);
+  if (g_file_set_contents(tmp, txt, -1, NULL)) {
+    g_chmod(tmp, 0644);
+    g_rename(tmp, self->live_file);
+    g_strlcpy(self->live_last, txt, sizeof(self->live_last));
+    self->live_written_rt = rt;
+  }
+  g_free(tmp);
+}
+
 static gpointer pb_ctl_thread(gpointer data) {
   PbCtl *self = data;
   guint tick = 0;
   while (g_atomic_int_get(&self->run)) {
+    pb_ctl_publish_live(self);                                     /* Kameras mit Bild: alle 0,1 s prüfen */
     if (tick % 3 == 0)                                             /* Verzögerung: alle 0,3 s */
       pb_ctl_poll_delay(self);
     pb_ctl_poll_select(self, tick == 0);                           /* Umschalten: alle 0,1 s */
@@ -1797,6 +2078,7 @@ static gchar **pb_ctl_str_slot(PbCtl *self, guint id) {
     case CTL_VIEWSTATE: return &self->view_state_file;
     case CTL_MIXER: return &self->mixer_name;
     case CTL_VOLUME: return &self->volume_name;
+    case CTL_LIVE: return &self->live_file;
     default: return NULL;
   }
 }
@@ -1837,6 +2119,7 @@ static void pb_ctl_finalize(GObject *o) {
     if (p)
       g_free(*p);
   }
+  g_free(self->live_file);
   for (guint i = 0; i < 3; i++)
     g_free(self->style_base[i]);
   G_OBJECT_CLASS(pb_ctl_parent_class)->finalize(o);
@@ -1898,6 +2181,9 @@ static void pb_ctl_class_init(PbCtlClass *klass) {
   g_object_class_install_property(oc, CTL_APOS,
       g_param_spec_int("audio-pos", "Ton von Stelle", "-1 Ton der Hauptkamera, 0 bis 2 Ton der Kamera an dieser Stelle", -1, 2, -1,
                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property(oc, CTL_LIVE,
+      g_param_spec_string("live-file", "Kamera-Datei", "Hier meldet pbctl, welche Kameras gerade Bilder liefern (vier Zahlen 0/1)", NULL,
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   gst_element_class_set_static_metadata(ec, "IRL4YOU PiP Steuerung", "Generic",
       "Stellt Wartezeiten und den Umschalter im laufenden Betrieb um", "IRL4YOU");
   ec->change_state = pb_ctl_change_state;
@@ -1913,6 +2199,8 @@ static void pb_ctl_init(PbCtl *self) {
   self->view_inited = FALSE;
   self->view_hide = 0;
   self->have_v = FALSE;
+  self->live_last[0] = 0;
+  self->live_written_rt = 0;
 }
 
 /* ------------------------------------------------------------------ Plugin */
