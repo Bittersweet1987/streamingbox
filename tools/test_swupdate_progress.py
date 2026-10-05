@@ -94,5 +94,42 @@ class Download(unittest.TestCase):
         self.assertEqual(got, sorted(got))
 
 
+class TailscaleSnapshot(unittest.TestCase):
+    """install.sh schreibt den Zustand der Tailscale-Freigaben vor und nach der Installation ins Protokoll (Fehlersuche), ohne je zu scheitern."""
+
+    def run_fn(self, with_tailscale):
+        src = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        fn = re.search(r"ts_snapshot\(\) \{.*?\n\}\n", src, re.S).group(0)
+        d = tempfile.mkdtemp()
+        if with_tailscale:
+            with open(os.path.join(d, "tailscale"), "w") as f:
+                f.write('#!/bin/sh\nif [ "$1" = serve ]; then echo "https://box.example.ts.net (tailnet only)"; else echo "No serve config"; fi\n')
+            os.chmod(os.path.join(d, "tailscale"), 0o755)
+        log = os.path.join(d, "log")
+        import subprocess
+        r = subprocess.run(["sh", "-c", fn + '\nts_snapshot "vor der Installation"\nts_snapshot "nach der Installation"\n'],
+                           env={"PATH": d + ":/usr/bin:/bin", "PIPBOX_SWUPDATE_LOG": log}, capture_output=True, text=True)
+        return r, log
+
+    def test_snapshots_before_and_after(self):
+        r, log = self.run_fn(True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = open(log).read()
+        self.assertEqual(len(re.findall(r"Tailscale vor der Installation:", text)), 1)
+        self.assertEqual(len(re.findall(r"Tailscale nach der Installation:", text)), 1)
+        self.assertEqual(text.count("    serve: https://box.example.ts.net (tailnet only)"), 2)
+        self.assertEqual(text.count("    funnel: No serve config"), 2)
+
+    def test_no_tailscale_no_log_no_error(self):
+        r, log = self.run_fn(False)
+        self.assertEqual(r.returncode, 0)
+        self.assertFalse(os.path.exists(log))
+
+    def test_called_once_before_and_once_after_the_installation(self):
+        src = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        self.assertLess(src.index('ts_snapshot "vor der Installation"'), src.index('echo "PIPBOX-STEP pakete"'))
+        self.assertGreater(src.index('ts_snapshot "nach der Installation"'), src.index('echo "PIPBOX-STEP start"'))
+
+
 if __name__ == "__main__":
     unittest.main()
