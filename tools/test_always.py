@@ -13,6 +13,16 @@ sys.path.insert(0, os.path.dirname(HERE))
 import pipbox_always as A  # noqa: E402
 import server  # noqa: E402
 
+_tool = mock.patch.object(server, "feeder_tool", lambda: "/usr/bin/gst-launch-1.0")      # auf dem Entwicklungsrechner gibt es gst-launch-1.0 nicht
+
+
+def setUpModule():
+    _tool.start()
+
+
+def tearDownModule():
+    _tool.stop()
+
 
 class FeederCommand(unittest.TestCase):
     def test_command_has_ports_and_no_shell(self):
@@ -519,6 +529,39 @@ class SenderAlways(unittest.TestCase):
             open(os.path.join(self.tmp, "libgstpbpip.so"), "w").close()
             with self.assertRaises(ps.Refuse):
                 ps.prepare()
+
+
+class MissingTool(unittest.TestCase):
+    """Fehlt gst-launch-1.0 (frisches BELABOX-Image, Meldung von Bittersweet1987), läuft die Sendung im normalen Modus weiter, mit Hinweis."""
+    CFG = dict(server.PipelineStore.DEFAULT, type="pip", main="cam-a", pip="cam-b", corner=3, always_ready=True)
+
+    def test_without_the_tool_there_is_no_always_plan_and_a_reason(self):
+        with mock.patch.object(server, "feeder_tool", lambda: None):
+            self.assertIsNone(server.PipelineStore.always_plan(self.CFG))
+            self.assertIn("gst-launch-1.0", server.PipelineStore.always_blocker(self.CFG))
+            text = server.PipelineStore(os.devnull).build(self.CFG)
+        self.assertNotIn("udpsrc port=9410", text)                     # normaler Aufbau mit RTMP-Quellen
+        self.assertIn("rtmpsrc", text)
+
+    def test_with_the_tool_there_is_no_reason(self):
+        self.assertIsNotNone(server.PipelineStore.always_plan(self.CFG))
+        self.assertIsNone(server.PipelineStore.always_blocker(self.CFG))
+
+    def test_switch_off_has_no_reason(self):
+        with mock.patch.object(server, "feeder_tool", lambda: None):
+            self.assertIsNone(server.PipelineStore.always_blocker(dict(self.CFG, always_ready=False)))
+
+    def test_feeder_start_failure_is_logged_once(self):
+        logs = []
+
+        def popen(*a, **k):
+            raise FileNotFoundError("gst-launch-1.0")
+        f = A.Feeders(log=logs.append, popen=popen)
+        f.set_keys(["cam-a", "", "", ""])
+        time.sleep(0.4)
+        f.stop_all()
+        self.assertEqual(len(logs), 1)
+        self.assertIn("gstreamer1.0-tools", logs[0])
 
 
 if __name__ == "__main__":
