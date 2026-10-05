@@ -84,9 +84,9 @@ Der Ordner `srtla/` enthält zwei Patches für `srtla_send.c` aus [BELABOX/srtla
 AGPL-3.0; der Quelltext ist der Upstream-Commit plus diese Patches (siehe `srtla/README.md`). Das Original-Programm des
 BELABOX-Pakets bleibt unverändert unter `/usr/bin` liegen; der gepatchte Sender wird nach `/usr/local/bin` installiert.
 
-### belacoder-Encoder mit tolerantem Regler und Stall-Wächter (GPL-3.0)
+### belacoder-Encoder mit tolerantem Regler, Stall-Wächter und Kennzahlen (GPL-3.0)
 
-Der Ordner `belacoder/` enthält zwei Patches für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
+Der Ordner `belacoder/` enthält drei Patches für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
 (Commit ccce9ca, GNU General Public License v3). Die Patches und das damit gebaute Programm stehen ebenfalls unter GPL-3.0; der
 Quelltext ist der Upstream-Commit plus diese Patches (siehe `belacoder/README.md`). Das Original-Programm des BELABOX-Pakets bleibt
 unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` installiert und nur von der Sendekette dieses Pakets benutzt.
@@ -95,6 +95,16 @@ unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` 
 
 Die WLAN-Karte der Oberfläche legt über `nmcli` (NetworkManager) Verbindungsprofile an, wenn Sie ein Netz verbinden.
 Das Passwort wird nur an `nmcli` übergeben und von diesem Projekt nicht gespeichert.
+
+## Welche Lizenz gilt wo
+
+- **MIT** (eigener Code): alles außer den unten genannten Teilen, darunter `server.py`, `web/`, `gst/` (eigenes GStreamer-Bauteil) und die Dienste.
+- **GPL-3.0**: die Patches in `belacoder/` und das daraus gebaute Programm.
+- **AGPL-3.0**: die Patches in `srtla/` und das daraus gebaute Programm.
+- **GPL-2.0**: die unveränderten Kernel-Quellen in `bluetooth-src/`.
+
+Die GPL-/AGPL-Teile sind eigene Dateien (Patches, Bauskripte); der Upstream-Quelltext wird beim Bauen von GitHub geholt und ist hier mit
+Commit genannt. Das MIT-Bauteil in `gst/` wird zur Laufzeit von GStreamer (LGPL) geladen und enthält keinen GPL-Code. Keine Rechtsberatung.
 
 ## Aussehen der kleinen Bilder (Anregung)
 

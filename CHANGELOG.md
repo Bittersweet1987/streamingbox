@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.100 (Beta)
+- Behoben: **Die Installation von Tailscale schlug auf manchen Boxen mit "Unable to locate package tailscale" fehl.** Die Paketliste der Tailscale-Quelle wurde ein einziges Mal geladen und das Ergebnis nicht geprüft; war apt gerade gesperrt (automatische Updates nach dem Start) oder schlug das Laden fehl, kannte apt das Paket nicht. Jetzt wird geprüft, ob apt das Paket kennt, und bis zu vier Mal im Abstand von 15 s wiederholt, zuletzt mit der ganzen Paketliste statt nur der Tailscale-Quelle. Bleibt es dabei, nennt die Meldung die Ausgabe von apt.
+  - Die genaue Ursache auf der betroffenen Box ist nicht bekannt (die Ausgabe von apt wurde nicht mitgelesen). Auf der eigenen Test-Box läuft das Laden der Paketliste ohne Fehler. **Nicht an einer Box geprüft, bei der der Fehler auftrat**; nur mit Tests (`tools/test_remote_install.py`, 4).
+- Doku: `NOTICE.md` und `belacoder/README.md` nennen jetzt alle drei belacoder-Patches (GPL-3.0) und haben einen Abschnitt "Welche Lizenz gilt wo".
+
 ## 0.9.99 (Beta)
 - Neu (Issue #25): **Schalter "Über fremde WLANs sperren"** (Karte "Verbindungen", Bereich "Zugriff auf diese Oberfläche"). Die Oberfläche ist unverschlüsselt (HTTP); in einem WLAN, in dem die Box nur Gast ist (Hotel, Handy-Hotspot, fremdes Netz), liest dort jeder mit. Ist der Schalter an, werden Verbindungen auf der Adresse eines solchen WLANs ohne Antwort getrennt. Ethernet, der eigene Hotspot der Box, USB und Tailscale bleiben erreichbar. Standard: aus.
   - Erkennung über NetworkManager (WLAN verbunden, Modus nicht "ap"); bei einem Fehler wird nichts gesperrt. Die Liste wird nur gefragt, wenn der Schalter an ist (5 s zwischengespeichert).
