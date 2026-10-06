@@ -98,7 +98,7 @@ def foot_source():
 
 STUBS = """
 var els = {};
-function $(id) { return els[id] || (els[id] = {id: id, hidden: false, dataset: {}, offsetHeight: 120}); }
+function $(id) { return els[id] || (els[id] = {id: id, hidden: false, dataset: {}, offsetHeight: 120, addEventListener: function () {}}); }
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function setHtml(el, h) { el.html = h; }
 var document = {documentElement: {style: {setProperty: function () {}, removeProperty: function () {}}}};

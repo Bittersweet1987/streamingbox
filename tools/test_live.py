@@ -9,7 +9,15 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-os.environ["PIPBOX_LIVE"] = "1"                 # auf dem Entwicklungsrechner gibt es den belacoder sb10 nicht
+_env = mock.patch.dict(os.environ, {"PIPBOX_LIVE": "1"})       # auf dem Entwicklungsrechner gibt es den belacoder sb10 nicht; nur für dieses Modul (sonst verändert es die Tests der anderen Dateien)
+
+
+def setUpModule():
+    _env.start()
+
+
+def tearDownModule():
+    _env.stop()
 if not hasattr(os, "killpg"):                   # Windows (nur Entwicklungsrechner): die Module der Box brauchen Linux-Teile beim Import
     os.killpg = lambda *a, **k: None
     for _m in ("pwd", "grp", "fcntl", "termios"):
