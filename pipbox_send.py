@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, "/opt/pipbox")
 import server  # noqa: E402  (nur Prüf- und Erzeugungsfunktionen, startet nichts)
 import pipbox_always  # noqa: E402  (Zubringer und Auswahl im Modus "alle Kameras immer bereit")
+import pipbox_live  # noqa: E402  (Engine "immer bereit" mit Compositor und dynamischen Zweigen, Technik von streamingbox)
 
 STATE = "/var/lib/pipbox"
 BELACODER = "/opt/pipbox/bin/belacoder"      # belacoder mit tolerantem Regler (belacoder/), sonst das Original aus dem Suchpfad
@@ -266,6 +267,9 @@ def write_pipeline(cfg):
     # Sendekette erhalten (die Oberfläche setzt es beim Start einer neuen Sendung zurück)
     VIEW_LIVE = "name=avol" in text and "pbctl" in text
     AUDIO_LIVE = VIEW_LIVE and "pbpipsel name=asel" in text
+    if "name=sbf0_src" in text:             # Engine Compositor: Verzögerung, Ansicht, Ton und Stumm gehen im Betrieb über den Steuerkanal
+        DELAY_LIVE = DELAY_LIVE_PIPS = VIEW_LIVE = AUDIO_LIVE = True
+        SWAP_BASE = None
     try:
         os.unlink(server.VIEW_STATE)
     except OSError:
@@ -318,8 +322,8 @@ def prepare():
     auto = bool(cfg.get("auto_failover", True)) and len(keys) > 1 and not always      # mit nur einer Kamera gibt es nichts umzuschalten
     live = live_keys() if (auto or always) else None
     if always:
-        if live is not None and not (set(keys) & live):
-            raise Refuse("Keine Kamera sendet gerade an die Box")
+        if live is not None and not (set(keys) & live) and not pipbox_live.enabled(server.PipelineStore._safe_cfg(cfg)):
+            raise Refuse("Keine Kamera sendet gerade an die Box")      # nur die Zubringer-Engine; die Engine mit Compositor startet auch leer
         auto = False
     if always:
         eff, used = cfg, tuple(keys)
@@ -356,7 +360,13 @@ class Sender:
         self.fo = Failover(plan["cfg"], plan["layout"]) if plan["auto"] else None
         self.layout = tuple(plan["layout"])
         self.always = None
-        if plan.get("always"):
+        self.live = bool(plan.get("always") and plan["cfg"] and pipbox_live.enabled(server.PipelineStore._safe_cfg(plan["cfg"])))
+        self.boost = pipbox_live.CpuBoost(log=lambda m: print(m, flush=True))
+        if self.live:
+            self.always = pipbox_live.LiveController(
+                load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file, state_dir=STATE,
+                safe_cfg=server.PipelineStore._safe_cfg, view_values=server.PipelineStore.view_values, log=lambda m: print(m, flush=True))
+        elif plan.get("always"):
             self.always = pipbox_always.Controller(
                 load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file,
                 delay_values=server.PipelineStore.delay_values, cam_live_path=server.CAM_LIVE,
@@ -402,11 +412,17 @@ class Sender:
                              errors="replace", env=env, restore_signals=(name != "belacoder"))
         with self.lock:
             self.procs[name] = p
+        if name == "belacoder" and self.live and self.always is not None:
+            self.always.on_restart()                  # der neue belacoder kennt die Live-Befehle des alten nicht
         threading.Thread(target=self.pump, args=(name, p), daemon=True).start()
         return p
 
     def pump(self, name, p):
+        dbg = open(os.environ["PIPBOX_BC_LOG"], "a") if os.environ.get("PIPBOX_BC_LOG") and name == "belacoder" else None     # nur für Tests auf der Box: alle Zeilen mit Uhrzeit
         for line in p.stdout:
+            if dbg and not line.startswith("b:"):
+                dbg.write(time.strftime("%H:%M:%S ") + line[:300].rstrip() + "\n")
+                dbg.flush()
             self.note(line)      # nur erkannte Meldungen, nie Stream-ID oder Adressen ins Journal
             if name == "srtla_send" and line.startswith("links:"):
                 # Zustand der laufzeitbewussten Wegewahl (nur Zahlen und eigene Adressen), im RAM
@@ -440,8 +456,15 @@ class Sender:
         sv = self.sv
         if name == "srtla_send":
             return ["srtla_send", str(LISTEN_PORT), sv["host"], str(sv["port"]), f"{WORK}/ips"]
-        a = ["stdbuf", "-oL", "-eL", BELACODER if os.access(BELACODER, os.X_OK) else "belacoder", f"{WORK}/pipeline", "127.0.0.1", str(LISTEN_PORT), "-d", "0",
-             "-b", f"{WORK}/bitrate", "-l", str(self.lat)]
+        pre = []
+        if self.live:                               # Engine Compositor: auf die großen Kerne (dort läuft der Compositor schnell genug)
+            big = pipbox_live.big_cpus()
+            if big and shutil.which("taskset"):
+                pre = ["taskset", "-c", ",".join(map(str, big))]
+        a = pre + ["stdbuf", "-oL", "-eL", BELACODER if os.access(BELACODER, os.X_OK) else "belacoder", f"{WORK}/pipeline", "127.0.0.1", str(LISTEN_PORT), "-d", "0",
+                   "-b", f"{WORK}/bitrate", "-l", str(self.lat)]
+        if self.live:
+            a += ["-C", pipbox_live.CTL_FIFO, "-S", pipbox_live.LIVE_STATS, "-A", str(pipbox_live.buffer_ms(server.PipelineStore._safe_cfg(self.plan["cfg"])))]
         if sv.get("streamid"):
             a += ["-s", sv["streamid"]]
         return a
@@ -526,14 +549,21 @@ class Sender:
     def run(self):
         env = dict(os.environ, GST_PLUGIN_PATH=PLUGIN_DIR)
         env["BELACODER_STATS_FILE"] = BC_STATS            # Kennzahlen für "Details" im Status (belacoder-stats.patch), sonst nichts
+        if self.live:
+            env["GST_MPP_NO_RGA"] = "1"                   # der Encoder bekommt nur Bilder aus dem Compositor (Systemspeicher): Software-Kopie statt RGA über virtuelle Adresse
+            self.boost.off()                              # Rest eines abgestürzten Laufs zurückstellen, dann für diese Sendung hochnehmen
+            self.boost.on()
         senv = None
         if self.plan.get("spread") == "all":
             # Alle Wege gleichzeitig: auch Leitungen mit höherer Laufzeit mitnutzen (bis 300 ms schlechter als die beste); jeder geeignete Weg bekommt mindestens 10 Prozent der Pakete
             senv = dict(os.environ, SRTLA_LAT_MARGIN_MS="300", SRTLA_MIN_SHARE_PCT="10")
         self.senv = senv
-        self.spawn("srtla_send", self.args("srtla_send"), env=senv)
-        self.write_status()          # Zustand "startet" sofort sichtbar machen
-        self.wait_links_ready()
+        if os.environ.get("PIPBOX_NO_SRTLA") == "1":           # nur für Tests auf der Box: belacoder sendet direkt an einen lokalen SRT-Empfänger (Port LISTEN_PORT)
+            self.write_status()
+        else:
+            self.spawn("srtla_send", self.args("srtla_send"), env=senv)
+            self.write_status()          # Zustand "startet" sofort sichtbar machen
+            self.wait_links_ready()
         if self.always is not None:
             self.always.start()                     # Zubringer zuerst: die Eingänge der Kette (udpsrc) bekommen dann gleich Daten
             self.sync_swap_base()
@@ -703,10 +733,14 @@ class Sender:
                 p.terminate()
         deadline = time.time() + 8
         for p in self.procs.values():
+            if p is None:
+                continue
             while p.poll() is None and time.time() < deadline:
                 time.sleep(0.2)
             if p.poll() is None:
                 p.kill()
+        if self.live:
+            self.boost.off()
         for f in (STATUS, STATS, BC_STATS, f"{RUN}/srtla-links.txt", server.VIEW_STATE, server.CAM_LIVE):
             try:
                 os.remove(f)
