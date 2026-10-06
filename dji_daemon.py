@@ -230,6 +230,37 @@ def run(cmd):
         return ""
 
 
+SYSFS_NET = "/sys/class/net"
+IFNAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,15}$")
+
+
+def iface_mac(name, root=None):
+    """Hardware-Adresse (MAC) einer Netzwerkschnittstelle oder "". Anders als der Name (eth0, eth1, eth2 ...) bleibt sie bei jedem Start gleich:
+    Die Namen von zwei Netzwerkkarten können nach einem Neustart vertauscht sein."""
+    if not isinstance(name, str) or not IFNAME_RE.match(name):
+        return ""
+    try:
+        with open(os.path.join(root or SYSFS_NET, name, "address")) as f:
+            mac = f.read().strip().lower()
+    except OSError:
+        return ""
+    return mac if re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) and mac != "00:00:00:00:00:00" else ""
+
+
+def iface_by_mac(mac, root=None):
+    """Name der Schnittstelle, die gerade diese Hardware-Adresse hat, oder None."""
+    if not mac:
+        return None
+    try:
+        names = sorted(os.listdir(root or SYSFS_NET))
+    except OSError:
+        return None
+    for n in names:
+        if iface_mac(n, root) == mac:
+            return n
+    return None
+
+
 def other_connections(skip):
     """Die übrigen aktiven Verbindungen der Box (Ethernet, Modem, USB-Router …), dieselben wie in der Verbindungsliste der
     Oberfläche. Die Kamera braucht trotzdem ein WLAN: Name und Passwort werden von Hand eingegeben, nur die IP der Box kommt
@@ -437,6 +468,9 @@ class Camera:
     def public(self):
         c = dict(self.cfg)
         c.pop("password", None)
+        mac = c.pop("wifi_mac", "")
+        if mac and iface_by_mac(mac):
+            c["wifi_ifname"] = iface_by_mac(mac)           # die Anzeige folgt der gewählten Verbindung, auch wenn ihr Name wechselt
         c["saved"] = [n["ssid"] for n in self.cfg.get("saved", [])]   # nur die Namen, nie die Passwörter
         retry_in = max(0, int(self.retry_at - time.time())) if self.retry_at else 0
         c.update({"addr": self.addr, "state": self.state, "detail": self.detail,
@@ -451,6 +485,17 @@ class Camera:
         cfg = self.cfg
         self.typed_network = True    # Name und Passwort von Hand eingegeben (lohnt zu merken), nicht aus NetworkManager
         ifname = cfg.get("wifi_ifname")
+        mac = cfg.get("wifi_mac")
+        if mac and ifname != "manual":
+            # Die gewählte Verbindung ist über ihre Hardware-Adresse festgelegt (der Name kann nach einem Neustart ein anderer sein). Ist sie nicht da, wird
+            # NICHT auf eine andere Verbindung ausgewichen (Heimnetz statt mobilem Router): lieber ein klarer Fehler.
+            found = iface_by_mac(mac)
+            if not found:
+                raise CameraError("Die gewählte Verbindung (Router) ist nicht da. Router prüfen: eingeschaltet, per Kabel oder USB verbunden, "
+                                  "im USB-Modus? Die Kamera bleibt bei dieser Verbindung und wechselt nicht ins Heimnetz.")
+            if found != ifname:
+                log.info("%s: die gewählte Verbindung heißt jetzt %s (vorher %s)", self.addr, found, ifname)
+                cfg["wifi_ifname"] = ifname = found
         if ifname and ifname != "manual":
             for o in self.daemon.wifi_options():
                 if o["ifname"] == ifname:
@@ -1026,6 +1071,11 @@ class Daemon:
         if migrated:
             self.save()
 
+    def pin_connection(self, cam):
+        """Die gewählte Verbindung über ihre Hardware-Adresse festhalten (ein Name wie eth0 kann nach einem Neustart eine andere Karte meinen)."""
+        name = cam.cfg.get("wifi_ifname")
+        cam.cfg["wifi_mac"] = iface_mac(name) if name and name != "manual" else ""
+
     def _note_connection(self, cfg):
         """Merkt das WLAN dieser Kamera für ihre Verbindung (nur Vorschlag für weitere Kameras an derselben Verbindung)."""
         ifname = cfg.get("wifi_ifname")
@@ -1190,6 +1240,7 @@ class Daemon:
             cam = Camera(self, addr, cfg)
             self.cameras[addr] = cam
             self.sanitize(cam)
+            self.pin_connection(cam)
             self.save()
             return {"ok": True, "key": cfg["rtmp_key"]}
         addr = str(req.get("addr", "")).upper()
@@ -1207,6 +1258,7 @@ class Daemon:
             if "status_only" in req and isinstance(req["status_only"], bool):
                 self._apply_status_only(cam)
             if "wifi_ifname" in req:
+                self.pin_connection(cam)
                 self.offer_connection_network(cam)
             if "ssid" in req or "password" in req:
                 self._note_connection(cam.cfg)
@@ -1278,6 +1330,13 @@ class Daemon:
             for cam in list(self.cameras.values()):
                 key = cam.cfg.get("rtmp_key") or "cam1"
                 cam.publishing = bool(await loop.run_in_executor(None, rtmp_publishing, key, self.stat_url))
+                if cam.publishing and cam.state == "streaming" and not cam.cfg.get("wifi_mac"):
+                    name = cam.cfg.get("wifi_ifname")
+                    if name and name != "manual" and iface_mac(name):
+                        # Der Stream kommt an: Diese Verbindung ist die richtige. Ab jetzt zählt ihre Hardware-Adresse, nicht der Name.
+                        self.pin_connection(cam)
+                        self.save()
+                        log.info("%s: Verbindung %s festgehalten", cam.addr, name)
                 if cam.cfg.get("autoconnect") and not cam.running() and not cam.manual_off and not self.closing:
                     log.warning("%s: Verbindungsschleife lief nicht, wird neu gestartet", cam.addr)
                     cam.start()
