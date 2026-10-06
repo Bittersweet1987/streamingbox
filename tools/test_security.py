@@ -124,7 +124,7 @@ class LoginThrottle(unittest.TestCase):
 
 class SourceFilter(unittest.TestCase):
     def test_private_and_local_sources_are_allowed(self):
-        for ip in ("127.0.0.1", "::1", "10.1.2.3", "192.168.178.20", "172.16.0.5", "169.254.1.1", "100.112.23.100", "fd7a:115c:a1e0::1", "fe80::1%eth0",
+        for ip in ("127.0.0.1", "::1", "10.1.2.3", "192.168.1.30", "172.16.0.5", "169.254.1.1", "100.64.0.5", "fd7a:115c:a1e0::1", "fe80::1%eth0",
                    "::ffff:192.168.1.5"):
             self.assertTrue(server.source_allowed(ip), ip)
 

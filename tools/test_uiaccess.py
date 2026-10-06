@@ -69,9 +69,9 @@ class Switch(unittest.TestCase):
 
     def test_on_refuses_only_the_guest_wifi_address(self):
         ua, _ = self.make()
-        ua.set(True, "192.168.178.195")
+        ua.set(True, "192.168.1.20")
         self.assertTrue(ua.refuses("10.180.245.72"))
-        self.assertFalse(ua.refuses("192.168.178.195"))                           # Ethernet bleibt
+        self.assertFalse(ua.refuses("192.168.1.20"))                           # Ethernet bleibt
         self.assertFalse(ua.refuses("127.0.0.1"))                                 # Tailscale-Proxy bleibt
         self.assertFalse(ua.refuses(None))
 
@@ -81,7 +81,7 @@ class Switch(unittest.TestCase):
             ua.set(True, "10.180.245.72")                                         # man ist selbst über das Gast-WLAN da
         self.assertIn("sperrst du dich aus", str(e.exception))
         self.assertFalse(ua.block)
-        ua.set(True, "192.168.178.195")
+        ua.set(True, "192.168.1.20")
         ua.set(False, "10.180.245.72")                                            # ausschalten geht von überall
         self.assertFalse(ua.block)
 
@@ -119,11 +119,11 @@ class Connections(unittest.TestCase):
         srv.ui_access = ua
         try:
             on_guest = types.SimpleNamespace(getsockname=lambda: ("10.180.245.72", 8780))
-            on_eth = types.SimpleNamespace(getsockname=lambda: ("192.168.178.195", 8780))
-            self.assertFalse(srv.verify_request(on_guest, ("192.168.178.20", 5000)))
-            self.assertTrue(srv.verify_request(on_eth, ("192.168.178.20", 5001)))
+            on_eth = types.SimpleNamespace(getsockname=lambda: ("192.168.1.20", 8780))
+            self.assertFalse(srv.verify_request(on_guest, ("192.168.1.30", 5000)))
+            self.assertTrue(srv.verify_request(on_eth, ("192.168.1.30", 5001)))
             ua.block = False
-            self.assertTrue(srv.verify_request(on_guest, ("192.168.178.20", 5002)))
+            self.assertTrue(srv.verify_request(on_guest, ("192.168.1.30", 5002)))
         finally:
             srv.server_close()
 

@@ -12,6 +12,9 @@ Drei Testkameras (Schlüssel tsta, tstb) senden an den RTMP-Server der Box:
   45 s   tsta kehrt zurück
   60 s   Ende
 
+Mit der Umgebungsvariablen REAL="schlüssel1,schlüssel2[,schlüssel3]" und DAUER=Sekunden läuft derselbe Aufbau mit ECHTEN Kameras (die schon an die Box senden) statt der
+Testkameras, ohne Start/Stopp von Kameras; gemessen werden dann Bytes am Ausgang, Last, Temperatur, Taktfrequenz und die Wechsel des Hauptbildes.
+
 Aufruf: boxtest_always_send.py [Bausteinordner=/opt/pipbox/gst] [Programmordner=/opt/pipbox]
 Danach die Testkameras tsta/tstb aus der Kameraliste der Box entfernen (RTMP-Quellen legen sie an)."""
 import json
@@ -38,8 +41,12 @@ for d in ("state", "work", "run"):
 PORT = 9101
 json.dump({"servers": [{"id": "abcdef01", "name": "T", "host": "example.org", "port": 5000, "streamid": ""}], "selected": "abcdef01",
            "settings": {"uplinks": ["eth0"]}}, open(f"{T}/state/srtla.json", "w"))
+REAL = [k for k in os.environ.get("REAL", "").split(",") if k]
+DAUER = int(os.environ.get("DAUER", "60"))
 CFG = {"type": "pip", "main": "tsta", "pip": "tstb", "corner": 3, "size_pct": 25, "always_ready": True, "audio": "main",
        "main_delay_ms": 0, "pip_delay_ms": 0}
+if REAL:
+    CFG.update(main=REAL[0], pip=REAL[1], pip2=REAL[2] if len(REAL) > 2 else "", corner2=2, size_pct2=25)
 json.dump(CFG, open(f"{T}/state/pipeline.json", "w"))
 for f, v in (("view", "0 -1 0"),):
     open(f"{T}/state/{f}", "w").write(v + "\n")
@@ -103,7 +110,8 @@ def stop_cam(key):
 recv = subprocess.Popen(["srt-live-transmit", f"srt://127.0.0.1:{PORT}?mode=listener&latency=2000", "file://con"],
                         stdout=open(f"{T}/out.ts", "wb"), stderr=open(f"{T}/srt.log", "w"))
 time.sleep(1)
-cam("tsta", "smpte")
+if not REAL:
+    cam("tsta", "smpte")
 time.sleep(3)                                         # der RTMP-Server braucht einen Augenblick, bis er die Kamera meldet
 sv, lat, mn, mx, ips, plan = ps.prepare()
 say(f"prepare: Modus immer bereit = {plan['always']}, Hinweis = {plan.get('always_note')}")
@@ -125,10 +133,20 @@ def status():
         return {}
 
 samples = []
-events = {15: lambda: cam("tstb", "ball"), 30: lambda: stop_cam("tsta"), 45: lambda: cam("tsta", "smpte")}
+events = {} if REAL else {15: lambda: cam("tstb", "ball"), 30: lambda: stop_cam("tsta"), 45: lambda: cam("tsta", "smpte")}
 done = set()
 last = 0
-while now() < 60:
+def sysinfo():
+    try:
+        la = open("/proc/loadavg").read().split()[0]
+        tp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) // 1000
+        mh = "/".join(str(int(open(f"/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_cur_freq").read()) // 1000) for i in (0, 4, 6))
+        return f"Last {la}, {tp} C, MHz {mh}"
+    except OSError:
+        return ""
+
+
+while now() < (DAUER if REAL else 60):
     for t, fn in events.items():
         if now() >= t and t not in done:
             done.add(t)
@@ -139,7 +157,7 @@ while now() < 60:
         last = int(now())
         st = status()
         fo = st.get("failover", {})
-        say(f"Ausgang {sz // 1024} KB gesamt | Zustand {st.get('state')} | Neustarts {st.get('restarts')} | Kameras mit Bild {fo.get('live')} | Hauptbild {fo.get('main')}")
+        say(f"{sysinfo()} | Ausgang {sz // 1024} KB gesamt | Zustand {st.get('state')} | Neustarts {st.get('restarts')} | Kameras mit Bild {fo.get('live')} | Hauptbild {fo.get('main')}")
     time.sleep(0.5)
 
 restarts = dict(s.restarts)
@@ -149,12 +167,13 @@ for k in list(cams):
     stop_cam(k)
 recv.terminate()
 
+span = DAUER if REAL else 60
 print("\nBytes je 5 s am SRT-Ausgang (Encoder -> Empfänger):")
-for lo in range(0, 60, 5):
+for lo in range(0, span, 5):
     a = next((b for t, b in samples if t >= lo), 0)
     b = next((b for t, b in samples if t >= lo + 5), samples[-1][1])
     print("  %2d bis %2d s: %6d KB" % (lo, lo + 5, (b - a) // 1024))
-ok = all(((next((b for t, b in samples if t >= lo + 5), samples[-1][1]) - next((b for t, b in samples if t >= lo), 0)) > 50 * 1024) for lo in range(5, 55, 5))
+ok = all(((next((b for t, b in samples if t >= lo + 5), samples[-1][1]) - next((b for t, b in samples if t >= lo), 0)) > 50 * 1024) for lo in range(5, span - 5, 5))
 print("Neustarts (belacoder/srtla_send):", restarts)
 print("Encoder lieferte in jedem Zeitabschnitt (ab 5 s):", ok, "| ohne Neustart:", not any(restarts.values()))
 if os.path.exists(f"{T}/out.ts"):
