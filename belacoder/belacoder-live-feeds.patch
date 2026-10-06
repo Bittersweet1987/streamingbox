@@ -15,16 +15,13 @@
  
  #include <gst/gst.h>
  #include <gst/gstinfo.h>
-@@ -39,8 +44,12 @@
- #define BITRATE_UPDATE_INT 20
- #define BITRATE_INCR_MIN       (30*1000)  // the minimum bitrate increment step (bps)
+@@ -41,6 +46,10 @@
  #define BITRATE_INCR_INT       500        // the minimum interval for increasing the bitrate (ms)
--#define BITRATE_INCR_SCALE     30         // the bitrate is increased by
-+#define BITRATE_INCR_SCALE     12         // the bitrate is increased by
+ #define BITRATE_INCR_SCALE     30         // the bitrate is increased by
                                            // BITRATE_INCR_MIN + cur_bitrate/BITRATE_INCR_SCALE
 +                                          // (sb9: 12, the original has 30: after a drop it needed ~50 s to climb from 0.3 to 7 Mbit/s, now ~20 s;
 +                                          // environment SB_INCR_SCALE overrides it, a decrease still reacts within 200-250 ms)
-+#define START_WARMUP_MS        3000       // sb9: after the first packet the send buffer thresholds are still learning, the first (big) keyframe
++#define START_WARMUP_MS        0          // sb9: after the first packet the send buffer thresholds are still learning, the first (big) keyframe
 +                                          // tripped the "heavy congestion" rule and threw the bitrate from the maximum to the minimum
  
  #define BITRATE_DECR_MIN       (100*1000) // the minimum value to decrease the bitrate by (bps)
