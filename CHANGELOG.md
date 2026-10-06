@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.113 (Beta)
+- **Behoben: Eine Kamera bleibt bei der gewählten Verbindung (z. B. dem mobilen Router) und wechselt nicht still ins Heimnetz.** Vorfall am 6. Oktober: Bei beiden DJI-Kameras war der Name `eth0` als Verbindung gespeichert. Nach einem Neustart meinte `eth0` das Heimnetz (192.168.178.x) statt des Routers (192.168.80.x). Die Box schickte den Kameras die Heimnetz-Adresse, die aus dem Router-WLAN nicht erreichbar ist, und die Streams fielen nach wenigen Sekunden aus. Netzwerknamen (`eth0`, `eth1`, `eth2`) sind nach einem Neustart nicht immer gleich vergeben; in der Merkliste der Box standen alle drei für denselben Router.
+  - Die Box merkt sich jetzt zur gewählten Verbindung zusätzlich die **Hardware-Adresse (MAC)** der Netzwerkkarte, die beim Start gleich bleibt. Gespeichert wird sie, wenn du in der Oberfläche eine Verbindung wählst, beim Hinzufügen einer Kamera und bei Kameras aus älteren Versionen, sobald ihr Stream wirklich ankommt.
+  - Ist die Karte der gewählten Verbindung nicht da (Router aus, Kabel ab), **gibt es einen klaren Fehler statt eines Ausweichens** auf eine andere Verbindung: "Die gewählte Verbindung (Router) ist nicht da. … Die Kamera bleibt bei dieser Verbindung und wechselt nicht ins Heimnetz." Sobald der Router wieder da ist, verbindet die Kamera von selbst.
+  - Die Oberfläche zeigt den aktuellen Namen der gewählten Verbindung, auch wenn er sich geändert hat. Die Hardware-Adresse selbst wird nicht angezeigt und lässt sich nicht von außen setzen.
+  - Grenzen: Eine Kamera, deren Verbindung schon vor diesem Update falsch gespeichert war, muss einmal richtig gewählt werden (oder erst streamen, dann wird sie festgehalten). Mit echten Kameras und einem echten Neustart mit vertauschten Namen nicht geprüft, nur mit Tests (`tools/test_conn_pin.py`, 11).
+- Dazu: `tools/analyze_stream.py` wertet eine Aufzeichnung des Ausgangs Bild für Bild aus (Bilder je Sekunde, Lücken, schwarze Bilder, Standbilder, fehlende kleine Bilder).
+
 ## 0.9.112 (Beta)
 - **Behoben (Meldung von Bittersweet1987 zu 0.9.111, Issue #19): Mit "Alle Kameras immer bereit" ging kein Stream raus.** Ursache: Die Zubringer brauchen das Programm `gst-launch-1.0` (Paket `gstreamer1.0-tools`), das ein frisches BELABOX-Image nicht mitbringt. Auf der Entwicklungsbox war es von Hand installiert, deshalb fiel das beim Testen nicht auf. Im Protokoll stand "Zubringer 0 nicht startbar (FileNotFoundError)".
   - Der Installer (Software-Update) installiert `gstreamer1.0-tools` jetzt mit (bei Fehlschlag nach `apt-get update` noch einmal). Das braucht auch die HDMI-Kamera.
