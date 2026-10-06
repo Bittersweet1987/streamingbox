@@ -208,6 +208,8 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-cam.ismain{border-color:var(--blue)}
 .mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:var(--text)}      /* deaktiviert: blass, gestrichelt, nie grün */
 .mf-aud{color:var(--text)}
+.mf-info{flex:0 0 34px;min-height:54px;padding:0;border:0;background:transparent;color:var(--muted,var(--text));font-size:22px;line-height:1;cursor:pointer}
+.mf-msg{white-space:pre-line}
 .mf-aud.muted{color:var(--crit);border-color:var(--crit)}
 .mf-msg{position:absolute;left:0;right:0;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
 @media(max-width:620px){
@@ -630,7 +632,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="pwmsg" class="ph"></div>
   </details>
 </main>
-<nav id="mfoot" aria-label="Schnellzugriff"><div id="mf_msg" class="mf-msg" role="status" hidden></div><button type="button" id="mf_live" class="mf-live" disabled aria-label="Sendung starten oder beenden">Live</button><div id="mf_tools" role="group" aria-label="Kameras und Ton" hidden></div></nav>
+<nav id="mfoot" aria-label="Schnellzugriff"><div id="mf_msg" class="mf-msg" role="status" hidden></div><button type="button" id="mf_live" class="mf-live" disabled aria-label="Sendung starten oder beenden">Live</button><div id="mf_tools" role="group" aria-label="Kameras und Ton" hidden></div><button type="button" id="mf_info" class="mf-info" aria-label="Bedienung der Kamera-Knöpfe" title="Bedienung der Kamera-Knöpfe" hidden>ⓘ</button></nav>
 <dialog id="rdlg"><form method="dialog"><b>Noch nicht übernommen</b>
   <p id="rdlg_t"></p><p class="muted">Die Sendung läuft noch mit den alten Werten. Ein Neustart unterbricht das Bild für einige Sekunden.</p>
   <div class="actions"><button type="button" id="rdlg_go" class="warnbtn">Stream neu starten</button><button type="submit" class="sec">Später</button></div></form></dialog>
@@ -1767,24 +1769,25 @@ function camLabels(cams){                                                // erst
   return Object.fromEntries(cams.map((c,i)=>[c.key,lab(i)]));
 }
 let footBusy=false, footMsgT=null;
-function footMsg(t){ const m=$("mf_msg"); clearTimeout(footMsgT); m.textContent=t||""; m.hidden=!t; if(t) footMsgT=setTimeout(()=>{ m.hidden=true; },6000); }
+function footMsg(t,ms){ const m=$("mf_msg"); clearTimeout(footMsgT); m.textContent=t||""; m.hidden=!t; m.dataset.info=""; if(t) footMsgT=setTimeout(()=>{ m.hidden=true; },ms||6000); }
+$("mf_info").addEventListener("click",()=>{ const m=$("mf_msg"); if(!m.hidden&&m.dataset.info==="1"){ footMsg(""); return; } footMsg("Einmal klicken = ausblenden, Ton noch da\nDoppelklick = deaktivieren, Ton nicht nutzbar\nLanges klicken = Zum Hauptbild machen",15000); m.dataset.info="1"; });
 function sizeFoot(){ const h=$("mfoot").offsetHeight; if(h) document.documentElement.style.setProperty("--mfh",h+"px"); else document.documentElement.style.removeProperty("--mfh"); }
 window.addEventListener("resize",sizeFoot);
 if(window.ResizeObserver) new ResizeObserver(sizeFoot).observe($("mfoot"));          // auch wenn eine Übersetzung den Text breiter oder höher macht
 function renderFoot(d){
   if(footBusy) return;                                                    // mitten im Drücken nichts austauschen
   const f=d.footer, box=$("mf_tools");
-  if(!f||!f.cams||f.cams.length<2){ box.hidden=true; setHtml(box,""); sizeFoot(); return; }
+  if(!f||!f.cams||f.cams.length<2){ box.hidden=true; $("mf_info").hidden=true; setHtml(box,""); sizeFoot(); return; }
   const L=camLabels(f.cams);
   const cams=f.cams.map(c=>{
     const full=c.name||c.key;
     const tip=(c.main?[`${full} ist das Hauptbild (lässt sich nicht ausblenden).`]:[c.hidden?`${full} ist ausgeblendet.`:`${full} ist als kleines Bild zu sehen.`,
-      c.hidden?"Kurz drücken blendet das kleine Bild ein.":"Kurz drücken blendet es aus.","Lang drücken macht es zum Hauptbild.",
-      c.inactive?"Doppelt tippen: wieder aktivieren.":"Doppelt tippen: deaktivieren (springt bei Ausfall nicht als Ersatz ein)."]).join(" ");
+      c.inactive?"Kurz drücken aktiviert die Kamera, das Bild bleibt ausgeblendet (Ton nutzbar).":(c.hidden?"Kurz drücken blendet das kleine Bild ein.":"Kurz drücken blendet es aus."),"Lang drücken macht es zum Hauptbild.",
+      c.inactive?"Doppelt tippen: wieder aktivieren.":"Doppelt tippen: deaktivieren (nicht im Stream, Ton nicht nutzbar)."]).join(" ");
     return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.inactive?" off":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" data-inactive="${c.inactive?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
   const a=f.audio||{}, an=a.name||a.key||"", atip=(a.mute?`Ton von ${an} (stumm).`:`Ton von ${an}.`)+" "+(a.mute?"Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":"Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm.");
   const aud=`<button type="button" class="mf-t mf-aud${a.mute?" muted":""}" data-kind="aud" data-mute="${a.mute?1:0}" data-next="${esc(a.next||"main")}" title="${esc(atip)}" aria-label="${esc(atip)}">${a.mute?FIC.micoff:FIC.spk}<span>Ton: ${esc(L[a.key]||an)}</span></button>`;
-  box.hidden=false; setHtml(box,cams+aud); sizeFoot();
+  box.hidden=false; $("mf_info").hidden=false; setHtml(box,cams+aud); sizeFoot();
 }
 async function footAct(b,long,dbl){
   const d=sendData||{}, f=d.footer||{cams:[]}, mainKey=(f.cams.find(c=>c.main)||{}).key;
@@ -1795,11 +1798,16 @@ async function footAct(b,long,dbl){
         if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht deaktivieren.");
         const on=b.dataset.inactive==="1";
         r=await srtlaCall("POST","/api/pipeline/active",{key:b.dataset.key,active:on});
-        return footMsg(on?"Aktiviert.":"Deaktiviert: springt bei Ausfall nicht als Ersatz ein.");
+        return footMsg(on?"Aktiviert.":"Deaktiviert: nicht mehr im Stream, Ton nicht nutzbar.");
       }
       if(long){
         if(b.dataset.main==="1") return footMsg("Das ist schon das Hauptbild.");
         r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key});
+      }else if(b.dataset.inactive==="1"){
+        // deaktiviert -> ausgeblendet: Kamera aktivieren (Ton nutzbar), das Bild bleibt aus
+        await srtlaCall("POST","/api/pipeline/active",{key:b.dataset.key,active:true});
+        r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:false}});
+        return footMsg("Aktiviert, Bild ausgeblendet: Ton nutzbar.");
       }else{
         if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht ausblenden. Zum Tauschen lange auf eine andere Kamera drücken.");
         r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}});

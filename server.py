@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import dji                         # Namen von USB-Sticks (WLAN, Bluetooth) aus /sys, liegt neben dieser Datei
 import hdmi_daemon                 # Prüfung der HDMI-Einstellungen (dieselbe wie im HDMI-Dienst), liegt neben dieser Datei
+import pipbox_live                 # Engine "alle Kameras immer bereit" mit Compositor und dynamischen Zweigen (Technik von streamingbox), liegt neben dieser Datei
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 # Echte Netzwerkkarten für die Upload-Anzeige (Ethernet, WLAN, USB-/Mobilfunk-Modems). Virtuelles (Tailscale, Docker,
@@ -1117,6 +1118,14 @@ class PipelineStore:
         sind in der Tauschgruppe und alle Töne laufen über den Ton-Umschalter. cams: die Kameras beim Aufbau; ein Kamerawechsel an einem Platz braucht keinen
         Neustart (der Zubringer holt dann den Stream der neuen Kamera)."""
         c = cls._safe_cfg(cfg)
+        if pipbox_live.enabled(c) and KEY_RE.match(c.get("main", "")) and cls._layout(c)[0]:
+            # Engine Compositor: keine Zubringer, kein pbpipsel; alle Änderungen gehen im Betrieb über den Steuerkanal von belacoder
+            cams = [k for k in (c["main"], c.get("pip", ""), c.get("pip2", ""), c.get("pip3", "")) if k]
+            if len(set(cams)) != len(cams):
+                return None
+            audio = c.get("audio", "main")
+            pos = {"main": -1, "pip": 0, "pip2": 1, "pip3": 2}.get(audio, -1)
+            return {"cams": cams, "group": len(cams), "audio_pos": pos, "asel": True, "always": True, "live": True, "state": 0x3210, "line": "0 1 2 3"}
         if c["type"] != "pip" or c.get("always_ready") is not True or not KEY_RE.match(c.get("main", "")) or not plugin_swap() or not plugin_fill() or not feeder_tool():
             return None
         pip, pip2, pip3, multi = cls._layout(c)
@@ -1183,6 +1192,8 @@ class PipelineStore:
                     raise ValueError("Ton: Hauptbild oder eines der kleinen Bilder")
                 if audio == "pip" and not c.get("pip") or audio == "pip2" and not c.get("pip2") or audio == "pip3" and not c.get("pip3"):
                     raise ValueError("Ton: dieses kleine Bild gibt es nicht")
+                if audio != "main" and c.get(audio) in (c.get("inactive") or []):
+                    raise ValueError("Ton: eine deaktivierte Kamera kann nicht die Tonquelle sein")
             styles = clean_styles(c.get("styles"))
             for k, v in (visible or {}).items():
                 styles[k]["visible"] = v
@@ -1230,6 +1241,8 @@ class PipelineStore:
         q = self.Q
         base = f"rtmp://127.0.0.1:{rtmp_port}/{rtmp_app}"
         pip, pip2, pip3, multi = self._layout(c)
+        if pip and pipbox_live.enabled(c):
+            return pipbox_live.build(c, base)
 
         def xy(cfg_, kx, ky, corner_):
             if corner_ != FREE:
@@ -1440,6 +1453,8 @@ def always_compatible(a, b):
         for k in STYLE_SLOTS:
             c["styles"][k] = dict(c["styles"][k], visible=True)
         return c
+    if pipbox_live.supported() and a.get("type") == "pip" and b.get("type") == "pip" and a.get("always_ready") is True and b.get("always_ready") is True:
+        return True                       # Engine Compositor: Zuordnung, Größen, Ecken, Stile, Zuschnitt, Rahmen, Verzögerung, Ton: alles live
     return a.get("type") == "pip" and b.get("type") == "pip" and a.get("always_ready") is True and b.get("always_ready") is True and norm(a) == norm(b)
 
 
@@ -1464,7 +1479,13 @@ class SendControl:
                                capture_output=True, text=True, timeout=4)
             val = r.stdout.strip() in ("active", "activating", "deactivating")
         except (OSError, subprocess.TimeoutExpired):
-            val = False
+            # systemctl antwortet unter Last manchmal nicht in 4 s: das ist kein "Sendung aus". Der Sende-Dienst schreibt seinen Zustand alle 2 s.
+            try:
+                with open(self.STATUS) as f:
+                    st = json.load(f)
+                val = time.time() - float(st.get("time", 0)) < 15 and st.get("state") not in ("stopping", "refused")
+            except (OSError, ValueError, TypeError):
+                val = False
         self._act = (time.monotonic(), val)
         return val
 
@@ -1505,7 +1526,9 @@ class SendControl:
         else:
             live = {c["key"]: c.get("state") for c in self.cams.listing("")}
             keys = [k for k in (cfg["main"], cfg.get("pip", ""), cfg.get("pip2", ""), cfg.get("pip3", "")) if k]
-            if cfg.get("auto_failover", True) and len(set(keys)) > 1:
+            if PipelineStore.always_plan(cfg) and PipelineStore.always_plan(cfg).get("live"):
+                pass                                  # Engine "immer bereit": die Sendung startet auch ohne Kamera, jede Kamera kommt dazu, sobald sie sendet
+            elif cfg.get("auto_failover", True) and len(set(keys)) > 1:
                 # Automatisch umschalten: es genügt, wenn mindestens eine Kamera sendet (eine deaktivierte nur, wenn sie das Hauptbild ist)
                 off = set(cfg.get("inactive") or [])
                 if not any(live.get(k) == "live" for k in keys if k == cfg["main"] or k not in off):
@@ -1694,8 +1717,10 @@ class SendControl:
         cams = [{"key": k, "name": (listed.get(k) or {}).get("name") or k, "state": (listed.get(k) or {}).get("state", "unknown"),
                  "slot": slot_of[k], "main": slot_of[k] == 0, "hidden": slot_of[k] > 0 and bool(hide >> (slot_of[k] - 1) & 1),
                  "inactive": slot_of[k] > 0 and k in (c.get("inactive") or [])} for k in keys]
-        options = [k for k in order if place[k]]
-        if self.always_live():
+        off = set(c.get("inactive") or [])
+        options = [k for k in order if place[k] and (k == "main" or place[k] not in off)]      # deaktivierte Kameras sind keine Tonquelle (ausgeblendete schon)
+        starting = self._detail().get("state") in ("starting", "restarting")      # noch keine Meldung der Kameras: alle Knöpfe lassen (die Leiste springt sonst beim Start)
+        if self.always_live() and ((self._detail().get("failover") or {}).get("live") or not starting):
             # "alle Kameras immer bereit": Knöpfe und Tonwahl nur für Kameras, deren Bilder gerade ankommen; das Hauptbild ist, wer es jetzt wirklich ist
             fo = self._detail().get("failover") or {}
             live = set(fo.get("live") or [])
@@ -1707,9 +1732,10 @@ class SendControl:
             if src not in options:
                 options = [src]
         aud_key = place[src]
+        nxt = options[(options.index(src) + 1) % len(options)] if src in options else (options[0] if options else "main")
         return {"cams": cams,
                 "audio": {"src": src, "key": aud_key, "name": (listed.get(aud_key) or {}).get("name") or aud_key, "mute": mute,
-                          "next": options[(options.index(src) + 1) % len(options)]}}
+                          "next": nxt}}
 
     def apply_view(self, hide, audio, mute):
         """Ansicht in die laufende Sendekette übernehmen, ohne Neustart. Wahr, wenn der Baustein den neuen Zustand zurückgemeldet hat (so, wie er

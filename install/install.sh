@@ -102,6 +102,7 @@ PY
     install -m 644 "$HERE/hdmi_daemon.py" /opt/pipbox/hdmi_daemon.py
     install -m 644 "$HERE/pipbox_send.py" /opt/pipbox/pipbox_send.py
     install -m 644 "$HERE/pipbox_send_ctl.py" /opt/pipbox/pipbox_send_ctl.py
+    install -m 644 "$HERE/pipbox_live.py" /opt/pipbox/pipbox_live.py       # Engine "alle Kameras immer bereit" mit Compositor und Kamera-Zweigen (braucht den belacoder mit -sb11)
     install -m 644 "$HERE/pipbox_always.py" /opt/pipbox/pipbox_always.py       # Zubringer und Auswahl für "alle Kameras immer bereit" (nicht in der Pflichtliste des Update-Helfers: ein Rückweg auf ältere Versionen muss möglich bleiben)
     install -m 755 "$HERE/install/pipbox_health.py" /opt/pipbox/pipbox_health.py
     install -m 644 "$HERE/VERSION" /opt/pipbox/VERSION
@@ -193,13 +194,13 @@ PY
     echo "PIPBOX-STEP belacoder"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/belacoder
     bc_changed=0
-    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch; do
+    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch; do
       cmp -s "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp" || bc_changed=1
     done
     [ -x /opt/pipbox/bin/belacoder ] || bc_changed=1
     if [ "$bc_changed" = 1 ]; then
       if sh "$HERE/belacoder/build.sh"; then
-        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch; do
+        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch; do
           install -m 644 "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp"
         done
       else
