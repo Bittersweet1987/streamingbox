@@ -84,12 +84,16 @@ Der Ordner `srtla/` enthält zwei Patches für `srtla_send.c` aus [BELABOX/srtla
 AGPL-3.0; der Quelltext ist der Upstream-Commit plus diese Patches (siehe `srtla/README.md`). Das Original-Programm des
 BELABOX-Pakets bleibt unverändert unter `/usr/bin` liegen; der gepatchte Sender wird nach `/usr/local/bin` installiert.
 
-### belacoder-Encoder mit tolerantem Regler, Stall-Wächter und Kennzahlen (GPL-3.0)
+### belacoder-Encoder mit tolerantem Regler, Stall-Wächter, Kennzahlen und Kamera-Zweigen (GPL-3.0)
 
-Der Ordner `belacoder/` enthält drei Patches für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
+Der Ordner `belacoder/` enthält vier Patches für `belacoder.c` aus [BELABOX/belacoder](https://github.com/BELABOX/belacoder)
 (Commit ccce9ca, GNU General Public License v3). Die Patches und das damit gebaute Programm stehen ebenfalls unter GPL-3.0; der
 Quelltext ist der Upstream-Commit plus diese Patches (siehe `belacoder/README.md`). Das Original-Programm des BELABOX-Pakets bleibt
 unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` installiert und nur von der Sendekette dieses Pakets benutzt.
+
+Der vierte Patch, `belacoder-live-feeds.patch` (Kamera-Zweige, die im laufenden Betrieb gestartet und gestoppt werden, Steuerkanal, Statistik), stammt von
+Bittersweet1987 und beruht auf dessen Projekt `streamingbox` (GPL-3.0); er wurde am 6. Oktober 2026 als Pull Request #27 zu diesem Projekt beigetragen und
+steht wie belacoder unter GPL-3.0. Die zugehörige Steuerung `pipbox_live.py` hat er neu geschrieben und mit demselben Pull Request beigetragen.
 
 ### WLAN
 
