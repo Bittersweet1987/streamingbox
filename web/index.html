@@ -78,7 +78,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .chatbox .cm .mrow{grid-column:2 / -1;display:flex;gap:6px;flex-wrap:wrap;padding-top:6px}
 .chatbox .cm .mrow button{padding:4px 10px;font-size:13px}
 .chattoast{margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
-.chatoptbtn{margin-left:auto}
+.chatoptbtn{margin-left:auto;padding:2px 9px;line-height:1.3}
+.chatopts .accrow{flex:0 0 100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:6px;margin-bottom:2px;border-bottom:1px solid var(--line)}
 .chatopts{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;font-size:13px}
 .chatopts label{display:inline-flex;align-items:center;gap:6px}
 .chatbox.o-nots .cm .ct{display:none}.chatbox.o-nots .cm{grid-template-columns:1fr auto}.chatbox.o-nots .cm .cb{grid-column:1}
@@ -101,6 +102,30 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .chatbox .cm.sub,.chatbox .cm.raid,.chatbox .cm.notice{border-left:3px solid var(--accent);padding-left:8px;background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .chatbox .cm.sub .cb,.chatbox .cm.raid .cb,.chatbox .cm.notice .cb{color:var(--accent)}
 .chatbox .cm .bt{color:var(--muted);font-size:12px;margin-left:6px}
+/* besondere Ereignisse (Sub, Geschenk-Abos, Raid, Cheer, Ankündigung): farbige Karte, beim Eintreffen kurz pulsierend */
+.chatbox .cm.ev{--evc:var(--accent);border-left:4px solid var(--evc);padding:8px 8px 8px 10px;margin:4px 0;border-radius:8px;background:color-mix(in srgb,var(--evc) 13%,transparent);border-bottom-color:transparent}
+.chatbox .cm.ev-sub{--evc:#9147ff}.chatbox .cm.ev-gift{--evc:#e91e8c}.chatbox .cm.ev-raid{--evc:var(--warn)}.chatbox .cm.ev-cheer{--evc:#f5b301}.chatbox .cm.ev-announce{--evc:var(--blue)}
+.chatbox .cm.ev .cb{color:var(--text)}
+.chatbox .cm.ev .evh{display:block;font-weight:700;font-size:13px;letter-spacing:.02em;margin-bottom:2px;color:color-mix(in srgb,var(--evc) 62%,var(--text))}
+@keyframes evpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--evc) 75%,transparent)}100%{box-shadow:0 0 0 12px transparent}}
+.chatbox .cm.ev.fresh{animation:evpulse 1.3s ease-out 3}
+@media(prefers-reduced-motion:reduce){.chatbox .cm.ev.fresh{animation:none}}
+.chatwrap{position:relative}
+.evchip{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:2;border-radius:999px;padding:5px 14px;font-size:13px;font-weight:600;background:var(--accent);border-color:var(--accent);color:#0f172a;box-shadow:0 2px 8px var(--shade)}
+/* Verbindungs-Amplitude neben "Chat" (wie die Streamstatus-Anzeige für OBS): pulsierender Punkt und Linienverlauf der Senderate der letzten 30 s; grün gut, gelb mäßig, rot schlecht, grau keine Sendung */
+.sig{display:inline-flex;align-items:center;gap:7px;margin-left:10px;color:var(--muted);vertical-align:middle}
+.sig.ok{color:var(--ok)}.sig.warn{color:var(--warn)}.sig.crit{color:var(--crit)}
+.sig .sigdot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;animation:sigpulse 1.8s ease-in-out infinite;transition:color .35s ease}
+.sig.warn .sigdot{animation-duration:1.1s}.sig.crit .sigdot{animation-duration:.7s}
+.sig svg{display:block;width:80px;height:20px;overflow:visible}
+.sig .sgs{display:flex;flex-direction:column;justify-content:space-between;height:20px;min-width:20px;margin-right:-2px;font-size:9px;font-weight:700;line-height:1;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.sig .sg{fill:none;stroke:color-mix(in srgb,var(--text) 20%,transparent);stroke-width:1;vector-effect:non-scaling-stroke}
+.sig polyline{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 2px currentColor)}
+.camdots{display:inline-flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
+.camdots .dot{width:9px;height:9px;margin:0}
+.camdots:not(:empty)+.chatoptbtn{margin-left:0}
+@keyframes sigpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.82)}}
+@media(prefers-reduced-motion:reduce){.sig .sigdot{animation:none}}
 .chatbox img.em{height:1.6em;width:auto;vertical-align:middle;margin:0 1px}
 @media(max-width:620px){.chatbox{max-height:56vh;font-size:16px}.chatbox .cm{padding:9px 2px}}
 .qrline{margin-top:4px;display:flex;align-items:center;gap:6px;opacity:.75}.qrline:hover,.qrline:focus-within{opacity:1}
@@ -387,13 +412,15 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </div>
   </section>
 
-  <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="chat_badge" class="badge" hidden></span></summary>
-    <div class="twacc"><span id="tw_acc_t" class="muted"></span><button type="button" id="tw_acc_go" class="sec small">Mit Twitch anmelden</button><button type="button" id="tw_acc_out" class="sec small" hidden>Abmelden</button><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Ansicht des Chats" aria-label="Ansicht des Chats">⚙</button></div>
+  <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="net_sig" class="sig" role="img" aria-label="Verbindung: keine Messung" title="Verbindung: keine Messung"><i class="sigdot"></i><span class="sgs" aria-hidden="true"><span id="sg_max">10</span><span id="sg_mid">5,5</span><span id="sg_min">1</span></span><svg viewBox="0 0 80 20" preserveAspectRatio="none" aria-hidden="true"><path class="sg" d="M0 1H80M0 10H80M0 19H80"></path><polyline id="net_line" points=""></polyline></svg></span><span id="cam_dots" class="camdots" role="img"></span><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Konto und Ansicht des Chats" aria-label="Konto und Ansicht des Chats">⚙</button></summary>
+    <div class="twacc" id="tw_accrow"><span id="tw_acc_t" class="muted"></span><button type="button" id="tw_acc_go" class="sec small">Mit Twitch anmelden</button></div>
     <div id="chat_optbox" class="chatopts" hidden>
+      <div class="accrow" id="tw_accpanel" hidden><span id="tw_acc_t2" class="muted"></span><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="tw_acc_out" class="sec small">Abmelden</button></div>
       <label><input type="checkbox" data-opt="ts" checked> Uhrzeit</label>
       <label><input type="checkbox" data-opt="badge" checked> Abzeichen</label>
       <label><input type="checkbox" data-opt="emote" checked> Emotes als Bild</label>
       <label><input type="checkbox" data-opt="line" checked> Trennlinien</label>
+      <label><input type="checkbox" data-opt="sig"> Signal bei Ereignissen</label>
       <label>Schrift <select data-opt="size"><option value="s">klein</option><option value="m" selected>normal</option><option value="l">groß</option></select></label>
     </div>
     <div id="tw_acc_code" class="twcode" hidden>
@@ -402,7 +429,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
         <div><button type="button" id="tw_acc_cancel" class="sec small">Abbrechen</button></div></div>
     </div>
     <div id="chat_msg" class="muted" hidden></div>
-    <div id="chat_box" class="chatbox" role="log" aria-live="polite" tabindex="0"></div>
+    <div class="chatwrap"><div id="chat_box" class="chatbox" role="log" aria-live="polite" tabindex="0"></div><button type="button" id="chat_evchip" class="evchip" hidden>Neues Ereignis ↓</button></div>
     <form id="chat_form" class="chatform" hidden autocomplete="off"><input id="chat_in" maxlength="450" placeholder="Nachricht schreiben" aria-label="Nachricht schreiben"><button type="submit" id="chat_send">Senden</button></form>
     <div id="chat_err" class="err"></div>
     <div id="chat_toast" class="chattoast" role="status" hidden><span id="chat_toast_t"></span> <button type="button" id="chat_undo" class="sec small" hidden>Rückgängig</button></div>
@@ -775,6 +802,12 @@ function battHtml(c){
   const col=c.battery>75?"var(--ok)":(c.battery<25?"var(--crit)":""), age=c.battery_age, stale=age!=null&&age>600;
   const when=stale?` (Stand vor ${age>=3600?Math.round(age/3600)+" Std.":Math.round(age/60)+" Min."})`:"";
   return `<span class="batt${stale?" stale":""}" style="${col?"color:"+col:""}" title="Akku ${c.battery} %${c.charging?", am Ladekabel (lädt oder wird versorgt)":""}${when}">${c.charging?"🔌 ":""}${c.battery} %</span>`;
+}
+// Kleine Punkte in der Kopfzeile der Chat-Karte: einer je Kamera (höchstens vier), grün sendet und ist im Bild, gelb sendet noch nicht im Bild, rot kein Signal, grau unbekannt
+function paintCamDots(list){
+  const el=$("cam_dots"); if(!el) return; const l=(list||[]).slice(0,4);
+  setHtml(el,l.map(c=>`<span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>`).join(""));
+  el.setAttribute("aria-label",l.length?l.map(c=>c.name).join(", "):"");
 }
 function renderCamLights(list){
   // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt
@@ -2367,12 +2400,44 @@ function renderDetails(m){
     +drow("Frei",`<b>${f1(k.free_gb)}</b> GB`)+drow("Gesamt",`${f1(k.total_gb)} GB`);
 }
 $("statdet").addEventListener("toggle",()=>{ if($("statdet").open) tick(); });
+// Signalbalken neben "Chat": aus den Messwerten der Sendung (Wege, Laufzeit, Sendepuffer, Senderate); grau, wenn nicht gesendet wird
+function sigLevel(m){
+  const s=m.details&&m.details.send; if(!s) return null;
+  const ups=Object.values(m.uplinks||{}).filter(Boolean), on=ups.filter(u=>u.state==="an").length;
+  if(ups.length&&!on) return 0;
+  let q=4;
+  if(ups.length&&on<ups.length) q-=1;                                                                  // ein gewählter Weg fällt aus
+  const want=(s.bitrate_kbps||0)/1000; if(want>0&&s.send_mbps!=null){ const r=s.send_mbps/want; if(r<.5) q-=2; else if(r<.8) q-=1; }
+  if(s.rtt_ms!=null){ if(s.rtt_ms>1000) q-=2; else if(s.rtt_ms>400) q-=1; }
+  if(s.snd_buf_ms!=null){ if(s.snd_buf_ms>3000) q-=2; else if(s.snd_buf_ms>1500) q-=1; }
+  return Math.max(0,Math.min(4,q));
+}
+const sigPts=[], SIG_WIN=30000;                                                                      // Verlauf der Senderate (Zeit, kbit/s), wie die Streamstatus-Anzeige
+function sigNice(v){ const safe=Math.max(10000,v), mag=Math.pow(10,Math.floor(Math.log10(safe))), f=safe/mag; return (f<=1?1:f<=2?2:f<=5?5:10)*mag; }
+function sigDraw(){
+  const line=$("net_line"); if(!line||!sigPts.length) return;
+  const now=Date.now(), cut=now-SIG_WIN; while(sigPts.length>1&&sigPts[1].t<=cut) sigPts.shift();
+  const pts=sigPts.map(p=>({t:Math.max(cut,p.t),v:p.v})), FLOOR=1000, ceil=sigNice(Math.max(...pts.map(p=>p.v)));
+  const plot=pts.length===1?[{t:Math.max(cut,now-2000),v:pts[0].v},pts[0]]:pts, mb=v=>(v/1000).toLocaleString(undefined,{maximumFractionDigits:1});
+  $("sg_max").textContent=mb(ceil); $("sg_mid").textContent=mb((FLOOR+ceil)/2); $("sg_min").textContent=mb(FLOOR);
+  line.setAttribute("points",plot.map(p=>(Math.min(80,(p.t-cut)/SIG_WIN*80)).toFixed(1)+","+(19-(Math.max(FLOOR,Math.min(ceil,p.v))-FLOOR)/(ceil-FLOOR)*18).toFixed(1)).join(" "));
+}
+setInterval(()=>{ if(!document.hidden) sigDraw(); },200);
+function paintSig(m){
+  const el=$("net_sig"); if(!el) return;
+  const q=sigLevel(m), sd=m.details&&m.details.send;
+  sigPts.push({t:Date.now(),v:q==null?0:Math.max(0,(+sd.send_mbps||0)*1000)}); sigDraw();
+  el.classList.remove("ok","warn","crit"); if(q!=null) el.classList.add(q>=3?"ok":q===2?"warn":"crit");
+  const tip=q==null?"Verbindung: keine Messung (es wird nicht gesendet)":q>=3?"Verbindung: gut":q===2?"Verbindung: mäßig":"Verbindung: schlecht";
+  el.setAttribute("title",tip); el.setAttribute("aria-label",tip);
+}
 async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}
     const m=await resp.json();
     connNames=m.conn_names||connNames;
     renderDetails(m);
+    paintSig(m);
     $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":`höchster Kern ${fmt(m.cpu.max,0)} %`; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
     $("fanline").hidden=m.fan_pct==null; if(m.fan_pct!=null) $("fan").textContent=fmt(m.fan_pct,0);
@@ -2396,7 +2461,7 @@ async function tick(){
     $("net").classList.toggle("hasrows",!!netHtml);
     $("net").innerHTML=netHtml||'<span class="muted">keine Daten</span>';
     setRates(m.net);
-    renderCams(m.cameras); renderCamLights(m.cameras);
+    renderCams(m.cameras); renderCamLights(m.cameras); paintCamDots(m.cameras);
     if(due("net","c_cams",15000)) netRender();
     if(due("ua","netcard",20000)) uaLoad();
     if(due("dji","c_cams",20000)) await djiLoad();
@@ -2408,10 +2473,12 @@ async function tick(){
 let twAccPoll=null;
 function twAccRender(a){
   if(!a) return;
-  const t=$("tw_acc_t"), go=$("tw_acc_go"), out=$("tw_acc_out"), code=$("tw_acc_code");
-  const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(a.state==="angemeldet"&&!a.mod);
-  code.hidden=!wait; go.hidden=wait||a.state==="angemeldet"; out.hidden=a.state!=="angemeldet";
-  if(a.state==="angemeldet") t.textContent="Angemeldet als "+a.login;
+  const t=$("tw_acc_t"), go=$("tw_acc_go"), code=$("tw_acc_code"), on=a.state==="angemeldet";
+  const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(on&&!a.mod);
+  code.hidden=!wait; go.hidden=wait||on;
+  $("tw_accrow").hidden=on;                                              // angemeldet: die Zeile verschwindet, Konto und Abmelden liegen hinter dem ⚙ in der Kopfzeile
+  $("tw_accpanel").hidden=!on; $("tw_acc_t2").textContent=on?"Angemeldet als "+a.login:"";
+  if(on) t.textContent="Angemeldet als "+a.login;
   else if(wait) t.textContent="Warte auf die Bestätigung bei Twitch …";
   else if(a.state==="abgelaufen") t.textContent="Anmeldung abgelaufen";
   else if(a.state==="fehler") t.textContent=a.error||"Anmeldung fehlgeschlagen";
@@ -2426,7 +2493,7 @@ function twAccRender(a){
 }
 async function twAccLoad(){ try{ twAccRender(await srtlaCall("GET","/api/twitch/login")); }catch(e){} }
 $("tw_acc_go").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start"})); }catch(x){ $("tw_acc_t").textContent=x.message; } });
-$("tw_acc_mod").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start",mod:true})); }catch(x){ $("tw_acc_t").textContent=x.message; } });
+$("tw_acc_mod").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start",mod:true})); }catch(x){ $("chat_err").textContent=x.message; } });
 $("tw_acc_cancel").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"cancel"})); }catch(x){} });
 $("tw_acc_out").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/logout",{})); }catch(x){} });
 twAccLoad();
@@ -2439,9 +2506,9 @@ $("chat_form").addEventListener("submit",async e=>{
 
 // ---- Chat: liest der Server vom Kanal der Twitch-Karte; hier nur anzeigen ----
 (function(){
-  const box=$("chat_box"), msg=$("chat_msg"), badge=$("chat_badge"), card=$("c_chat");
+  const box=$("chat_box"), msg=$("chat_msg"), card=$("c_chat");
   let since=0, busy=false, shown=0;
-  const OPT_KEY="pb_chatopt"; let opt={ts:true,badge:true,emote:true,line:true,size:"m"};
+  const OPT_KEY="pb_chatopt"; let opt={ts:true,badge:true,emote:true,line:true,sig:false,size:"m"};
   try{ Object.assign(opt,JSON.parse(localStorage.getItem(OPT_KEY)||"{}")||{}); }catch(e){}
   function paintOpt(){
     box.classList.toggle("o-nots",!opt.ts); box.classList.toggle("o-nobadge",!opt.badge); box.classList.toggle("o-noemote",!opt.emote); box.classList.toggle("o-noline",!opt.line);
@@ -2473,12 +2540,29 @@ $("chat_form").addEventListener("submit",async e=>{
       pos=e[2]+1;
     }
     if(pos<t.length) body.appendChild(document.createTextNode(t.slice(pos)));
-    if(m.bits){ const b=document.createElement("span"); b.className="bt"; b.textContent=m.bits+" Bits"; body.appendChild(b); }
+    if(m.bits&&!m.ev){ const b=document.createElement("span"); b.className="bt"; b.textContent=m.bits+" Bits"; body.appendChild(b); }
+    if(m.ev){                                                                                              // besonderes Ereignis: Kopfzeile mit Art und Menge
+      const k=m.ev.k, n=m.ev.n||0;
+      const head={sub:n>0?`Sub · ${n} Monate`:"Sub",gift:n>1?`Geschenk-Abos · ${n}`:"Geschenk-Abo",raid:n>0?`Raid · ${n} Zuschauer`:"Raid",cheer:`Cheer · ${n} Bits`,announce:"Ankündigung"}[k];
+      if(head){ d.classList.add("ev","ev-"+k); const h=document.createElement("span"); h.className="evh"; h.textContent={sub:"⭐ ",gift:"🎁 ",raid:"🚀 ",cheer:"💎 ",announce:"📢 "}[k]+head; body.insertBefore(h,body.firstChild); }
+    }
     if(modOn&&m.mid&&m.uid&&m.login!==me&&!(m.badges||[]).includes("broadcaster")){                    // Moderation: Knopf an fremden Nachrichten
       const mm=document.createElement("button"); mm.type="button"; mm.className="mm"; mm.textContent="⋯"; mm.title="Moderation"; mm.setAttribute("aria-label","Moderation"); d.appendChild(mm);
     }
     return d;
   }
+  let actx=null;
+  function evSignal(){                                                                                   // Schalter "Signal bei Ereignissen": zwei kurze Töne und Vibration
+    if(!opt.sig) return;
+    try{ if(navigator.vibrate) navigator.vibrate([120,70,120]); }catch(e){}
+    try{
+      actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+      [0,.18].forEach((dt,i)=>{ const o=actx.createOscillator(), g=actx.createGain(); o.type="sine"; o.frequency.value=i?1175:880; o.connect(g); g.connect(actx.destination);
+        const t=actx.currentTime+dt; g.gain.setValueAtTime(.0001,t); g.gain.exponentialRampToValueAtTime(.18,t+.02); g.gain.exponentialRampToValueAtTime(.0001,t+.15); o.start(t); o.stop(t+.16); });
+    }catch(e){}
+  }
+  $("chat_evchip").addEventListener("click",()=>{ box.scrollTop=box.scrollHeight; $("chat_evchip").hidden=true; });
+  box.addEventListener("scroll",()=>{ if(box.scrollHeight-box.scrollTop-box.clientHeight<60) $("chat_evchip").hidden=true; });
   function notice(text){ const d=document.createElement("div"); d.className="cm notice"; const t=document.createElement("span"); t.className="ct"; const n=new Date();
     t.textContent=String(n.getHours()).padStart(2,"0")+":"+String(n.getMinutes()).padStart(2,"0"); const b=document.createElement("div"); b.className="cb"; b.textContent=text; d.appendChild(t); d.appendChild(b); box.appendChild(d); shown++; }
   function metaEvent(m){                                                                                 // Löschung, Timeout oder Bann, auch von anderen Moderatoren
@@ -2510,6 +2594,7 @@ $("chat_form").addEventListener("submit",async e=>{
   async function poll(){
     if(busy||!card.open||card.hasAttribute("data-pbhide")||document.hidden) return; busy=true;
     try{
+      const since0=since;
       const r=await fetch("/api/chat?since="+since); if(r.status===401){ location.reload(); return; }
       const d=await r.json();
       if(d.account) twAccRender(d.account);
@@ -2517,13 +2602,15 @@ $("chat_form").addEventListener("submit",async e=>{
       since=d.last;
       const near=box.scrollHeight-box.scrollTop-box.clientHeight<60;
       modOn=!!(d.account&&d.account.mod); me=(d.account&&d.account.login)||"";
+      const first=since0===0; let evNew=false;
       for(const m of d.items){
         if(m.meta){ metaEvent(m); continue; }
-        box.appendChild(line(m)); shown++;
+        const row=line(m); box.appendChild(row); shown++;
+        if(m.ev&&!first&&Date.now()/1000-(m.t||0)<120){ row.classList.add("fresh"); evNew=true; }     // nur neue Ereignisse leuchten, nicht der Verlauf beim Öffnen
       }
       while(shown>MAXLINES){ box.removeChild(box.firstChild); shown--; }
       if(near) box.scrollTop=box.scrollHeight;
-      badge.hidden=!d.channel; badge.textContent=d.channel?"#"+d.channel:"";
+      if(evNew){ if(!near) $("chat_evchip").hidden=false; evSignal(); }
       const text={"kein-kanal":"Kein Kanal in der Twitch-Karte eingetragen.","verbinde":"Verbinde …","fehler":"Keine Verbindung zu Twitch."}[d.state]||"";
       msg.textContent=(d.state==="ok"&&!shown)?"Noch keine Nachrichten.":text; msg.hidden=!msg.textContent;
     }catch(e){ /* nächster Durchlauf */ }
