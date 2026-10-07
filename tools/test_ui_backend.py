@@ -1130,6 +1130,48 @@ class AuthModes(unittest.TestCase):
         self.assertIn('d.get("remember") is True', src)
 
 
+class CameraOrder(unittest.TestCase):
+    """Reihenfolge der Kameras in der Liste, der die Kamera-Knöpfe der Fußleiste folgen (Issue #32)."""
+
+    def store(self):
+        d = tempfile.mkdtemp()
+        c = server.CameraStore(os.path.join(d, "cameras.json"), "publish", "", False)
+        c.live_streams = lambda: {}
+        return d, c
+
+    def keys(self, c):
+        return [x["key"] for x in c.listing("")]
+
+    def test_swap_changes_the_order_and_survives_a_restart(self):
+        d, c = self.store()
+        a, b, x = c.add("A", "ka", "extra"), c.add("B", "kb", "extra"), c.add("C", "kc", "extra")
+        c.swap(b["id"], a["id"])
+        self.assertEqual(self.keys(c), ["kb", "ka", "kc"])
+        c.swap(a["id"], x["id"])
+        self.assertEqual(self.keys(c), ["kb", "kc", "ka"])
+        again = server.CameraStore(os.path.join(d, "cameras.json"), "publish", "", False)
+        self.assertEqual([k["key"] for k in again.cams], ["kb", "kc", "ka"])
+
+    def test_swap_keeps_names_roles_and_keys_of_the_cameras(self):
+        d, c = self.store()
+        a, b = c.add("Haupt", "ka", "main"), c.add("Klein", "kb", "pip")
+        c.swap(a["id"], b["id"])
+        by = {x["key"]: (x["name"], x["role"]) for x in c.cams}
+        self.assertEqual(by, {"ka": ("Haupt", "main"), "kb": ("Klein", "pip")})
+
+    def test_swap_with_itself_changes_nothing_and_unknown_ids_fail(self):
+        d, c = self.store()
+        a = c.add("A", "ka", "extra")
+        c.add("B", "kb", "extra")
+        c.swap(a["id"], a["id"])
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+        with self.assertRaises(KeyError):
+            c.swap(a["id"], "00000000")
+        with self.assertRaises(KeyError):
+            c.swap("00000000", a["id"])
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+
+
 class CameraConnection(unittest.TestCase):
     """Die Adresse jeder Kamera in der Liste gilt für ihre Verbindung (DJI-Karte, eigene Wahl oder Hauptverbindung)."""
     IFACES = [{"iface": "eth0", "ip": "192.168.1.20", "cam_ip": "192.168.1.20", "label": "LAN"},

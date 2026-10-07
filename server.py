@@ -1932,6 +1932,19 @@ class CameraStore:
             self.save()
             return cam
 
+    def swap(self, cam_id, other_id):
+        """Zwei Kameras in der Liste die Plätze tauschen (Issue #32): die Reihenfolge der Kamera-Knöpfe in der Fußleiste folgt der Liste.
+        Hauptbild und kleine Bilder bleiben, wie sie sind (die Zuordnung der Bilder ist eine eigene Einstellung)."""
+        with self.lock:
+            i = next((n for n, c in enumerate(self.cams) if c["id"] == cam_id), None)
+            j = next((n for n, c in enumerate(self.cams) if c["id"] == other_id), None)
+            if i is None or j is None:
+                raise KeyError(cam_id if i is None else other_id)
+            if i != j:
+                self.cams[i], self.cams[j] = self.cams[j], self.cams[i]
+                self.save()
+            return self.cams[j]
+
     def live_streams(self):
         """Dict Schlüssel -> {fps, mbit} oder None wenn Statistik nicht lesbar."""
         if self.demo:
@@ -5709,6 +5722,10 @@ class Handler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/cameras/([0-9a-f]{8})$", path)
             if m:
                 try:
+                    if d.get("swap_with") is not None:
+                        if not isinstance(d["swap_with"], str):
+                            raise ValueError("Kamera ungültig")
+                        return self.reply(200, self.cams.swap(m.group(1), d["swap_with"]))
                     if d.get("iface") is not None:
                         cam = next((c for c in self.cams.cams if c["id"] == m.group(1)), None)
                         if cam and cam["key"].startswith("dji-"):
