@@ -56,7 +56,7 @@ def new_store(**cfg):
 class Store(unittest.TestCase):
     def test_defaults_and_public_view(self):
         s = new_store()
-        self.assertEqual(s.public(), {"enabled": False, "channel": "", "login": "", "token_set": False, "threshold": 10, "only_live": True,
+        self.assertEqual(s.public(), {"enabled": False, "channel": "", "login": "", "token_set": False, "threshold": 10, "only_live": True, "account": "",
                                       "message": "Akkustand niedrig, bitte Akku wechseln: {Kamera} ({Prozent} %)"})
         s.set(CFG)
         pub = s.public()
@@ -947,7 +947,7 @@ class Notifier(unittest.TestCase):
         st = r.n.status()
         self.assertTrue(st["token_set"])
         self.assertNotIn(TOKEN, json.dumps(st))
-        self.assertEqual(set(st), {"enabled", "channel", "login", "token_set", "threshold", "message", "only_live", "status"})
+        self.assertEqual(set(st), {"enabled", "channel", "login", "token_set", "threshold", "message", "only_live", "account", "status"})
         self.assertEqual(set(st["status"]), {"ok", "time", "text", "retry_at", "gave_up"})
         self.assertEqual(st["status"]["time"], int(r.clock.w))
 
