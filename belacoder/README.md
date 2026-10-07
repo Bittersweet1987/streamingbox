@@ -1,6 +1,6 @@
-# belacoder mit toleranterem Bitraten-Regler und Stall-Wächter am Ausgang
+# belacoder mit toleranterem Bitraten-Regler, Stall-Wächter am Ausgang und Kamera-Zweigen
 
-Drei kleine Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status).
+Vier Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status). Der vierte, `belacoder-live-feeds.patch` (von Bittersweet1987, aus seinem Projekt `streamingbox`, mit der Steuerung `pipbox_live.py` des Pakets), fügt Kamera-Zweige `sbf0` bis `sbf7` hinzu, die im laufenden Betrieb gestartet und gestoppt werden, einen Steuerkanal (`-C`), eine Statistikdatei (`-S`) und einen Ausrichtungspuffer (`-A`). Er ist die Grundlage der Engine für "Alle Kameras immer bereit" (Kennung `-sb11`, mindestens `-sb10` nötig). Er steht wie belacoder unter GPL-3.0.
 
 `belacoder-jitter-tolerant.patch` ändert die Funktion `update_bitrate()` in `belacoder.c` aus
 [BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Alle
