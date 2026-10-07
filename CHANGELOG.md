@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.128 (Beta)
+- **Chat: besondere Ereignisse fallen auf.** Sub, Resub, Geschenk-Abos (eine Sammelaktion als eine Karte), Raid, Cheer (Bits) und Ankündigungen erscheinen als farbige Karte mit Symbol und Menge; neue leuchten kurz auf. Hast du hochgescrollt, erscheint „Neues Ereignis ↓“. Optional (⚙, „Signal bei Ereignissen“, standardmäßig aus): zwei kurze Töne und Vibration. Follows gibt es im Twitch-Chat nicht (dafür bräuchte es eine andere Schnittstelle), sie fehlen deshalb.
+- **Chat: Kopfzeile wie die Streamstatus-Anzeige für OBS.** Links ein pulsierender Punkt und ein kleiner Linienverlauf der Senderate der letzten 30 Sekunden mit Raster und Skala (Mbit/s). Die Farbe zeigt die Güte der Verbindung: grün gut, gelb mäßig, rot schlecht, grau keine Sendung (aus Sendewegen, Laufzeit, Sendepuffer und Senderate). Rechts bis zu vier kleine Punkte, einer je Kamera (grün sendet und ist im Bild, gelb noch nicht im Bild, rot kein Signal, grau unbekannt). Der Kanalname in der Kopfzeile entfällt.
+- **Chat: nach der Anmeldung verschwindet die Konto-Zeile.** Ganz rechts bleibt ein kleines ⚙; dahinter stehen „Angemeldet als …“, „Moderation einschalten“, „Abmelden“ und die Ansicht.
+- **Chat über die Sendewege: ein toter Weg fällt jetzt nach etwa 100 Sekunden auf** (vorher erst nach mehr als 5 Minuten): Die Box fragt bei Stille selbst bei Twitch nach (PING). Bleibt die Antwort aus, geht der Chat über den nächsten Sendeweg. Eine einzelne Chat-Verbindung wird dabei nicht auf mehrere Wege verteilt, sie weicht nur aus.
+- Tests: `tools/test_chat.py` (19 Tests: Ereignisse, Nachfrage bei Stille). Die Amplitude und die Kamerapunkte sind in der Vorschau mit eingespielten Messreihen geprüft, noch nicht auf einer Box mit laufender Sendung.
+- Übersetzungen: die neuen Texte in allen 14 Sprachen (maschinell).
+
 ## 0.9.127 (Beta)
 - **Neu: Bereich „Chat“ in der Oberfläche** (Twitch-Chat des eigenen Kanals, am Handy gleich unter dem Live-Überblick).
   - **Lesen** ohne Token (anonym wie ein Zuschauer), mit Uhrzeit, farbigen Namen, Abzeichen (Streamer, Mod, VIP, Sub), Emotes als Bild und dünnen Trennlinien. Die Ansicht lässt sich über ⚙ anpassen (Uhrzeit, Abzeichen, Emotes, Linien, Schriftgröße).
