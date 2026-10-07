@@ -96,6 +96,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .chatbox{max-height:min(420px,60vh);min-height:80px;overflow-y:auto;font-size:15px;line-height:1.45;display:flex;flex-direction:column;overflow-wrap:anywhere;scrollbar-width:thin}
 .chatbox .cm{display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;padding:7px 2px;border-bottom:1px solid color-mix(in srgb,var(--line) 75%,transparent)}   /* hauchdünne Linie zwischen den Nachrichten */
 .chatbox .cm:last-child{border-bottom:0}
+.chatbox .cm.alt{background:color-mix(in srgb,var(--text) 6%,transparent);border-radius:6px}      /* jede zweite Nachricht minimal heller hinterlegt (feste Zählung, kein Flackern beim Entfernen alter Zeilen) */
 .chatbox .cm .ct{color:var(--muted);font-size:12px;line-height:1.9;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chatbox .cm .cb{min-width:0}
 .chatbox .cm .cn{font-weight:600;margin-right:6px}.chatbox .cm.me .cb{font-style:italic}
@@ -285,7 +286,8 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-msg{position:absolute;left:0;right:0;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
 @media(max-width:620px){
   header{flex-wrap:nowrap;padding:6px 10px;gap:6px;width:calc(100% - 16px)}       /* gleiche Breite wie die Karten (8 px Rand) */
-  main{padding-left:8px;padding-right:8px}                                          /* schmaler Rand am Handy: kein Platz verschenkt */
+  main{padding:6px 8px 16px;gap:10px}                                               /* schmaler Rand am Handy: kein Platz verschenkt */
+  header{margin-top:max(4px,env(safe-area-inset-top));top:4px}                      /* Kopfleiste ganz oben, kaum Luft darüber */
   header h1{font-size:15px;white-space:nowrap}
   header .hdr{flex-wrap:nowrap;gap:6px;min-width:0}
   header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
@@ -2514,7 +2516,7 @@ $("chat_form").addEventListener("submit",async e=>{
 // ---- Chat: liest der Server vom Kanal der Twitch-Karte; hier nur anzeigen ----
 (function(){
   const box=$("chat_box"), msg=$("chat_msg"), card=$("c_chat");
-  let since=0, busy=false, shown=0;
+  let since=0, busy=false, shown=0, altN=0;
   const OPT_KEY="pb_chatopt"; let opt={ts:true,badge:true,emote:true,line:true,sig:false,size:"m"};
   try{ Object.assign(opt,JSON.parse(localStorage.getItem(OPT_KEY)||"{}")||{}); }catch(e){}
   function paintOpt(){
@@ -2612,7 +2614,7 @@ $("chat_form").addEventListener("submit",async e=>{
       const first=since0===0; let evNew=false;
       for(const m of d.items){
         if(m.meta){ metaEvent(m); continue; }
-        const row=line(m); box.appendChild(row); shown++;
+        const row=line(m); if(altN++&1) row.classList.add("alt"); box.appendChild(row); shown++;
         if(m.ev&&!first&&Date.now()/1000-(m.t||0)<120){ row.classList.add("fresh"); evNew=true; }     // nur neue Ereignisse leuchten, nicht der Verlauf beim Öffnen
       }
       while(shown>MAXLINES){ box.removeChild(box.firstChild); shown--; }
