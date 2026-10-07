@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.9.127 (Beta)
+- **Neu: Bereich „Chat“ in der Oberfläche** (Twitch-Chat des eigenen Kanals, am Handy gleich unter dem Live-Überblick).
+  - **Lesen** ohne Token (anonym wie ein Zuschauer), mit Uhrzeit, farbigen Namen, Abzeichen (Streamer, Mod, VIP, Sub), Emotes als Bild und dünnen Trennlinien. Die Ansicht lässt sich über ⚙ anpassen (Uhrzeit, Abzeichen, Emotes, Linien, Schriftgröße).
+  - **Anmeldung bei Twitch per Code** (Gerätecode wie am Fernseher, auch als QR): kein Token mehr einfügen. Die Anmeldung wird im Hintergrund erneuert; nach 30 Tagen ohne Nutzung muss man sich neu anmelden. **Schreiben** im Chat ist danach möglich.
+  - **Moderation** (Knopf „Moderation einschalten“, dann erneute Bestätigung bei Twitch): ⋯ an jeder Nachricht mit Löschen, Timeout (10 Minuten, 1 Stunde) und Bannen, jeweils mit „Rückgängig“ statt Rückfrage; auch `/ban`, `/timeout`, `/unban` im Eingabefeld.
+  - **Der Chat-Verkehr nutzt die Sendewege der Box:** erst der beste Weg, bei Fehler oder Stille der nächste, zuletzt die normale Verbindung. (Eine einzelne Verbindung wird nicht gebündelt.)
+  - **Bildschirm anlassen** (Schalter 💡 in der Kopfzeile; braucht https, zum Beispiel über Tailscale).
+  - **Akku-Warnung im Chat** (DJI Action 4/5/6) läuft jetzt auch über das Twitch-Konto, ohne eigenen Token.
+- **Neu: Karten anordnen und ausblenden.** „Anordnen“ in der Kopfzeile (Handy: ⠿) zeigt ▲ ▼ an jeder Karte; ganz unten die Karte „Anpassen“ blendet Karten und Bereiche (DJI-Kameras, HDMI, Akku-Warnung usw.) aus. Gemerkt wird im Browser.
+- **Ehrlicher Stand:** Anmeldung, Schreiben und Moderation sind gegen eine nachgebaute Twitch-Gegenstelle getestet (`tools/test_chat.py`, `tools/test_twitch_login.py`), noch nicht gegen das echte Twitch; das Ausweichen über mehrere Sendewege und das Anlassen des Bildschirms am Handy sind auf einer Box noch ungeprüft.
+- Übersetzungen: alle neuen Texte in 14 Sprachen, dazu die 86 bisher fehlenden Texte aus 0.9.119 bis 0.9.124 (`tools/test_i18n.py` ist wieder grün). Maschinell übersetzt, nicht von Muttersprachlern geprüft.
+
 ## 0.9.126 (Beta)
 - **GoPro: Voraussetzung im Hilfetext (hinter dem „?“ beim QR-Code) ergänzt.** Der Hotspot der Box muss zuerst eingerichtet sein und die GoPro muss vorher damit verbunden sein (in der GoPro-App); erst dann kommen die Codes 1, 2, 3 (Labs-Firmware). So funktionierte es beim Test mit einer Hero 8. Der Text steht in allen 14 Sprachen. Sonst keine Änderung.
 
