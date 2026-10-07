@@ -320,6 +320,104 @@ class HelperRun(unittest.TestCase):
             self.assertNotIn(gone, text)
         self.assertIn("<IP-1>", text)
 
+    def test_camera_inputs_show_what_each_source_sends_and_hide_the_keys(self):
+        xml = ("<rtmp><server><application><name>publish</name><live>"
+               "<stream><name>dji-acde48112233</name><time>6187831</time><bw_video>5898152</bw_video><bw_audio>128000</bw_audio><nclients>2</nclients>"
+               "<publishing/><meta><video><width>1280</width><height>720</height><frame_rate>29.97</frame_rate><codec>H264</codec><profile>Main</profile>"
+               "<level>3.1</level></video><audio><codec>AAC</codec></audio></meta></stream>"
+               "<stream><name>handy</name><time>1000</time><bw_video>0</bw_video><bw_audio>0</bw_audio><nclients>1</nclients></stream>"
+               "</live></application></server></rtmp>")
+        out = H.rtmp_inputs(xml)
+        self.assertIn("1280x720", out)
+        self.assertIn("Bildrate 29.97", out)
+        self.assertIn("Profil Main", out)
+        self.assertIn("Stufe 3.1", out)
+        self.assertIn("Video 5898 kbit/s", out)
+        self.assertIn("nur Zuschauer", out)                                            # ohne <publishing/>
+        sc = H.Scrubber()
+        sc.secret_key("dji-acde48112233")
+        self.assertNotIn("acde48112233", sc.scrub(out))
+
+    def test_camera_inputs_survive_garbage_and_missing_nginx(self):
+        self.assertIn("nicht auswertbar", H.rtmp_inputs("<rtmp><oops"))
+        self.assertIn("keine Streams", H.rtmp_inputs("<rtmp/>"))
+        with mock.patch.object(H, "RTMP_STAT", "http://127.0.0.1:9/"):
+            self.assertIn("nicht lesbar", H.rtmp_inputs())
+
+    def test_thread_load_takes_the_last_frame_of_top(self):
+        nl = chr(10)
+        head = "    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND"
+        first = nl.join(["top - 10:00:00 up 1 day", "%Cpu(s): 1 us", "", head, "  1 root 20 0 0 0 0 S 1.0 0.0 0:00.01 old"]) + nl
+        last = nl.join(["top - 10:00:01 up 1 day", "%Cpu(s): 2 us", "", head, "  2 root 20 0 0 0 0 R 99.0 0.0 0:01.00 sbf1:src",
+                        "  3 root 20 0 0 0 0 S 3.0 0.0 0:00.10 queue:src"]) + nl
+        with mock.patch.object(H, "run", return_value=first + last):
+            out = H.thread_load(1)
+        self.assertIn("sbf1:src", out)
+        self.assertNotIn("queue:src", out)                                           # nur die ersten n Threads
+        self.assertNotIn(" old", out)
+
+    def test_bundle_has_the_sender_sections(self):
+        def fake_run(cmd, timeout=15, limit=400_000):
+            return ""
+        with mock.patch.object(H, "run", side_effect=fake_run), mock.patch.object(H, "rtmp_inputs", return_value="x"):
+            text = H.build()
+        for title in ("Kameras am Eingang (nginx-Statistik)", "Bildaufbau der Sendekette", "Auslastung je Thread (Momentaufnahme)"):
+            self.assertIn("===== " + title, text)
+
+    @staticmethod
+    def flv_tag(kind, ts, body):
+        n = len(body)
+        head = bytes([kind]) + n.to_bytes(3, "big") + (ts & 0xFFFFFF).to_bytes(3, "big") + bytes([ts >> 24]) + bytes(3)
+        return head + body + (11 + n).to_bytes(4, "big")
+
+    def sample_flv(self, with_audio=True, step=33, back=False):
+        sps = bytes.fromhex("6764002aacd940780227e584000003000400000300f23c60c658")
+        avcc = bytes([1, 0x64, 0, 0x2A, 0xFF, 0xE1]) + len(sps).to_bytes(2, "big") + sps + bytes([1, 0, 4]) + bytes.fromhex("68ee3c80")
+        data = b"FLV" + bytes([1, 5 if with_audio else 1]) + (9).to_bytes(4, "big") + (0).to_bytes(4, "big")
+        data += self.flv_tag(9, 0, bytes([0x17, 0, 0, 0, 0]) + avcc)
+        if with_audio:
+            data += self.flv_tag(8, 0, bytes([0xAF, 0, 0x11, 0x90]))
+        for i in range(30):
+            ts = i * step - (50 if back and i == 10 else 0)
+            key = i % 15 == 0
+            data += self.flv_tag(9, ts, bytes([0x17 if key else 0x27, 1]) + (66 if i % 3 == 1 else 0).to_bytes(3, "big") + bytes([0, 0, 0, 1]) + bytes(20))
+            if with_audio and i % 2 == 0:
+                data += self.flv_tag(8, ts, bytes([0xAF, 1]) + bytes(30))
+        return data
+
+    def test_stream_probe_describes_a_normal_stream(self):
+        out = H.analyze_flv(self.sample_flv())
+        self.assertIn("H.264", out)
+        self.assertIn("Profil High (100)", out)
+        self.assertIn("1920x1080", out)
+        self.assertIn("Bezugsbilder 4", out)
+        self.assertIn("(B-Bilder möglich)", out)
+        self.assertIn("Bilder: 30 in 1.0 s", out)
+        self.assertIn("Rückwärtssprünge 0", out)
+        self.assertIn("Schlüsselbilder: 2 alle 495 ms", out)
+        self.assertIn("Bilder mit Zeitversatz (B-Bilder): 10", out)
+        self.assertIn("Ton: AAC, 48000 Hz, 2 Kanäle", out)
+
+    def test_stream_probe_shows_missing_audio_and_time_jumps(self):
+        out = H.analyze_flv(self.sample_flv(with_audio=False, back=True))
+        self.assertIn("Ton: keine Tonpakete gelesen", out)
+        self.assertIn("Rückwärtssprünge 1", out)
+
+    def test_stream_probe_survives_garbage_and_cut_streams(self):
+        self.assertIn("kein FLV", H.analyze_flv(b"hello"))
+        self.assertIn("Bild", H.analyze_flv(self.sample_flv()[:700]))                 # mitten in einem Paket abgeschnitten
+        self.assertIn("keine Bildpakete", H.analyze_flv(b"FLV" + bytes([1, 5]) + (9).to_bytes(4, "big") + (0).to_bytes(4, "big")))
+
+    def test_sps_of_a_small_baseline_stream(self):
+        info = H.sps_info(bytes.fromhex("6742c01fda0280f6c8"))
+        self.assertEqual((info["profile"], info["width"], info["height"], info["poc"]), (66, 640, 480, 2))
+
+    def test_stream_probe_without_sources_or_tool(self):
+        self.assertIn("keine Quelle", H.stream_probe(xml="<rtmp/>"))
+        xml = "<rtmp><server><application><name>publish</name><live><stream><name>a1</name><publishing/></stream></live></application></server></rtmp>"
+        with mock.patch("shutil.which", return_value=None):
+            self.assertIn("gst-launch-1.0 fehlt", H.stream_probe(xml=xml))
+
     def test_size_is_capped_and_head_kept(self):
         big = "x" * 1000 + "\n"
         with mock.patch.object(H, "MAX_TOTAL", 60_000), \
