@@ -79,6 +79,25 @@ class Parsing(unittest.TestCase):
         raid = reader().parse("@msg-id=raid;system-msg=12\\sraiders\\sfrom\\sMax :tmi.twitch.tv USERNOTICE #kanal")
         self.assertEqual(raid["type"], "raid")
 
+    def test_special_events_carry_kind_and_amount(self):
+        r = reader()
+        sub = r.parse("@msg-id=resub;msg-param-cumulative-months=7;system-msg=Lena\\ssubscribed. :tmi.twitch.tv USERNOTICE #kanal :Tolle Show")
+        self.assertEqual(sub["ev"], {"k": "sub", "n": 7})
+        self.assertEqual(r.parse("@msg-id=sub;system-msg=Neu :tmi.twitch.tv USERNOTICE #kanal")["ev"], {"k": "sub", "n": 0})
+        raid = r.parse("@msg-id=raid;msg-param-viewerCount=42;system-msg=42\\sraiders :tmi.twitch.tv USERNOTICE #kanal")
+        self.assertEqual(raid["ev"], {"k": "raid", "n": 42})
+        mass = r.parse("@msg-id=submysterygift;msg-param-mass-gift-count=5;system-msg=Max\\sgifted\\s5. :tmi.twitch.tv USERNOTICE #kanal")
+        self.assertEqual(mass["ev"], {"k": "gift", "n": 5})
+        self.assertEqual(r.parse("@msg-id=subgift;system-msg=Max\\sgifted\\sone. :tmi.twitch.tv USERNOTICE #kanal")["ev"], {"k": "gift", "n": 1})
+        part = r.parse("@msg-id=subgift;msg-param-community-gift-id=123;system-msg=Max\\sgifted\\sone. :tmi.twitch.tv USERNOTICE #kanal")
+        self.assertIsNone(part)                                                                  # Teil einer Sammelaktion: nur die Sammelmeldung zählt
+        cheer = r.parse("@bits=500;display-name=Lena :lena!lena@lena.tmi.twitch.tv PRIVMSG #kanal :cheer500 Weiter so")
+        self.assertEqual(cheer["ev"], {"k": "cheer", "n": 500})
+        self.assertEqual(cheer["type"], "msg")
+        self.assertNotIn("ev", r.parse(":bob!bob@bob.tmi.twitch.tv PRIVMSG #kanal :hallo"))
+        junk = r.parse("@msg-id=raid;msg-param-viewerCount=99999999999999;system-msg=x :tmi.twitch.tv USERNOTICE #kanal")
+        self.assertEqual(junk["ev"], {"k": "raid", "n": 0})                                        # unsinnige Zahl: 0, nie ein Fehler
+
     def test_hostile_values_are_neutralised(self):
         line = ("@color=red;display-name=Mallory\x07;emotes=a%b:0-3,9-99/ok_1:0-1 "
                 ":m!m@m.tmi.twitch.tv PRIVMSG #kanal :<img src=x onerror=alert(1)>\x1b[31m rot")
@@ -177,6 +196,42 @@ class Live(unittest.TestCase):
         t.join(5)
         self.assertFalse(t.is_alive())
         self.assertEqual(r.state, "aus")
+
+
+class SilentHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        self.server.seen = []
+        for _ in range(2):
+            self.server.seen.append(self.rfile.readline().decode().strip())
+        self.wfile.write(b":tmi.twitch.tv 001 justinfan1 :Welcome\r\n")
+        self.wfile.flush()
+        while True:                                                          # danach still: liest nur noch mit
+            line = self.rfile.readline()
+            if not line:
+                return
+            self.server.seen.append(line.decode().strip())
+
+
+class Silent(unittest.TestCase):
+    def test_silent_connection_is_probed_and_then_given_up_on(self):
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), SilentHandler)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        failed = []
+        try:
+            r = reader(host="127.0.0.1", port=srv.server_address[1], tls=False)
+            r.PROBE, r.STALE, r.IDLE = 0.4, 1.6, 30.0
+            r.paths.fail = lambda src, secs: failed.append(src)
+            r.poll(0)
+            deadline = time.time() + 8
+            while time.time() < deadline and not failed:
+                time.sleep(0.05)
+            self.assertTrue(failed, "der stille Weg wurde nicht aufgegeben")
+            self.assertIn("PING :pipbox", srv.seen)                           # die Box hat selbst nachgefragt
+        finally:
+            r.IDLE = 0.0
+            srv.shutdown()
+            srv.server_close()
 
 
 class Paths(unittest.TestCase):
