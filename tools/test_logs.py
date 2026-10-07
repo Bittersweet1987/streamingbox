@@ -398,6 +398,34 @@ class HelperRun(unittest.TestCase):
         self.assertIn("Bilder mit Zeitversatz (B-Bilder): 10", out)
         self.assertIn("Ton: AAC, 48000 Hz, 2 Kanäle", out)
 
+    def test_stream_probe_shows_coded_size_crop_and_vui(self):
+        out = H.analyze_flv(self.sample_flv())
+        self.assertIn("kodiert 1920x1088 mit Beschnitt links/rechts/oben/unten 0/0/0/8", out)       # 1080p wird als 1088 kodiert und beschnitten
+        info = H.sps_info(bytes.fromhex("6764002aacd940780227e584000003000400000300f23c60c658"))
+        self.assertEqual((info["coded"], info["crop"]), ((1920, 1088), (0, 0, 0, 8)))
+        small = H.sps_info(bytes.fromhex("6742c01fda0280f6c8"))
+        self.assertEqual(small["crop"], (0, 0, 0, 0))
+
+    def test_gst_caps_of_takes_parser_and_decoder_output(self):
+        nl = chr(10)
+        text = nl.join([
+            "/GstPipeline:pipeline0/GstH264Parse:h264parse0.GstPad:sink: caps = video/x-h264, stream-format=(string)avc",
+            "/GstPipeline:pipeline0/GstH264Parse:h264parse0.GstPad:src: caps = video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, width=(int)1280",
+            "/GstPipeline:pipeline0/GstMppVideoDec:mppvideodec0.GstPad:sink: caps = video/x-h264, alignment=(string)au",
+            "/GstPipeline:pipeline0/GstMppVideoDec:mppvideodec0.GstPad:src: caps = video/x-raw, format=(string)NV12, width=(int)1280, height=(int)720",
+            "/GstPipeline:pipeline0/GstMppVideoDec:mppvideodec0.GstPad:src: caps = video/x-raw, format=(string)NV12, width=(int)9999"])
+        caps = H.gst_caps_of(text)
+        self.assertIn("byte-stream", caps["in"])
+        self.assertIn("width=(int)1280, height=(int)720", caps["out"])                              # die erste Meldung gilt
+        self.assertEqual(H.gst_caps_of("nichts"), {})
+
+    def test_decoder_probe_without_sources_or_tool(self):
+        self.assertIn("keine Quelle", H.decoder_probe(xml="<rtmp/>"))
+        xml = "<rtmp><server><application><name>publish</name><live><stream><name>a1</name><publishing/></stream></live></application></server></rtmp>"
+        with mock.patch("shutil.which", return_value=None):
+            self.assertIn("gst-launch-1.0 fehlt", H.decoder_probe(xml=xml))
+        self.assertIn("nicht auswertbar", H.decoder_probe(xml="<rtmp><oops"))
+
     def test_stream_probe_shows_missing_audio_and_time_jumps(self):
         out = H.analyze_flv(self.sample_flv(with_audio=False, back=True))
         self.assertIn("Ton: keine Tonpakete gelesen", out)
@@ -513,9 +541,9 @@ class HelperRun(unittest.TestCase):
     def test_bundle_has_the_cpu_and_system_sections(self):
         def fake_run(cmd, timeout=15, limit=400_000):
             return ""
-        with mock.patch.object(H, "run", side_effect=fake_run), mock.patch.object(H, "cpu_report", return_value="x"),                 mock.patch.object(H, "stream_probe", return_value="x"), mock.patch.object(H, "rtmp_inputs", return_value="x"):
+        with mock.patch.object(H, "run", side_effect=fake_run), mock.patch.object(H, "cpu_report", return_value="x"),                 mock.patch.object(H, "stream_probe", return_value="x"), mock.patch.object(H, "rtmp_inputs", return_value="x"),                 mock.patch.object(H, "decoder_probe", return_value="x"):
             text = H.build()
-        for title in ("Auslastung je Kern und je Dienst", "System: Druck, freier Platz, Speicherbedarf", "Netzwerk-Zähler", "Ereignisse der Sendekette",
+        for title in ("Dekoder-Ausgang je Quelle", "Auslastung je Kern und je Dienst", "System: Druck, freier Platz, Speicherbedarf", "Netzwerk-Zähler", "Ereignisse der Sendekette",
                       "nginx: letzte Fehler", "Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)"):
             self.assertIn("===== " + title, text)
 

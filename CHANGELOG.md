@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.123 (Beta)
+- **Neu: Die Protokolle zeigen, was der Dekoder aus einer Quelle macht** (Issue #35: bei einer Quelle läuft der Zweig nach dem Dekoder auf einem Kern bei 100 %, bei den anderen nicht).
+  - **Dekoder-Ausgang je Quelle:** Die Box dekodiert von jedem sendenden H.264-Eingang 4 Sekunden probeweise mit dem Hardware-Dekoder und schreibt auf, was hineingeht und herauskommt (Format, Größe, Bildrate, Seitenverhältnis, Farbinformationen, Speicherart).
+  - **Stream-Prüfung der Quellen** nennt zusätzlich die kodierte Größe und den Beschnitt (zum Beispiel 1920x1088 mit 8 Zeilen Beschnitt unten) und die Darstellungsangaben im Stream (VUI: Bildrate, Seitenverhältnis, Farbbereich).
+  - Tests: `tools/test_logs.py` (3 neue Tests); auf einer Box (0.9.122) mit drei Quellen einmal laufen lassen und die Ausgabe angesehen. Die Probe-Dekodierung belastet die Box für diese 4 Sekunden zusätzlich (je Quelle ein zweiter Dekoder). Englische Texte in `web/i18n/en.json`.
+
 ## 0.9.122 (Beta)
 - **Neu: Die Protokolle zeigen jetzt, was die Box auslastet und was die Sendekette tut** (zur Fehlersuche, zum Beispiel Issue #35). Neue Abschnitte:
   - **Auslastung je Kern und je Dienst (Momentaufnahme über 2 s):** Last jedes Kerns in %, die Dienste nach Last (100 % = ein ganzer Kern), und die Threads mit der größten Last samt Kern, auf dem sie zuletzt liefen.
