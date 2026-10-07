@@ -69,6 +69,40 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .cam .top .cn{flex:0 1 270px;min-width:0}
 .cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
 .cam .top .dyn{display:inline-block;min-width:9.6em;text-align:right;font-variant-numeric:tabular-nums}
+.chatbox .cm.gone .cb{text-decoration:line-through;color:var(--muted)}
+.chatbox .bdg{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;line-height:1;padding:2px 4px;margin-right:5px;border-radius:4px;vertical-align:1px;color:#0f172a}
+.chatbox .bdg.broadcaster{background:#e91916}.chatbox .bdg.moderator{background:#00ad03}.chatbox .bdg.vip{background:#e005b9;color:#fff}
+.chatbox .bdg.subscriber,.chatbox .bdg.founder{background:#9147ff;color:#fff}.chatbox .bdg.staff,.chatbox .bdg.partner{background:#6b7280;color:#fff}
+.chatbox .cm .mm{opacity:.35;border:0;background:transparent;color:var(--fg);cursor:pointer;font-size:16px;line-height:1;padding:0 6px;align-self:start}
+.chatbox .cm:hover .mm,.chatbox .cm .mm:focus{opacity:1}
+.chatbox .cm .mrow{grid-column:2 / -1;display:flex;gap:6px;flex-wrap:wrap;padding-top:6px}
+.chatbox .cm .mrow button{padding:4px 10px;font-size:13px}
+.chattoast{margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+.chatoptbtn{margin-left:auto}
+.chatopts{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;font-size:13px}
+.chatopts label{display:inline-flex;align-items:center;gap:6px}
+.chatbox.o-nots .cm .ct{display:none}.chatbox.o-nots .cm{grid-template-columns:1fr auto}.chatbox.o-nots .cm .cb{grid-column:1}
+.chatbox.o-nobadge .bdg{display:none}
+.chatbox .emt{display:none}.chatbox.o-noemote .emt{display:inline}.chatbox.o-noemote img.em{display:none}
+.chatbox.o-noline .cm{border-bottom:0}
+.chatbox.o-s{font-size:13px}.chatbox.o-l{font-size:18px}
+.chatform{display:flex;gap:8px;margin-top:10px}.chatform input{flex:1;min-width:0}
+.twacc{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:14px}
+.twcode{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:10px;border:1px solid var(--line);border-radius:12px}
+.twcode svg{width:150px;height:150px;border-radius:6px}
+.twcode_big{font-size:26px;font-weight:700;letter-spacing:.14em;font-variant-numeric:tabular-nums}
+.twcode_txt{display:grid;gap:8px;min-width:0}
+.chatbox{max-height:min(420px,60vh);min-height:80px;overflow-y:auto;font-size:15px;line-height:1.45;display:flex;flex-direction:column;overflow-wrap:anywhere;scrollbar-width:thin}
+.chatbox .cm{display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;padding:7px 2px;border-bottom:1px solid color-mix(in srgb,var(--line) 75%,transparent)}   /* hauchdünne Linie zwischen den Nachrichten */
+.chatbox .cm:last-child{border-bottom:0}
+.chatbox .cm .ct{color:var(--muted);font-size:12px;line-height:1.9;font-variant-numeric:tabular-nums;white-space:nowrap}
+.chatbox .cm .cb{min-width:0}
+.chatbox .cm .cn{font-weight:600;margin-right:6px}.chatbox .cm.me .cb{font-style:italic}
+.chatbox .cm.sub,.chatbox .cm.raid,.chatbox .cm.notice{border-left:3px solid var(--accent);padding-left:8px;background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.chatbox .cm.sub .cb,.chatbox .cm.raid .cb,.chatbox .cm.notice .cb{color:var(--accent)}
+.chatbox .cm .bt{color:var(--muted);font-size:12px;margin-left:6px}
+.chatbox img.em{height:1.6em;width:auto;vertical-align:middle;margin:0 1px}
+@media(max-width:620px){.chatbox{max-height:56vh;font-size:16px}.chatbox .cm{padding:9px 2px}}
 .qrline{margin-top:4px;display:flex;align-items:center;gap:6px;opacity:.75}.qrline:hover,.qrline:focus-within{opacity:1}
 .qrline select{width:auto;min-width:0;padding:1px 4px;font-size:12px;height:24px}
 .qrbox{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
@@ -320,14 +354,26 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 .livesrv{font-size:12px;margin-top:3px}.liveup{margin-left:16px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.liveup small{font-size:13px;font-weight:400;color:var(--muted)}
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
 .autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
+[data-pbhide]{display:none!important}
+.laylist{display:grid;gap:8px 16px;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));align-items:start}.laygrp{display:grid;gap:0}
+.layrow{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:14px;cursor:pointer}.layrow.sub{padding-left:26px;color:var(--muted);font-size:13px}
+.layrow input{width:18px;height:18px;flex:none}
+#pb_bar{position:sticky;top:calc(var(--hdrh,64px) + 8px);z-index:20;grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:8px 12px;border:1px solid var(--accent);border-radius:12px;background:var(--card);box-shadow:0 4px 14px rgba(0,0,0,.35);font-size:14px}
+.pb-arr details.card[id]:not([data-fixed]){outline:2px dashed var(--accent);outline-offset:3px}
+.pb-arr details.card[id]:not([data-fixed])>:not(summary){display:none}      /* beim Anordnen nur die Titel zeigen (der Auf-/Zu-Zustand der Karten bleibt unberührt) */
+.pbmv{display:inline-flex;gap:6px;flex:none}
+.pbmv button{width:38px;height:38px;padding:0;font-size:16px;line-height:1;border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:10px;cursor:pointer}
+.pbmv button:disabled{opacity:.3;cursor:default}
+#pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
 </style>
 </head>
 <body>
 <header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
-  <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
+  <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button><button type="button" class="sec small" id="pb_arr">Anordnen</button></span>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button><button type="button" class="sec small foldm" id="pb_arr_m" title="Karten anordnen" aria-label="Karten anordnen">⠿</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
@@ -340,6 +386,27 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <div id="liveserver" class="muted livesrv"></div>
     </div>
   </section>
+
+  <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="chat_badge" class="badge" hidden></span></summary>
+    <div class="twacc"><span id="tw_acc_t" class="muted"></span><button type="button" id="tw_acc_go" class="sec small">Mit Twitch anmelden</button><button type="button" id="tw_acc_out" class="sec small" hidden>Abmelden</button><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Ansicht des Chats" aria-label="Ansicht des Chats">⚙</button></div>
+    <div id="chat_optbox" class="chatopts" hidden>
+      <label><input type="checkbox" data-opt="ts" checked> Uhrzeit</label>
+      <label><input type="checkbox" data-opt="badge" checked> Abzeichen</label>
+      <label><input type="checkbox" data-opt="emote" checked> Emotes als Bild</label>
+      <label><input type="checkbox" data-opt="line" checked> Trennlinien</label>
+      <label>Schrift <select data-opt="size"><option value="s">klein</option><option value="m" selected>normal</option><option value="l">groß</option></select></label>
+    </div>
+    <div id="tw_acc_code" class="twcode" hidden>
+      <div id="tw_qr"></div>
+      <div class="twcode_txt"><div class="twcode_big" id="tw_code" translate="no"></div><a id="tw_link" href="#" target="_blank" rel="noopener">twitch.tv/activate</a>
+        <div><button type="button" id="tw_acc_cancel" class="sec small">Abbrechen</button></div></div>
+    </div>
+    <div id="chat_msg" class="muted" hidden></div>
+    <div id="chat_box" class="chatbox" role="log" aria-live="polite" tabindex="0"></div>
+    <form id="chat_form" class="chatform" hidden autocomplete="off"><input id="chat_in" maxlength="450" placeholder="Nachricht schreiben" aria-label="Nachricht schreiben"><button type="submit" id="chat_send">Senden</button></form>
+    <div id="chat_err" class="err"></div>
+    <div id="chat_toast" class="chattoast" role="status" hidden><span id="chat_toast_t"></span> <button type="button" id="chat_undo" class="sec small" hidden>Rückgängig</button></div>
+  </details>
 
   <details class="card wide" id="c_status" open><summary><span class="sumh">Status</span></summary>
     <div id="alerts"></div>
@@ -480,13 +547,15 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   </div>
   </details>
   <details class="subsec" id="tw_sec"><summary>Akku-Warnung im Twitch-Chat (nur bei DJI) <span class="muted" id="tw_sum"></span></summary>
-    <label class="chk"><input type="checkbox" id="tw_on"> Einschalten</label>
+    <label class="chk"><input type="checkbox" id="tw_on"> Einschalten</label> <span class="muted" id="tw_acc2"></span>
+    <div id="tw_adv_box">
     <div class="twgrid">
       <label class="f sens">Kanal (Konto, auf dem gestreamt wird)<input id="tw_channel" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <label class="f sens">Bot-Konto (Name)<input id="tw_login" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <label class="f">Token des Bot-Kontos<input id="tw_token" type="password" maxlength="120" autocomplete="new-password"></label>
     </div>
-    <div class="ph" data-hlp>Token mit dem Recht „chat:edit“, wie bei NOALBS. Er muss zum Bot-Konto gehören.</div>
+    <div class="ph" data-hlp>Token mit dem Recht „chat:edit“, wie bei NOALBS. Er muss zum Bot-Konto gehören. Einfacher: im Bereich „Chat“ mit Twitch anmelden.</div>
+    </div>
     <div class="twrow">
       <label class="f">Warnen bei (%)<input id="tw_thr" type="number" min="1" max="50" step="1"></label>
       <label class="f grow">Nachricht ({Kamera} und {Prozent} werden ersetzt)<input id="tw_msg" maxlength="300" autocomplete="off"></label>
@@ -654,6 +723,12 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="ph" style="margin-top:0">Fährt die Box sauber herunter oder startet sie neu. Wenn die Box ausgeschaltet ist, kann sie über die Oberfläche nicht wieder eingeschaltet werden: dafür den Strom kurz trennen oder die Ein-Taste nutzen. „Abmelden“ beendet die Anmeldung auf diesem Gerät, auch eine mit „Angemeldet bleiben“ gemerkte.</div>
     <div class="actions"><button id="pw_off" type="button" class="warnbtn">Herunterfahren</button> <button id="pw_reboot" type="button" class="sec">Neu starten</button> <button id="logout" type="button" class="sec" title="Von dieser Box abmelden (auch eine gemerkte Anmeldung)">Abmelden</button></div>
     <div id="pwmsg" class="ph"></div>
+  </details>
+
+  <details class="card wide" id="c_layout" data-fixed><summary><span class="sumh">Anpassen</span></summary>
+    <div class="ph" style="margin-top:0">Haken weg = ausgeblendet.</div>
+    <div id="lay_list" class="laylist"></div>
+    <div class="actions"><button type="button" id="lay_arr" class="sec">Anordnen</button><button type="button" id="lay_reset" class="sec">Zurücksetzen</button></div>
   </details>
 </main>
 <nav id="mfoot" aria-label="Schnellzugriff"><div id="mf_msg" class="mf-msg" role="status" hidden></div><button type="button" id="mf_live" class="mf-live" disabled aria-label="Sendung starten oder beenden">Live</button><div id="mf_tools" role="group" aria-label="Kameras und Ton" hidden></div><button type="button" id="mf_info" class="mf-info" aria-label="Bedienung der Kamera-Knöpfe" title="Bedienung der Kamera-Knöpfe" hidden>ⓘ</button></nav>
@@ -1230,7 +1305,7 @@ function twStatusHtml(d){                                       // letzte Meldun
   return `<span>Fehler um ${t} Uhr:</span> <span>${esc(s.text)}</span>`+(s.retry_at?` <span>Neuer Versuch um ${twTime(s.retry_at)} Uhr.</span>`:"");
 }
 function twButtons(){
-  const ok=!!(twData&&twData.token_set&&twData.channel&&twData.login);
+  const ok=!!(twData&&((twData.token_set&&twData.channel&&twData.login)||(twData.account&&twData.channel)));
   $("tw_save").disabled=twBusy; $("tw_test").disabled=twBusy||twDirty||!ok;
   $("tw_test").title=twDirty?"Zuerst speichern":"";
 }
@@ -2329,6 +2404,228 @@ async function tick(){
     lastAlerts=m.alerts||[]; paintHealth();
   }catch(e){ /* keine Antwort: beim nächsten Durchlauf wieder */ }
 }
+// ---- Twitch-Konto: Anmeldung per Geräte-Code (kein Token einfügen); Zugangsdaten bleiben auf der Box ----
+let twAccPoll=null;
+function twAccRender(a){
+  if(!a) return;
+  const t=$("tw_acc_t"), go=$("tw_acc_go"), out=$("tw_acc_out"), code=$("tw_acc_code");
+  const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(a.state==="angemeldet"&&!a.mod);
+  code.hidden=!wait; go.hidden=wait||a.state==="angemeldet"; out.hidden=a.state!=="angemeldet";
+  if(a.state==="angemeldet") t.textContent="Angemeldet als "+a.login;
+  else if(wait) t.textContent="Warte auf die Bestätigung bei Twitch …";
+  else if(a.state==="abgelaufen") t.textContent="Anmeldung abgelaufen";
+  else if(a.state==="fehler") t.textContent=a.error||"Anmeldung fehlgeschlagen";
+  else t.textContent="Nicht angemeldet";
+  if(wait){ $("tw_code").textContent=a.code||""; const l=$("tw_link"); l.href=a.uri||"#"; l.textContent=(a.uri||"").replace(/^https?:\/\//,"").replace(/\?.*$/,"")||"twitch.tv/activate";
+            const q=a.uri?QR.svg(a.uri):""; if($("tw_qr").dataset.u!==a.uri){ $("tw_qr").innerHTML=q; $("tw_qr").dataset.u=a.uri||""; } }
+  $("chat_form").hidden=a.state!=="angemeldet";
+  const acc=$("tw_acc2"); if(acc){ acc.textContent=a.state==="angemeldet"?"Konto: "+a.login:""; }
+  $("tw_adv_box")&&($("tw_adv_box").hidden=a.state==="angemeldet");
+  if(wait&&!twAccPoll) twAccPoll=setInterval(twAccLoad,2000);
+  if(!wait&&twAccPoll){ clearInterval(twAccPoll); twAccPoll=null; if(typeof twLoad==="function") twLoad(); }
+}
+async function twAccLoad(){ try{ twAccRender(await srtlaCall("GET","/api/twitch/login")); }catch(e){} }
+$("tw_acc_go").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start"})); }catch(x){ $("tw_acc_t").textContent=x.message; } });
+$("tw_acc_mod").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start",mod:true})); }catch(x){ $("tw_acc_t").textContent=x.message; } });
+$("tw_acc_cancel").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"cancel"})); }catch(x){} });
+$("tw_acc_out").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/logout",{})); }catch(x){} });
+twAccLoad();
+$("chat_form").addEventListener("submit",async e=>{
+  e.preventDefault(); const i=$("chat_in"), err=$("chat_err"), t=i.value.trim(); if(!t) return;
+  $("chat_send").disabled=true; err.textContent="";
+  try{ await srtlaCall("POST","/api/chat/send",{text:t}); i.value=""; }catch(x){ err.textContent=x.message; }
+  $("chat_send").disabled=false; i.focus();
+});
+
+// ---- Chat: liest der Server vom Kanal der Twitch-Karte; hier nur anzeigen ----
+(function(){
+  const box=$("chat_box"), msg=$("chat_msg"), badge=$("chat_badge"), card=$("c_chat");
+  let since=0, busy=false, shown=0;
+  const OPT_KEY="pb_chatopt"; let opt={ts:true,badge:true,emote:true,line:true,size:"m"};
+  try{ Object.assign(opt,JSON.parse(localStorage.getItem(OPT_KEY)||"{}")||{}); }catch(e){}
+  function paintOpt(){
+    box.classList.toggle("o-nots",!opt.ts); box.classList.toggle("o-nobadge",!opt.badge); box.classList.toggle("o-noemote",!opt.emote); box.classList.toggle("o-noline",!opt.line);
+    box.classList.remove("o-s","o-l"); if(opt.size==="s"||opt.size==="l") box.classList.add("o-"+opt.size);
+    document.querySelectorAll("#chat_optbox [data-opt]").forEach(i=>{ if(i.type==="checkbox") i.checked=!!opt[i.dataset.opt]; else i.value=opt[i.dataset.opt]; });
+  }
+  $("chat_opt").addEventListener("click",()=>{ const b=$("chat_optbox"); b.hidden=!b.hidden; $("chat_opt").setAttribute("aria-expanded",String(!b.hidden)); });
+  $("chat_optbox").addEventListener("change",e=>{ const i=e.target.closest("[data-opt]"); if(!i) return; opt[i.dataset.opt]=i.type==="checkbox"?i.checked:i.value;
+    try{ localStorage.setItem(OPT_KEY,JSON.stringify(opt)); }catch(x){} paintOpt(); });
+  paintOpt();
+  const BADGE_TXT={broadcaster:"STREAMER",moderator:"MOD",vip:"VIP",subscriber:"SUB",founder:"SUB",staff:"STAFF",partner:"PARTNER"};
+  const BADGE_TIP={broadcaster:"Streamer",moderator:"Moderator",vip:"VIP",subscriber:"Abonnent",founder:"Abonnent (Gründer)",staff:"Twitch-Mitarbeiter",partner:"Partner"};
+  let modOn=false, me="";
+  const MAXLINES=200, EMOTE="https://static-cdn.jtvnw.net/emoticons/v2/%s/default/dark/1.0";
+  function line(m){
+    const d=document.createElement("div"); d.className="cm "+(m.type||"msg");
+    const tm=document.createElement("span"); tm.className="ct"; const dt=new Date((m.t||0)*1000);                         // Uhrzeit der Nachricht (Ortszeit des Geräts)
+    tm.textContent=String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0"); tm.title=dt.toLocaleString(); d.appendChild(tm);
+    const body=document.createElement("div"); body.className="cb"; d.appendChild(body);
+    if(m.mid) d.dataset.mid=m.mid; if(m.uid) d.dataset.uid=m.uid; if(m.login) d.dataset.login=m.login;
+    for(const bn of (m.badges||[])){ const bg=document.createElement("span"); bg.className="bdg "+bn; bg.textContent=BADGE_TXT[bn]||bn; bg.title=BADGE_TIP[bn]||bn; body.appendChild(bg); }
+    if(m.name){ const n=document.createElement("span"); n.className="cn"; n.textContent=m.name; if(/^#[0-9a-fA-F]{6}$/.test(m.color||"")) n.style.color=m.color; body.appendChild(n); }
+    let pos=0; const t=m.text||"";
+    for(const e of (m.emotes||[])){                                        // Emotes als Bild, der Rest als Text (nie als HTML)
+      if(e[1]<pos||e[2]>=t.length) continue;
+      if(e[1]>pos) body.appendChild(document.createTextNode(t.slice(pos,e[1])));
+      const im=document.createElement("img"); im.className="em"; im.alt=t.slice(e[1],e[2]+1); im.loading="lazy"; im.src=EMOTE.replace("%s",encodeURIComponent(e[0])); body.appendChild(im);
+      const et=document.createElement("span"); et.className="emt"; et.textContent=t.slice(e[1],e[2]+1); body.appendChild(et);
+      pos=e[2]+1;
+    }
+    if(pos<t.length) body.appendChild(document.createTextNode(t.slice(pos)));
+    if(m.bits){ const b=document.createElement("span"); b.className="bt"; b.textContent=m.bits+" Bits"; body.appendChild(b); }
+    if(modOn&&m.mid&&m.uid&&m.login!==me&&!(m.badges||[]).includes("broadcaster")){                    // Moderation: Knopf an fremden Nachrichten
+      const mm=document.createElement("button"); mm.type="button"; mm.className="mm"; mm.textContent="⋯"; mm.title="Moderation"; mm.setAttribute("aria-label","Moderation"); d.appendChild(mm);
+    }
+    return d;
+  }
+  function notice(text){ const d=document.createElement("div"); d.className="cm notice"; const t=document.createElement("span"); t.className="ct"; const n=new Date();
+    t.textContent=String(n.getHours()).padStart(2,"0")+":"+String(n.getMinutes()).padStart(2,"0"); const b=document.createElement("div"); b.className="cb"; b.textContent=text; d.appendChild(t); d.appendChild(b); box.appendChild(d); shown++; }
+  function metaEvent(m){                                                                                 // Löschung, Timeout oder Bann, auch von anderen Moderatoren
+    if(m.type==="del"){ for(const x of box.querySelectorAll(".cm[data-mid]")) if(x.dataset.mid===m.mid) x.classList.add("gone"); return; }
+    if(m.type==="clear"){
+      if(!m.uid){ notice("Der Chat wurde geleert."); return; }
+      let who=m.uid; for(const x of box.querySelectorAll(".cm[data-uid]")){ if(x.dataset.uid===m.uid){ x.classList.add("gone"); who=x.dataset.login||who; } }
+      notice(who+(m.seconds?": Timeout "+(m.seconds>=3600?Math.round(m.seconds/3600)+" Std":(m.seconds>=60?Math.round(m.seconds/60)+" Min":m.seconds+" s")):": gebannt"));
+    }
+  }
+  let undoTimer=null;
+  function toast(text,undo){ $("chat_toast").hidden=false; $("chat_toast_t").textContent=text; const u=$("chat_undo"); u.hidden=!undo; u._undo=undo||null;
+                             clearTimeout(undoTimer); undoTimer=setTimeout(()=>{ $("chat_toast").hidden=true; },8000); }
+  async function modDo(body,label){
+    try{ const r=await srtlaCall("POST","/api/chat/mod",body);
+         toast(label||r.message,(body.action==="timeout"||body.action==="ban")&&r.user_id?{action:"unban",user_id:r.user_id}:null); }
+    catch(x){ toast(x.message,null); }
+  }
+  $("chat_undo").addEventListener("click",async()=>{ const u=$("chat_undo")._undo; if(!u) return; $("chat_undo").hidden=true; await modDo(u,"Bann aufgehoben"); });
+  box.addEventListener("click",e=>{
+    const mm=e.target.closest(".mm"); if(!mm) return; const row=mm.parentNode, old=row.querySelector(".mrow");
+    if(old){ old.remove(); return; }
+    const mr=document.createElement("div"); mr.className="mrow"; const uid=row.dataset.uid, mid=row.dataset.mid, who=row.dataset.login||"";
+    for(const [txt,body,lab] of [["Löschen",{action:"delete",message_id:mid},"Gelöscht"],["Timeout 10 Min",{action:"timeout",user_id:uid,seconds:600},"Timeout 10 Min: "+who],
+                                 ["Timeout 1 Std",{action:"timeout",user_id:uid,seconds:3600},"Timeout 1 Std: "+who],["Bannen",{action:"ban",user_id:uid},"Gebannt: "+who]]){
+      const b=document.createElement("button"); b.type="button"; b.className="sec"; b.textContent=txt; b.addEventListener("click",()=>{ mr.remove(); modDo(body,lab); }); mr.appendChild(b); }
+    row.appendChild(mr);
+  });
+  async function poll(){
+    if(busy||!card.open||card.hasAttribute("data-pbhide")||document.hidden) return; busy=true;
+    try{
+      const r=await fetch("/api/chat?since="+since); if(r.status===401){ location.reload(); return; }
+      const d=await r.json();
+      if(d.account) twAccRender(d.account);
+      if(d.last<since) { box.textContent=""; shown=0; }
+      since=d.last;
+      const near=box.scrollHeight-box.scrollTop-box.clientHeight<60;
+      modOn=!!(d.account&&d.account.mod); me=(d.account&&d.account.login)||"";
+      for(const m of d.items){
+        if(m.meta){ metaEvent(m); continue; }
+        box.appendChild(line(m)); shown++;
+      }
+      while(shown>MAXLINES){ box.removeChild(box.firstChild); shown--; }
+      if(near) box.scrollTop=box.scrollHeight;
+      badge.hidden=!d.channel; badge.textContent=d.channel?"#"+d.channel:"";
+      const text={"kein-kanal":"Kein Kanal in der Twitch-Karte eingetragen.","verbinde":"Verbinde …","fehler":"Keine Verbindung zu Twitch."}[d.state]||"";
+      msg.textContent=(d.state==="ok"&&!shown)?"Noch keine Nachrichten.":text; msg.hidden=!msg.textContent;
+    }catch(e){ /* nächster Durchlauf */ }
+    finally{ busy=false; }
+  }
+  card.addEventListener("toggle",()=>{ if(card.open) poll(); });
+  setInterval(poll,2000); poll();
+})();
+
+// ---- Bildschirm anlassen (Schalter in der Kopfzeile, im Browser gemerkt) ----
+(function(){
+  const KEY="pb_awake", btn=$("pb_awake"); let on=false, lock=null, vid=null, tick=null;
+  try{ on=localStorage.getItem(KEY)==="1"; }catch(e){}
+  function viaVideo(start){                                                   // Rückfall für Adressen ohne https: ein stummer Videostrom hält das Gerät wach
+    if(!start){ if(vid){ vid.pause(); vid.srcObject=null; vid.remove(); vid=null; } clearInterval(tick); return true; }
+    if(vid) return true;
+    try{
+      const c=document.createElement("canvas"); c.width=c.height=2; const x=c.getContext("2d"); x.fillStyle="#000"; tick=setInterval(()=>{ x.fillRect(0,0,2,2); },1000);
+      const v=document.createElement("video"); v.muted=true; v.setAttribute("playsinline",""); v.style.cssText="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:0;top:0";
+      v.srcObject=c.captureStream(1); document.body.appendChild(v); vid=v; v.play().catch(()=>{}); return true;
+    }catch(e){ return false; }
+  }
+  async function acquire(){
+    if(!on||document.hidden||lock||vid) return;
+    try{ if(navigator.wakeLock){ lock=await navigator.wakeLock.request("screen"); lock.addEventListener("release",()=>{ lock=null; }); return; } }catch(e){ lock=null; }
+    if(!viaVideo(true)){ btn.title="Geht in diesem Browser nicht"; }
+  }
+  function release(){ try{ if(lock) lock.release(); }catch(e){} lock=null; viaVideo(false); }
+  function paint(){ btn.setAttribute("aria-pressed",String(on)); }
+  btn.addEventListener("click",()=>{ on=!on; try{ localStorage.setItem(KEY,on?"1":"0"); }catch(e){} paint(); if(on) acquire(); else release(); });
+  document.addEventListener("visibilitychange",()=>{ if(document.hidden){ lock=null; viaVideo(false); } else acquire(); });
+  paint(); acquire();
+  document.addEventListener("click",()=>{ if(on&&!lock&&!vid) acquire(); },{once:false});                // ein Fingertipp genügt, falls der Browser den Start ohne Geste verweigert hat
+})();
+
+// ---- Anordnen und Ausblenden der Karten (je Browser gemerkt, Standard unverändert) ----
+(function(){
+  const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]}, arranging=false;
+  try{ const v=JSON.parse(localStorage.getItem(KEY)||"{}")||{};
+       st.order=(Array.isArray(v.order)?v.order:[]).filter(x=>typeof x==="string"); st.hidden=(Array.isArray(v.hidden)?v.hidden:[]).filter(x=>typeof x==="string"); }catch(e){}
+  const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} };
+  const movables=()=>[...main.children].filter(el=>el.matches("details.card[id]")&&!el.hasAttribute("data-fixed"));
+  const DEFAULT=movables().map(e=>e.id);                                   // Standardreihenfolge
+  const label=el=>{ const s=el.querySelector(":scope>summary"); if(!s) return el.id; const h=s.querySelector(".sumh"); if(h) return h.textContent.trim();
+                    let t=""; s.childNodes.forEach(n=>{ if(n.nodeType===3) t+=n.textContent; }); return t.trim()||el.id; };
+  function applyOrder(){
+    const res=st.order.filter(id=>DEFAULT.includes(id));
+    DEFAULT.forEach((id,i)=>{ if(res.includes(id)) return; let k=i-1; while(k>=0&&!res.includes(DEFAULT[k])) k--;      // neue Karte hinter ihren Standard-Vorgänger
+                              res.splice(k<0?0:res.indexOf(DEFAULT[k])+1,0,id); });
+    const anchor=$("c_layout"); res.forEach(id=>main.insertBefore($(id),anchor));
+  }
+  function applyHidden(){
+    document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
+    st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&!e.hasAttribute("data-fixed")&&id!=="livecard") e.setAttribute("data-pbhide",""); });
+    if(arranging) arrows();
+  }
+  function buildList(){
+    const box=$("lay_list"); box.textContent="";
+    const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="layrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
+                                c.checked=!st.hidden.includes(id); l.appendChild(c); l.appendChild(document.createTextNode(txt)); g.appendChild(l); };
+    movables().forEach(el=>{ const g=document.createElement("div"); g.className="laygrp"; row(g,el.id,label(el),false);                       // je Karte eine Gruppe mit ihren Bereichen darunter
+                             el.querySelectorAll("details.subsec[id]").forEach(sub=>row(g,sub.id,label(sub),true)); box.appendChild(g); });
+  }
+  function arrows(){
+    const vis=movables().filter(e=>!e.hasAttribute("data-pbhide"));
+    vis.forEach((el,i)=>{ const m=el.querySelector(":scope>summary>.pbmv"); if(!m) return;
+                          m.querySelector(".pbup").disabled=i===0; m.querySelector(".pbdn").disabled=i===vis.length-1; });
+  }
+  function move(el,dir){
+    const vis=movables().filter(e=>!e.hasAttribute("data-pbhide")), i=vis.indexOf(el), o=vis[i+dir]; if(!o) return;
+    if(dir<0) main.insertBefore(el,o); else main.insertBefore(o,el);
+    st.order=movables().map(e=>e.id); save(); arrows(); el.scrollIntoView({block:"nearest",behavior:"smooth"});
+  }
+  function setArrange(on){
+    if(on===arranging) return; arranging=on; document.body.classList.toggle("pb-arr",on);
+    const bar=$("pb_bar");
+    if(on){
+      movables().forEach(el=>{ const s=el.querySelector(":scope>summary"); if(!s||s.querySelector(".pbmv")) return;
+        const m=document.createElement("span"); m.className="pbmv";
+        for(const [cls,txt,lab,dir] of [["pbup","▲","Nach oben",-1],["pbdn","▼","Nach unten",1]]){
+          const b=document.createElement("button"); b.type="button"; b.className=cls; b.textContent=txt; b.setAttribute("aria-label",lab); b.title=lab;
+          b.addEventListener("click",ev=>{ ev.preventDefault(); ev.stopPropagation(); move(el,dir); }); m.appendChild(b); }
+        s.appendChild(m); });
+      const d=document.createElement("div"); d.id="pb_bar";
+      const t=document.createElement("span"); t.textContent="Karten mit ▲ ▼ verschieben"; const f=document.createElement("button"); f.type="button"; f.textContent="Fertig";
+      f.addEventListener("click",()=>setArrange(false)); d.appendChild(t); d.appendChild(f); main.insertBefore(d,main.firstChild);
+      arrows();
+    }else{
+      document.querySelectorAll(".pbmv").forEach(m=>m.remove()); if(bar) bar.remove();
+      buildList();
+    }
+  }
+  $("lay_list").addEventListener("change",e=>{
+    const c=e.target.closest("input[data-id]"); if(!c) return; const id=c.dataset.id, i=st.hidden.indexOf(id);
+    if(c.checked&&i>=0) st.hidden.splice(i,1); if(!c.checked&&i<0) st.hidden.push(id); save(); applyHidden();
+  });
+  for(const id of ["pb_arr","pb_arr_m","lay_arr"]) $(id).addEventListener("click",()=>{ if(!arranging){ setArrange(true); window.scrollTo({top:0,behavior:"smooth"}); } else setArrange(false); });
+  $("lay_reset").addEventListener("click",()=>{ st={order:[],hidden:[]}; save(); applyOrder(); applyHidden(); buildList(); });
+  $("c_layout").addEventListener("toggle",()=>{ if($("c_layout").open) buildList(); });
+  applyOrder(); applyHidden(); buildList();
+})();
+
 // ---- Karten zuklappen: Zustand wird im Browser gemerkt ----
 (function(){
   const KEY="pb_cards_open"; let st={};
