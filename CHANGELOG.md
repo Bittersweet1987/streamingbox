@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.119 (Beta)
+- **Neu: Verbindungen (Netzwerkschnittstellen) lassen sich benennen.** In den Einstellungen (Sendewege) steht neben jeder Verbindung ein Stift (✎); damit vergibst du einen eigenen Namen, zum Beispiel für „eth1“ den Namen „Router Keller“. Der Name ergänzt die Bezeichnung, er ersetzt sie nicht: Im Status (Up- und Download, Laufzeit je Weg) steht „eth1 (Router Keller)“, bei den Sendewegen „LAN (Router Keller)“, in der Verbindungswahl der Kameras ebenfalls. Leer lassen entfernt den Namen.
+  - Gespeichert in `device-names.json` (Schlüssel `net:<Schnittstelle>`, getrennt von den Namen der WLAN- und Bluetooth-Sticks), also auch in der Sicherung der Einstellungen. Name: höchstens 40 Zeichen, keine Sonderzeichen. Technik: `DeviceNames.conn_names`, `POST /api/devname` (wie bei den Sticks), `conn_names` in `/api/metrics` und `/api/srtla`.
+  - Tests: `tools/test_ui_backend.py` (`test_connection_names_add_to_the_interface_and_stay_apart_from_device_names`). Englische Texte in `web/i18n/en.json`, die anderen Sprachen folgen mit der nächsten Übersetzungsrunde. Noch nicht in der Oberfläche gesehen (nur der Server-Test und die Textprüfung liefen).
+
 ## 0.9.118 (Beta)
 - **Neu: QR-Code für Kamera-Apps.** Unter „Kamera hinzufügen“ (und bei jeder RTMP-Kamera, die keine DJI- oder HDMI-Kamera ist) gibt es eine kleine Zeile: App wählen (IRL Pro, Moblin, GoPro HERO 8–11 oder HERO 12/13) und „QR-Code erzeugen“. Der Code erscheint erst nach dem Klick, ein zweiter Klick blendet ihn aus; die Erklärung steckt hinter einem kleinen „?“.
   - Ohne Namenseingabe: Unter „Kamera hinzufügen“ legt die Box bei Bedarf selbst eine neue RTMP-Kamera an („<App> 1“, automatischer Schlüssel) und zeigt ihren Code; für dieselbe App nimmt sie beim nächsten Mal die vorhandene.

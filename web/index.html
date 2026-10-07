@@ -695,7 +695,7 @@ function renderCamLights(list){
   setHtml(box,list.length?head+list.map(c=>`<div class="row"><span class="nm"><span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>${esc(c.name)}</span>${any?`<span class="battcell">${battHtml(c)}</span>`:""}<span>${c.state==="live"?`<b>${fmt(c.mbit)}</b> <span class="unit">Mbit/s</span>`:'<span class="unit">–</span>'}</span></div>`).join(""):'<div class="muted">Noch keine Kamera angelegt.</div>');
 }
 let netOpts=[];                                   // Verbindungen der Box (aus /api/network), für die Auswahl je Kamera
-const netLabel=o=>`${o.label} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
+const netLabel=o=>`${o.label}${connNames[o.iface]?" ("+connNames[o.iface]+")":""} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
 function camNetHtml(c){
   if(c.via_src==="hdmi") return `<span class="camnet muted" title="Das Bild kommt vom HDMI-Eingang der Box">HDMI-Eingang</span>`;
   // Die Adresse oben gilt für die Verbindung der Kamera: DJI-Kameras wählen sie in ihrer Karte, andere Kameras (z. B. ein Handy) hier.
@@ -816,7 +816,7 @@ function renderCams(list){
   const quiet=c=>c.state==="live"||c.state==="unknown"?0:1;
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
-  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts,qrOut,[...qrHelp]]);
+  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts,qrOut,[...qrHelp],connNames]);
   // Pfeile: mit dem Nachbarn in der angezeigten Liste die Plätze tauschen (die Fußleiste am Handy folgt dieser Reihenfolge, Issue #32)
   const mv=(c,i,dir)=>{ const o=list[i+dir], t=dir<0?"Kamera nach oben schieben":"Kamera nach unten schieben"; return `<button type="button" class="mv" data-id="${c.id}" data-with="${o?o.id:""}" title="${t}" aria-label="${t}"${o?"":" disabled"}>${dir<0?"▲":"▼"}</button>`; };
   if(box.dataset.sig!==sig){
@@ -1328,6 +1328,17 @@ $("ua_block").addEventListener("change",async e=>{
   catch(x){ $("ua_err").textContent=x.message; e.target.checked=!e.target.checked; }
 });
 let lastNet=null;
+// Eigene Namen der Verbindungen (Issue: Benennungsmöglichkeit), ergänzend zur Schnittstelle: "eth1 (Name)"
+let connNames={};
+const ifd=n=>connNames[n]?`${n} (${connNames[n]})`:n;
+const connRen=iface=>`<a href="#" class="connren" data-iface="${esc(iface)}" title="Verbindung benennen" aria-label="Verbindung benennen">✎</a>`;
+document.addEventListener("click",async e=>{
+  const a=e.target.closest&&e.target.closest("a.connren"); if(!a) return; e.preventDefault();
+  const n=prompt(`Eigener Name für ${a.dataset.iface} (leer lassen = kein Name):`,connNames[a.dataset.iface]||""); if(n===null) return;
+  try{ await srtlaCall("POST","/api/devname",{key:"net:"+a.dataset.iface,name:n}); }catch(x){ alert(x.message); return; }
+  if(n.trim()) connNames[a.dataset.iface]=n.trim().replace(/\s+/g," "); else delete connNames[a.dataset.iface];
+  srtlaLoad(); tick();
+});
 function setRates(net){ lastNet=net; document.querySelectorAll("[data-rate]").forEach(e=>{ const r=net[e.dataset.rate]; e.textContent=r?fmt(r.tx_mbit):"–"; }); }
 $("b_ups").addEventListener("change",async e=>{
   const iface=e.target.dataset&&e.target.dataset.up; if(!iface||!srtlaData) return;
@@ -1347,7 +1358,8 @@ async function srtlaLoad(){
   if(document.activeElement.id!=="b_max") $("b_max").value=st.max_kbps;
   if(document.activeElement.id!=="b_lat") $("b_lat").value=st.latency_ms;
   if(document.activeElement.id!=="b_spread") $("b_spread").value=st.spread||"best";
-  $("b_ups").innerHTML=(d.interfaces||[]).map(o=>`<div class="wstat${o.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(o.label)}</b> · ${esc(o.ip)}</span><span class="muted"><b data-rate="${esc(o.iface)}">–</b> Mbit/s ↑</span><label><input type="checkbox" data-up="${esc(o.iface)}"${st.uplinks.includes(o.iface)?" checked":""}> Zum Senden verwenden</label></div>`).join("")+(st.uplinks||[]).filter(u=>!(d.interfaces||[]).some(o=>o.iface===u)).map(u=>`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(u)}</b> · gerade nicht verbunden</span><label><input type="checkbox" data-up="${esc(u)}" checked> Zum Senden verwenden</label></div>`).join("");
+  connNames=d.conn_names||{};
+  $("b_ups").innerHTML=(d.interfaces||[]).map(o=>`<div class="wstat${o.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(o.label)}</b>${connNames[o.iface]?" ("+esc(connNames[o.iface])+")":""} ${connRen(o.iface)} · ${esc(o.ip)}</span><span class="muted"><b data-rate="${esc(o.iface)}">–</b> Mbit/s ↑</span><label><input type="checkbox" data-up="${esc(o.iface)}"${st.uplinks.includes(o.iface)?" checked":""}> Zum Senden verwenden</label></div>`).join("")+(st.uplinks||[]).filter(u=>!(d.interfaces||[]).some(o=>o.iface===u)).map(u=>`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(ifd(u))}</b> ${connRen(u)} · gerade nicht verbunden</span><label><input type="checkbox" data-up="${esc(u)}" checked> Zum Senden verwenden</label></div>`).join("");
   if(!$("b_ups").innerHTML) $("b_ups").innerHTML='<span class="muted">keine Netzwerke gefunden</span>';
   if(lastNet) setRates(lastNet);
   const cur=d.servers.find(s=>s.id===d.selected);
@@ -2229,7 +2241,7 @@ function renderDetails(m){
   $("det_send").innerHTML=!s?'<span class="muted">Keine Daten (die Sendung läuft nicht).</span>':
     drow("Bitrate",`<b>${f1(s.send_mbps)}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
     +drow("Laufzeit (Ping, RTT)",`<b>${f1(s.rtt_ms)}</b> ms`)
-    +Object.entries(m.uplinks||{}).filter(([n,u])=>u&&u.srtt!=null).map(([n,u])=>drow('<span class="muted">· '+esc(n)+'</span>',`${n0(u.srtt)} ms`)).join("")
+    +Object.entries(m.uplinks||{}).filter(([n,u])=>u&&u.srtt!=null).map(([n,u])=>drow('<span class="muted">· '+esc(ifd(n))+'</span>',`${n0(u.srtt)} ms`)).join("")
     +drow("Sendepuffer",`<b>${n0(s.snd_buf_ms)}</b> ms <span class="muted">(${n0(s.snd_buf_pkts)} Pakete)</span>`)
     +drow("Neuübertragungen",`<b>${n0(s.retrans_total)}</b> <span class="muted">(${s.retrans_pct==null?"–":s.retrans_pct.toFixed(2)} %)</span>`)
     +drow("Paketverlust",`<b>${n0(s.loss_total)}</b> <span class="muted">(${s.loss_pct==null?"–":s.loss_pct.toFixed(2)} %)</span>`)
@@ -2249,6 +2261,7 @@ async function tick(){
   try{
     const resp=await fetch("/api/metrics"); if(resp.status===401){location.reload();return;}
     const m=await resp.json();
+    connNames=m.conn_names||connNames;
     renderDetails(m);
     $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":`höchster Kern ${fmt(m.cpu.max,0)} %`; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
@@ -2265,7 +2278,7 @@ async function tick(){
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
     }
     const upRow=(nm,tx,rx,cls)=>`<div class="row${cls||""}"><span class="nm">${nm}</span><span class="num"><b>${fmt(tx)}</b></span><span class="unit u">Mbit/s ↑</span><span class="sep">·</span><span class="num">${fmt(rx)}</span><span class="unit u">↓</span></div>`;
-    let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(n),r.tx_mbit,r.rx_mbit)).join("");
+    let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(ifd(n)),r.tx_mbit,r.rx_mbit)).join("");
     if(nets.length>1){   // Summe über alle verbundenen Netzwerkkarten (Ethernet, WLAN, USB/Mobilfunk)
       const sum=k=>nets.reduce((a,[n,r])=>a+(+r[k]||0),0);
       netHtml+=upRow(`<b title="Summe über ${nets.length} Netze">Summe</b> <span class="unit">(${nets.length})</span>`,sum("tx_mbit"),sum("rx_mbit")," sum");

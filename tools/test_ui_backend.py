@@ -2181,6 +2181,23 @@ class DeviceNaming(unittest.TestCase):
             with self.assertRaises(ValueError, msg=str(bad_name)):
                 n.set("usb:0bda:c811", bad_name)
 
+    def test_connection_names_add_to_the_interface_and_stay_apart_from_device_names(self):
+        d = tempfile.mkdtemp()
+        n = server.DeviceNames(d)
+        n.set("net:eth1", "  Router   Keller ")
+        n.set("net:usb0", "Handy Tethering")
+        n.set("if:wlan0", "Interner Stick")                                                        # Name einer Karte, keine Verbindung
+        self.assertEqual(n.conn_names(), {"eth1": "Router Keller", "usb0": "Handy Tethering"})
+        self.assertEqual(n.label("if:eth1", "Standard"), "Standard")                               # die Karten-Namen bleiben unberührt
+        self.assertEqual(n.label("if:wlan0", "x"), "Interner Stick")
+        self.assertEqual(server.DeviceNames(d).conn_names()["eth1"], "Router Keller")             # bleibt nach einem Neustart
+        n.set("net:eth1", "")                                                                       # leer = kein Name
+        self.assertEqual(n.conn_names(), {"usb0": "Handy Tethering"})
+        for bad_key in ("net:", "net:ETH1", "net:../x", "net:eth1;rm", "net:a"):
+            with self.assertRaises(ValueError, msg=bad_key):
+                n.set(bad_key, "Name")
+        self.assertIn("net:usb0", n._all())                                                         # damit auch in der Sicherung der Einstellungen
+
     def test_wifi_cards_carry_key_and_label_with_the_own_name_first(self):
         names = server.DeviceNames(tempfile.mkdtemp())
         w = server.Wifi(tempfile.mkdtemp(), False, mock.Mock(iface="eth1"), names)

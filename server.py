@@ -2420,7 +2420,7 @@ class DeviceNames:
     """Eigene Namen für WLAN- und Bluetooth-Sticks (der Stick kennt seinen Handelsnamen, zum Beispiel Logilink, meist nicht). Schlüssel: die USB-Kennung
     ("usb:0bda:c811"; zwei gleiche Sticks teilen sich den Namen), sonst die Schnittstelle ("if:wlan0") oder die Adresse des Bluetooth-Adapters
     ("bt:AA:BB:CC:DD:EE:FF"). Die Datei steht im Zustandsordner; es sind keine Geheimnisse."""
-    KEY_RE = re.compile(r"^(usb:[0-9a-f]{4}:[0-9a-f]{4}|if:[a-z0-9]{2,15}|bt:([0-9A-F]{2}:){5}[0-9A-F]{2})$")
+    KEY_RE = re.compile(r"^(usb:[0-9a-f]{4}:[0-9a-f]{4}|if:[a-z0-9]{2,15}|net:[a-z0-9]{2,15}|bt:([0-9A-F]{2}:){5}[0-9A-F]{2})$")
 
     def __init__(self, state_dir):
         self.path = os.path.join(state_dir, "device-names.json")
@@ -2444,6 +2444,10 @@ class DeviceNames:
 
     def label(self, key, default):
         return self._all().get(key) or default
+
+    def conn_names(self):
+        """Eigene Namen der Verbindungen (Netzwerkschnittstellen), ergänzend zur Bezeichnung: {Schnittstelle: Name}. Schlüssel "net:<Schnittstelle>"."""
+        return {k[4:]: v for k, v in self._all().items() if k.startswith("net:") and v}
 
     def set(self, key, name):
         """Name setzen (leer = Standardname). Prüft Schlüssel und Name streng."""
@@ -5489,6 +5493,7 @@ class Handler(BaseHTTPRequestHandler):
             for c in m["cameras"]:
                 c.update(extras.get(c["key"], {}))             # Akkustand der DJI-Kameras (Status, Kameras)
             m["uplinks"] = uplink_states(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
+            m["conn_names"] = self.names.conn_names() if self.names else {}
             pic = self.send.picture()
             for c in m["cameras"]:
                 p = pic.get(c["key"]) if pic else None
@@ -5551,7 +5556,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/network":
             return self.reply(200, self.netchoice.status())
         if path == "/api/srtla":
-            return self.reply(200, {**self.srtla.public(), "interfaces": iface_ips()})
+            return self.reply(200, {**self.srtla.public(), "interfaces": iface_ips(), "conn_names": self.names.conn_names() if self.names else {}})
         if path == "/api/pipeline":
             st = self.pipeline.status(self.cams.listing(""))
             st["live"] = {"main": self.send.delay_live(), "pips": self.send.delay_live_pips()}
