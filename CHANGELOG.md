@@ -1,6 +1,6 @@
 # Änderungen
 
-## Vorschlag von Bittersweet1987 (Fehler gemeldet von Swissi)
+## 0.9.116 (Beta)
 - **Behoben: Ein hochkantes Kamerabild (zum Beispiel ein iPhone im Hochformat) wurde als kleines Bild in den 16:9-Rahmen gequetscht**, in der Sendung und in der Vorschau. Als Hauptbild stimmte es schon (mittig mit Balken).
   - Jetzt gilt für ein hochkantes kleines Bild (Quelle höher als breit): Der Rahmen behält das Seitenverhältnis der Quelle bei der Höhe des 16:9-Rahmens, derselbe Platz (Ecke oder frei), kein Verzerren. Ein eingestellter Beschnitt gilt nur für Querformat und wird bei hochkantigen Quellen ignoriert; der Rahmen um das Bild folgt der neuen Größe.
   - Die Größe der Quelle kommt aus der nginx-Statistik (`meta/video/width|height`); `server.py` reicht sie mit der Kameraliste an die Seite weiter, die Vorschau zeichnet danach den hochkanten Rahmen.
