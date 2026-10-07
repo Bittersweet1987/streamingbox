@@ -1,5 +1,11 @@
 # Änderungen
 
+## Vorschlag von Bittersweet1987 (Fehler gemeldet von Swissi)
+- **Behoben: Ein hochkantes Kamerabild (zum Beispiel ein iPhone im Hochformat) wurde als kleines Bild in den 16:9-Rahmen gequetscht**, in der Sendung und in der Vorschau. Als Hauptbild stimmte es schon (mittig mit Balken).
+  - Jetzt gilt für ein hochkantes kleines Bild (Quelle höher als breit): Der Rahmen behält das Seitenverhältnis der Quelle bei der Höhe des 16:9-Rahmens, derselbe Platz (Ecke oder frei), kein Verzerren. Ein eingestellter Beschnitt gilt nur für Querformat und wird bei hochkantigen Quellen ignoriert; der Rahmen um das Bild folgt der neuen Größe.
+  - Die Größe der Quelle kommt aus der nginx-Statistik (`meta/video/width|height`); `server.py` reicht sie mit der Kameraliste an die Seite weiter, die Vorschau zeichnet danach den hochkanten Rahmen.
+  - Test: `tools/test_live.py` (`test_portrait_small_picture_keeps_its_aspect_ratio`). Auf einer Box mit einem iPhone im Hochformat geprüft: die Rahmengröße im Test und die Befehle an den Compositor; die Vorschau wurde gemeldet und angepasst, ob das Bild in OBS jetzt stimmt, ist noch nicht bestätigt.
+
 ## 0.9.115 (Beta)
 - **Neu: Ladeanzeige (🔌) auch bei der Osmo Action 5 Pro und der Osmo Action 6.** Bisher zeigte die Box "am Ladekabel" nur bei der Osmo Action 4; bei den anderen stand "unbekannt". Gemessen am 6. Oktober 2026 auf der neuen Box (Kabel je einmal abgezogen und angesteckt, Statusmeldungen im Journal): Bei beiden steht der Strom an derselben Stelle wie bei der Action 4 (Bytes 5 bis 8), aus dem Akku etwa -600 bis -770 mA, beim Anstecken kurz um 0, am Kabel positiv (+700 bis +4400 mA). Dieselbe Schwelle (-100 mA) trennt beides.
   - Folge: Die **Akku-Warnung im Twitch-Chat** kommt für diese Kameras nicht mehr, solange sie am Kabel hängen, und wird beim Laden wieder scharf (die Warnung beachtet "lädt" schon immer, kannte es bei diesen Modellen aber nicht).

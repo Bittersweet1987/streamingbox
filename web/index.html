@@ -1496,9 +1496,12 @@ function renderPreview(){
   let out='<div class="pvmain">Hauptbild: '+esc(nm($("p_main").value))+'</div>';
   [["p_pip","p_corner",1],["p_pip2","p_corner2",2],["p_pip3","p_corner3",3]].forEach(([cs,co,k])=>{
     const cam=$(cs).value; if(!cam) return;
-    const size=Math.max(1,Math.min(100,+$("p_size"+k).value||25)), pw=W*size/100, ph=pw*9/16;          // jedes kleine Bild hat seine eigene Größe
+    const size=Math.max(1,Math.min(100,+$("p_size"+k).value||25)); let pw=W*size/100; const ph=pw*9/16;          // jedes kleine Bild hat seine eigene Größe
+    // Hochkantes Bild (Quelle höher als breit): der Rahmen behält das Seitenverhältnis der Quelle bei der Höhe des 16:9-Rahmens, ohne Beschnitt (wie auf der Box)
+    const cinfo=pipCams.find(y=>y.key===cam)||{}, portrait=cinfo.w>0&&cinfo.h>cinfo.w;
+    if(portrait) pw=ph*cinfo.w/cinfo.h;
     // Ein beschnittenes Bild behält seinen Maßstab: nur der Ausschnitt (cw x ch) wird gezeichnet und danach positioniert (wie im Baustein)
-    const st=styleOf(k), cr=st.crop, cw=pw*(CROP_W-cr.l-cr.r)/CROP_W, ch=ph*(CROP_H-cr.t-cr.b)/CROP_H, sc=W/1920;
+    const st=styleOf(k), cr=portrait?{l:0,r:0,t:0,b:0}:st.crop, cw=pw*(CROP_W-cr.l-cr.r)/CROP_W, ch=ph*(CROP_H-cr.t-cr.b)/CROP_H, sc=W/1920;
     const bw=st.border.enabled?Math.max(1,Math.round(st.border.width*sc)):0, rad=st.radius?Math.min(Math.round(st.radius*sc),Math.min(cw,ch)/2):0;     // die Rundung gilt für das Bild selbst, auch ohne Rahmen
     const c=+$(co).value, f=posFree[k]; let x,y;
     if(c===5){ x=f.x/1000*(W-cw); y=f.y/1000*(H-ch); }

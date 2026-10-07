@@ -127,6 +127,21 @@ def small_geometry(c, k):
             "bcolor": int(br["color"][1:], 16), "bopacity": int(br["opacity"])}
 
 
+def portrait_geometry(c, k, g, dims):
+    """Hochkantes Bild (Quelle höher als breit) als kleines Bild: der Rahmen behält das Seitenverhältnis der Quelle bei der Höhe des 16:9-Rahmens,
+    kein Beschnitt (der gilt für Querformat). Gleiche Ecke bzw. Lage, nur mit der anderen Breite."""
+    sfx = "" if k == 1 else str(k)
+    h = g["sh"]
+    w = (h * dims[0] // dims[1]) & ~1
+    margin = (CANVAS_W // 60) & ~1
+    x, y = place(c["corner" + sfx], CANVAS_W, CANVAS_H, w, h, margin, c["x" + sfx], c["y" + sfx])
+    g2 = dict(g)
+    g2.update(crop=(0, 0, 0, 0), w=w, h=h, x=x & ~1, y=y & ~1)
+    if g["bw"]:
+        g2["bw"] = max(1, min(g["bw"], min(w, h) // 2))
+    return g2
+
+
 def ring_rects(g):
     """Die vier Streifen des Rahmens liegen innen im Ausschnitt (wie im Baustein): oben, unten, links, rechts (x, y, w, h)."""
     x, y, w, h, bw = g["x"], g["y"], g["w"], g["h"], g["bw"]
@@ -264,6 +279,10 @@ class Layout:
         want = []                                 # (Schlüssel, Zeile, z)
         geoms = {k: small_geometry(c, k) for k in (1, 2, 3)}
         by_pos = {v: s for s, v in roles.items()}
+        for k in (1, 2, 3):                       # hochkantes Bild: eigener Rahmen (Seitenverhältnis bleibt)
+            d = dims.get(by_pos.get(k)) if by_pos.get(k) is not None else None
+            if d and d[0] and d[1] and d[1] > d[0]:
+                geoms[k] = portrait_geometry(c, k, geoms[k], d)
 
         def add(key, line, z):
             want.append((key, line, z))
