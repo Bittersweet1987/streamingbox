@@ -154,6 +154,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 input,select,button{font:inherit;min-width:0;max-width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:0}
 button{background:var(--bar);color:#0f172a;font-weight:600;border-color:transparent;cursor:pointer}
+button.mv{background:transparent;color:var(--muted);border-color:var(--line);padding:4px 8px;font-size:12px;line-height:1}button.mv:disabled{opacity:.4;cursor:default}
 button.del{background:transparent;color:var(--crit);border-color:var(--line);padding:4px 10px;font-size:13px}
 details.card>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;list-style:none}
 details.card>summary::-webkit-details-marker{display:none}
@@ -708,12 +709,14 @@ function renderCams(list){
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
   const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts]);
+  // Pfeile: mit dem Nachbarn in der angezeigten Liste die Plätze tauschen (die Fußleiste am Handy folgt dieser Reihenfolge, Issue #32)
+  const mv=(c,i,dir)=>{ const o=list[i+dir], t=dir<0?"Kamera nach oben schieben":"Kamera nach unten schieben"; return `<button type="button" class="mv" data-id="${c.id}" data-with="${o?o.id:""}" title="${t}" aria-label="${t}"${o?"":" disabled"}>${dir<0?"▲":"▼"}</button>`; };
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
-    box.innerHTML=list.length?list.map(c=>
+    box.innerHTML=list.length?list.map((c,i)=>
       `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
-      <span class="muted cr"><span class="dyn"></span> <button class="del" data-id="${c.id}">Entfernen</button></span></div>${c.url?`<code>${esc(c.url)}</code>`:""}</div>`).join("")
+      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)} <button class="del" data-id="${c.id}">Entfernen</button></span></div>${c.url?`<code>${esc(c.url)}</code>`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -728,6 +731,11 @@ $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("del")) return; const id=e.target.dataset.id;
   if(!confirm("Kamera entfernen?")) return;
   await fetch("/api/cameras/"+id,{method:"DELETE"}); tick();
+});
+$("cams").addEventListener("click",async e=>{
+  const b=e.target.closest(".mv"); if(!b||b.disabled||!b.dataset.with) return;
+  const r=await fetch("/api/cameras/"+b.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({swap_with:b.dataset.with})});
+  if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verschieben fehlgeschlagen"); tick();
 });
 $("cams").addEventListener("change",async e=>{
   if(!e.target.classList.contains("camnetsel")) return;

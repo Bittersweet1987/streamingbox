@@ -494,6 +494,14 @@ class FooterData(unittest.TestCase):
         self.assertIsNone(self.make(dict(CFG, type="single", pip="", pip2="", pip3="")).footer())
         self.assertIsNone(self.make(dict(CFG, pip="", pip2="", pip3="")).footer())
 
+    def test_footer_follows_a_changed_camera_list_and_leaves_the_pictures_alone(self):
+        order = ["cam-d", "cam-b", "cam-a", "cam-c"]                                        # Reihenfolge der Liste geändert (Issue #32)
+        send = self.make(listing=cam_listing(keys=order))
+        f = send.footer()
+        self.assertEqual([c["key"] for c in f["cams"]], order)
+        self.assertEqual({c["key"]: (c["slot"], c["main"]) for c in f["cams"]},
+                         {c["key"]: (c["slot"], c["main"]) for c in self.make().footer()["cams"]})   # Hauptbild und kleine Bilder unverändert
+
     def test_all_cameras_in_the_order_of_the_camera_list_with_the_main_one_marked(self):
         f = self.make().footer()
         self.assertEqual([c["key"] for c in f["cams"]], KEYS)
