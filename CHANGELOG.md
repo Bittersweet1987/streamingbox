@@ -1,6 +1,6 @@
 # Änderungen
 
-## Vorschlag von Bittersweet1987 (Issue #32)
+## 0.9.117 (Beta)
 - **Neu: Reihenfolge der Kamera-Knöpfe ändern.** In der Kameraliste hat jede Kamera zwei Pfeile (▲ ▼); ein Klick tauscht sie mit dem Nachbarn in der angezeigten Liste. Die Kamera-Knöpfe in der Fußleiste am Handy folgen dieser Reihenfolge (bei „Alle Kameras immer bereit“ unter den gerade sendenden Kameras). Die Reihenfolge wird in `cameras.json` gespeichert.
   - Hauptbild, kleine Bilder, Rollen und die Vorschau bleiben unverändert (die Zuordnung der Bilder ist eine eigene Einstellung).
   - Technik: `POST /api/cameras/<id>` mit `{"swap_with": "<id>"}` (`CameraStore.swap` in `server.py`). Englische Texte in `web/i18n/en.json`, die anderen Sprachen folgen mit der nächsten Übersetzungsrunde.
