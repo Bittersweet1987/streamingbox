@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.129 (Beta)
+- **Behoben: Die Amplitude im Chat und die „Bitrate“ in Status → Details zeigten zu hohe, zappelnde Werte.** Sie nahmen die Senderate aus dem Sender (`send_mbps`); die lag auf einer Box mit 12 Mbit/s eingestellter Bitrate bei 15,6 bis 17,6, während die Zähler der Netzwerkkarten rund 13,6 Mbit/s zeigten. Beide Anzeigen nehmen jetzt die Summe der Zähler der gewählten Sendewege, dieselbe Zahl wie „Mbit/s ↑“ neben „Live“. Die Güte-Farbe der Amplitude nutzt ebenfalls diesen Wert.
+- Die Skala der Amplitude geht jetzt von 0 bis 5, 10, 15, 20, 30 oder 50 Mbit/s (Mitte = Hälfte); rechts vom Verlauf steht die aktuelle Zahl.
+- Keine neuen Texte, keine neuen Übersetzungen.
+
 ## 0.9.128 (Beta)
 - **Chat: besondere Ereignisse fallen auf.** Sub, Resub, Geschenk-Abos (eine Sammelaktion als eine Karte), Raid, Cheer (Bits) und Ankündigungen erscheinen als farbige Karte mit Symbol und Menge; neue leuchten kurz auf. Hast du hochgescrollt, erscheint „Neues Ereignis ↓“. Optional (⚙, „Signal bei Ereignissen“, standardmäßig aus): zwei kurze Töne und Vibration. Follows gibt es im Twitch-Chat nicht (dafür bräuchte es eine andere Schnittstelle), sie fehlen deshalb.
 - **Chat: Kopfzeile wie die Streamstatus-Anzeige für OBS.** Links ein pulsierender Punkt und ein kleiner Linienverlauf der Senderate der letzten 30 Sekunden mit Raster und Skala (Mbit/s). Die Farbe zeigt die Güte der Verbindung: grün gut, gelb mäßig, rot schlecht, grau keine Sendung (aus Sendewegen, Laufzeit, Sendepuffer und Senderate). Rechts bis zu vier kleine Punkte, einer je Kamera (grün sendet und ist im Bild, gelb noch nicht im Bild, rot kein Signal, grau unbekannt). Der Kanalname in der Kopfzeile entfällt.
