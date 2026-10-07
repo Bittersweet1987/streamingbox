@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.126 (Beta)
+- **GoPro: Voraussetzung im Hilfetext (hinter dem „?“ beim QR-Code) ergänzt.** Der Hotspot der Box muss zuerst eingerichtet sein und die GoPro muss vorher damit verbunden sein (in der GoPro-App); erst dann kommen die Codes 1, 2, 3 (Labs-Firmware). So funktionierte es beim Test mit einer Hero 8. Der Text steht in allen 14 Sprachen. Sonst keine Änderung.
+
 ## 0.9.125 (Beta)
 - **GoPro-QR-Codes größer und besser lesbar.** Die Codes für die GoPro (Labs-Firmware) sind jetzt 340 Pixel groß und stehen untereinander (die GoPro-Seite selbst nutzt 360 Pixel); am Handy füllen sie die Breite. Die kleinen Codes (150 Pixel) las die Kamera vermutlich nicht zuverlässig. Der RTMP-Code (Code 2) nimmt jetzt die Adresse des Box-Hotspots (zum Beispiel `10.42.0.1`), wenn die GoPro darüber verbunden wird, und ohne laufenden Hotspot steht ein kurzer Hinweis statt des WLAN-Codes.
   - **Ehrlicher Stand:** Mit der **GoPro-App** (Live, eigene RTMP-Adresse, Hotspot der Box als Netz) sendet eine Hero 8 nachweislich zur Box (1080p, H.264, etwa 2,6 Mbit/s, mehrere Minuten stabil). Die **Labs-QR-Codes** haben bei diesem Test nicht ausgereicht; ob die größeren Codes es beheben, ist offen. Die Befehle entsprechen den Befehlen der offiziellen GoPro-Labs-Seite. Wenn es bei jemandem nicht klappt: bitte das Protokoll aus der Oberfläche anhängen (siehe unten). Bleibt die GoPro-Anbindung unzuverlässig, wird sie wieder ausgebaut.
