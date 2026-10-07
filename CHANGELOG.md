@@ -4,7 +4,7 @@
 - **Neu: Reihenfolge der Kamera-Knöpfe ändern.** In der Kameraliste hat jede Kamera zwei Pfeile (▲ ▼); ein Klick tauscht sie mit dem Nachbarn in der angezeigten Liste. Die Kamera-Knöpfe in der Fußleiste am Handy folgen dieser Reihenfolge (bei „Alle Kameras immer bereit“ unter den gerade sendenden Kameras). Die Reihenfolge wird in `cameras.json` gespeichert.
   - Hauptbild, kleine Bilder, Rollen und die Vorschau bleiben unverändert (die Zuordnung der Bilder ist eine eigene Einstellung).
   - Technik: `POST /api/cameras/<id>` mit `{"swap_with": "<id>"}` (`CameraStore.swap` in `server.py`). Englische Texte in `web/i18n/en.json`, die anderen Sprachen folgen mit der nächsten Übersetzungsrunde.
-  - Tests: `tools/test_ui_backend.py` (`CameraOrder`, 3 Tests), `tools/test_view.py` (Fußleiste folgt der Liste). Auf einer Box eingespielt; ob die Pfeile und die Fußleiste am Handy so passen, ist noch nicht vom Nutzer bestätigt.
+  - Tests: `tools/test_ui_backend.py` (`CameraOrder`, 3 Tests), `tools/test_view.py` (Fußleiste folgt der Liste). Auf einer Box eingespielt und vom Nutzer geprüft (Pfeile und Fußleiste am Handy).
 
 ## 0.9.116 (Beta)
 - **Behoben: Ein hochkantes Kamerabild (zum Beispiel ein iPhone im Hochformat) wurde als kleines Bild in den 16:9-Rahmen gequetscht**, in der Sendung und in der Vorschau. Als Hauptbild stimmte es schon (mittig mit Balken).
