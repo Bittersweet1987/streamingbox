@@ -4716,7 +4716,8 @@ class TwitchReader:
                     "raid": "raid", "announcement": "notice", "ritual": "notice"}
     UNESC = {"s": " ", ":": ";", "\\": "\\", "r": "", "n": ""}
 
-    STALE = 330.0                        # Sekunden ohne jede Zeile (Twitch schickt etwa alle 5 Minuten ein PING): Verbindung gilt als tot, nächster Weg
+    STALE = 100.0                        # Sekunden ohne jede Zeile (auch ohne Antwort auf unser PING): Verbindung gilt als tot, nächster Weg
+    PROBE = 40.0                         # nach so vielen stillen Sekunden schickt die Box selbst ein PING (Twitch antwortet mit PONG), sonst fiele ein toter Weg erst nach Minuten auf
 
     def __init__(self, store, demo=False, host=None, port=None, tls=True, context=None, clock=time.monotonic, wall=time.time, sleep=time.sleep, paths=None):
         self.paths = paths or ChatPaths()
@@ -4801,6 +4802,11 @@ class TwitchReader:
         bits = tags.get("bits", "")
         if bits.isdigit():
             item["bits"] = min(int(bits), 10_000_000)
+        ev = self._event(cmd, tags, item)
+        if ev is False:                                              # Einzelgeschenk einer Sammelaktion: die Sammelmeldung zeigt es schon
+            return None
+        if ev:
+            item["ev"] = ev
         if cmd == "PRIVMSG":                                          # Kennungen der Nachricht und des Absenders (für Löschen, Timeout und Bann)
             if self.MID_RE.fullmatch(tags.get("id", "")):
                 item["mid"] = tags["id"]
@@ -4814,6 +4820,31 @@ class TwitchReader:
         if sent.isdigit() and len(sent) <= 13:
             item["ts"] = int(sent) // 1000
         return item if item["text"] else None
+
+    @staticmethod
+    def _num(v, limit=10_000_000):
+        return min(int(v), limit) if isinstance(v, str) and v.isdigit() and len(v) <= 9 else 0
+
+    @classmethod
+    def _event(cls, cmd, tags, item):
+        """Besondere Ereignisse für die auffällige Darstellung: {"k": Art, "n": Zahl} mit k = sub | gift | raid | cheer | announce.
+        False = Einzelgeschenk einer Sammelaktion (wird nicht extra gezeigt)."""
+        if cmd == "PRIVMSG":
+            return {"k": "cheer", "n": item["bits"]} if item.get("bits") else None
+        mid = tags.get("msg-id", "")
+        if mid in ("sub", "resub"):
+            return {"k": "sub", "n": cls._num(tags.get("msg-param-cumulative-months", ""), 1200)}
+        if mid == "subgift":
+            return False if tags.get("msg-param-community-gift-id") else {"k": "gift", "n": 1}
+        if mid == "submysterygift":
+            return {"k": "gift", "n": cls._num(tags.get("msg-param-mass-gift-count", ""), 1000) or 1}
+        if mid in ("giftpaidupgrade", "anongiftpaidupgrade"):
+            return {"k": "sub", "n": 0}
+        if mid == "raid":
+            return {"k": "raid", "n": cls._num(tags.get("msg-param-viewerCount", ""), 10_000_000)}
+        if mid == "announcement":
+            return {"k": "announce", "n": 0}
+        return None
 
     def _add(self, item):
         with self.lock:
@@ -4895,10 +4926,13 @@ class TwitchReader:
                     sock.sendall(b"PONG :tmi.twitch.tv\r\n")
             sock.sendall(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nJOIN #" + ch.encode("ascii") + b"\r\n")
             self.state = "ok"
-            heard = self.clock()
+            heard = probed = self.clock()
             while not self._idle() and self.channel == ch:
                 line = rd.get(self.clock() + 5)
                 if line is None:
+                    if self.clock() - heard > self.PROBE and self.clock() - probed > self.PROBE:
+                        sock.sendall(b"PING :pipbox\r\n")
+                        probed = self.clock()
                     if self.clock() - heard > self.STALE:
                         self.paths.fail(src, 300.0)                          # still geworden: diesen Weg meiden, über den nächsten neu verbinden
                         raise OSError("still")
@@ -4928,7 +4962,14 @@ class TwitchReader:
         self.demo_at = now
         n = self.next_id
         if n % 11 == 0:
-            self._add({"type": "sub", "name": "", "color": "", "text": "Anna_Streams hat den Kanal abonniert (Stufe 1)", "emotes": []})
+            self._add({"type": "sub", "name": "", "color": "", "text": "Anna_Streams hat den Kanal abonniert (Stufe 1)", "emotes": [], "ev": {"k": "sub", "n": 0}})
+        elif n % 13 == 0:
+            self._add({"type": "raid", "name": "", "color": "", "text": "Max_Raider schickt 42 Zuschauer zu dir", "emotes": [], "ev": {"k": "raid", "n": 42}})
+        elif n % 17 == 0:
+            self._add({"type": "msg", "name": "Lena", "color": "#DAA520", "text": "cheer500 Weiter so!", "emotes": [], "bits": 500, "ev": {"k": "cheer", "n": 500},
+                       "mid": "%08x-0000-4000-8000-000000000000" % n, "uid": "102", "login": "lena", "badges": ["vip", "subscriber"]})
+        elif n % 19 == 0:
+            self._add({"type": "sub", "name": "", "color": "", "text": "nightowl verschenkt 5 Abos an die Community", "emotes": [], "ev": {"k": "gift", "n": 5}})
         else:
             i = n % len(self.DEMO)
             name, color, text = self.DEMO[i]
