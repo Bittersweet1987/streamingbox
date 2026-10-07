@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.9.118 (Beta)
+- **Neu: QR-Code für Kamera-Apps.** Unter „Kamera hinzufügen“ (und bei jeder RTMP-Kamera, die keine DJI- oder HDMI-Kamera ist) gibt es eine kleine Zeile: App wählen (IRL Pro, Moblin, GoPro HERO 8–11 oder HERO 12/13) und „QR-Code erzeugen“. Der Code erscheint erst nach dem Klick, ein zweiter Klick blendet ihn aus; die Erklärung steckt hinter einem kleinen „?“.
+  - Ohne Namenseingabe: Unter „Kamera hinzufügen“ legt die Box bei Bedarf selbst eine neue RTMP-Kamera an („<App> 1“, automatischer Schlüssel) und zeigt ihren Code; für dieselbe App nimmt sie beim nächsten Mal die vorhandene.
+  - Inhalt: IRL Pro `larix://set/v1?conn[][url]=…&conn[][name]=…` (Larix-Grove-Format von Softvelum), Moblin `moblin://?<URL-codierter JSON>` mit Codec H.264, GoPro (Labs-Firmware) drei Codes: WLAN merken (nur wenn auf der Box ein Hotspot läuft), RTMP-Adresse merken, Livestream starten (1080p). Der Code enthält den Kamera-Schlüssel.
+  - Der QR-Erzeuger steht im Seitenskript (Bytemodus, Fehlerkorrektur M, bei langem Text L, Version 1 bis 10), eigene Umsetzung ohne Fremdcode. Geprüft mit dem QR-Dekoder von macOS: 18 Texte von 5 bis 271 Byte, alle fehlerfrei.
+  - **Vom Nutzer bestätigt: Moblin und IRL Pro. Nicht geprüft: GoPro** (braucht die GoPro-Labs-Firmware, Hero 8 und neuer; die Schreibweise der Befehle stammt aus Moblins Quelltext und der Labs-Dokumentation). Rückmeldungen dazu bitte als Issue.
+  - Manche Scan-Apps erkennen den `larix://`-Link nicht: dann die Kamera-App des Handys nehmen oder den Link in IRL Pro unter Einstellungen → Import/Export Settings → Import Settings einfügen.
+- **Geändert: Beim Wechsel des Hauptbilds gibt es keine Rückfrage mehr** („Der Encoder startet dafür neu …“). Der Wechsel läuft sofort (Nutzerwunsch).
+- Übersetzungen: die neuen Texte stehen in allen 14 Sprachen.
+
 ## 0.9.117 (Beta)
 - **Neu: Reihenfolge der Kamera-Knöpfe ändern.** In der Kameraliste hat jede Kamera zwei Pfeile (▲ ▼); ein Klick tauscht sie mit dem Nachbarn in der angezeigten Liste. Die Kamera-Knöpfe in der Fußleiste am Handy folgen dieser Reihenfolge (bei „Alle Kameras immer bereit“ unter den gerade sendenden Kameras). Die Reihenfolge wird in `cameras.json` gespeichert.
   - Hauptbild, kleine Bilder, Rollen und die Vorschau bleiben unverändert (die Zuordnung der Bilder ist eine eigene Einstellung).

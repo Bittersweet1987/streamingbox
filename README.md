@@ -2,7 +2,7 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.117 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP, DJI per Bluetooth, HDMI-Eingang), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, "Alle Kameras immer bereit" (Beta), Upload über mehrere Leitungen (SRTLA), Fernzugriff über Tailscale, Software-Update, 14 Sprachen, Ansicht für das Handy und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.118 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP, DJI per Bluetooth, HDMI-Eingang), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, "Alle Kameras immer bereit" (Beta), Upload über mehrere Leitungen (SRTLA), Fernzugriff über Tailscale, Software-Update, 14 Sprachen, Ansicht für das Handy und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
 
 > **Beta heißt:** Es läuft im Alltag, aber noch nicht alles ist über lange Zeit und unterwegs geprüft (siehe "Was noch fehlt oder ungetestet ist"). Neue Versionen gibt es oft; zurück auf eine frühere Version geht in der Oberfläche.
 
@@ -65,6 +65,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   **Ampel** und aktuelle Eingangsbitrate. *Upload*: je verbundener Netzwerkkarte Datenrate samt **Ampel** und Summe (Ethernet, WLAN, USB-/Mobilfunk-Router). Warnungen
   erscheinen darüber; sind keine da, bleibt der Platz leer.
 - **RTMP-Kameras:** neue Streams werden automatisch erkannt; Kameras lassen sich umbenennen. Jede Kamera (zum Beispiel ein Handy) kann über eine eigene Verbindung der Box senden, etwa einen zweiten Router, um die Last zu verteilen; die angezeigte Adresse gilt dann für diese Verbindung.
+  **QR-Code für Kamera-Apps:** Unter "Kamera hinzufügen" und bei jeder RTMP-Kamera: App wählen (IRL Pro, Moblin, GoPro) und "QR-Code erzeugen"; die Kamera-App übernimmt die Verbindungsdaten. Mit Moblin und IRL Pro geprüft, GoPro (Labs-Firmware) ungeprüft.
 - **DJI-Kameras per Bluetooth** (Protokoll nach Moblin, MIT): Suche, Koppeln, WLAN und RTMP-Ziel übergeben, Start, mit Statusmeldungen je Schritt.
   **Je Kamera wählbare Verbindung** aus den vorhandenen Verbindungen der Box: WLAN-Hotspot und WLAN-Netze mit Name und Passwort aus NetworkManager, alle anderen
   (Ethernet, USB-Router, Modem) mit einmal eingetragenem und gespeichertem WLAN der Kamera. Pro Kamera Auflösung, fps, Bitrate und Stabilisierung.
@@ -172,6 +173,7 @@ Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB
 - Sprachen: nur im Browser mit Demo-Werten geprüft (Vollständigkeit, Zeilenumbrüche), nicht von Muttersprachlern und nicht auf echten Handys in jeder Sprache. Zusammengesetzte Texte können in einzelnen Fällen noch deutsch oder englisch bleiben. Die Sprachdateien werden einmal am Ende einer Reihe von Versionen nachgezogen.
 - Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") und die Umordnungstoleranz 47 am Empfänger sind für **einen klar besseren Weg plus schwächere Zusatzwege** abgestimmt. Zu Hause (schneller DSL-Weg plus Mobilfunk) war das lange erprobt, über **drei Mobilfunkwege** gab es bisher nur einen kurzen Test (siehe "Stand und Test"). Starlink neben 5G ist nicht geprüft. Sind alle Wege gleich unruhig, steigen die Neuübertragungen.
 - **Alle Kameras immer bereit** (Compositor-Engine) ist neu (0.9.114): bisher einige Stunden Betrieb mit vier Kameras, aber noch kein langer Lauf und keine Fahrt. Frühere Berichte über Abstürze einer Box mit der Zubringer-Variante (0.9.112) sind nicht geklärt; ob die neue Engine sie behebt, ist eine begründete Vermutung, nicht bewiesen. Der Schalter bleibt deshalb standardmäßig aus.
+- **QR-Code für GoPro** (HERO 8 bis 13, Labs-Firmware nötig): Befehle aus Moblins Quelltext und der GoPro-Labs-Dokumentation, nie mit einer echten GoPro geprüft. Manche Scan-Apps erkennen den `larix://`-Link von IRL Pro nicht (dann Kamera-App des Handys oder Link in IRL Pro importieren).
 - **HDMI-Kamera, Akku:** "Nur Akkustand lesen" ist nur mit der Osmo Action 5 (Pro) getestet, **nicht mit der Action 6**. Die Ladeanzeige 🔌 ist je Modell mit einem Versuch gemessen (Action 4, 5 Pro, 6); die Osmo 360 ist ausgenommen.
 - Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).
 - Geplant, nicht gebaut: Überblendung beim Wechsel zwischen Hauptbild und kleinem Bild (heute ein harter Schnitt) und USB-Kameras als Quelle. Eigene Empfangsprozesse je Kamera sind mit der Engine für "Alle Kameras immer bereit" erledigt. Für **GoPro**-Kameras gibt es nur eine Notiz (`NOTIZ-GoPro-Integration.md`), keinen Code.
