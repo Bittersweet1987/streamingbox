@@ -509,6 +509,150 @@ def stream_probe(seconds=5, xml=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+PROC = "/proc"
+
+
+def _proc_read(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(8192).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _cpu_snapshot():
+    """Rechenzeiten aus /proc: je Kern (gesamt, davon Leerlauf) und je Thread (Name, Takte, letzter Kern). Nur Zahlen und Namen."""
+    cpus, threads = {}, {}
+    for line in _proc_read(PROC + "/stat").splitlines():
+        if line.startswith("cpu") and line[3:4].isdigit():
+            p = line.split()
+            try:
+                v = [int(x) for x in p[1:9]]
+            except ValueError:
+                continue
+            cpus[p[0]] = (sum(v), v[3] + v[4])
+    try:
+        pids = [n for n in os.listdir(PROC) if n.isdigit()]
+    except OSError:
+        pids = []
+    for pid in pids:
+        try:
+            tids = os.listdir("%s/%s/task" % (PROC, pid))
+        except OSError:
+            continue
+        for tid in tids:
+            t = _proc_read("%s/%s/task/%s/stat" % (PROC, pid, tid))
+            i = t.rfind(")")
+            if i < 0:
+                continue
+            f = t[i + 2:].split()
+            try:
+                threads[(pid, tid)] = (t[t.find("(") + 1:i], int(f[11]) + int(f[12]), int(f[36]))
+            except (ValueError, IndexError):
+                continue
+    return cpus, threads
+
+
+def _unit_of(pid):
+    """Dienst, zu dem ein Prozess gehört (aus der Steuergruppe), sonst Kernel oder ohne Dienst."""
+    for line in _proc_read("%s/%s/cgroup" % (PROC, pid)).splitlines():
+        for part in reversed(line.split("/")):
+            if part.endswith((".service", ".scope")):
+                return part
+    if not _proc_read("%s/%s/cmdline" % (PROC, pid)):
+        return "Kernel"
+    return "(ohne Dienst)"
+
+
+def cpu_report(seconds=2, sleep=None, top=12, top_threads=10):
+    """Welche Dienste und Threads die Kerne wie stark auslasten (Momentaufnahme über <seconds> Sekunden): Last je Kern, je Dienst (100 % = ein ganzer
+    Kern) und die Threads mit der größten Last samt Kern, auf dem sie zuletzt liefen. Gedacht für Fälle wie "ein Kern ist voll" (Issue #35)."""
+    sleep = sleep or time.sleep
+    a_cpu, a_thr = _cpu_snapshot()
+    sleep(seconds)
+    b_cpu, b_thr = _cpu_snapshot()
+    try:
+        tick = os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError, AttributeError):
+        tick = 100
+    NL = chr(10)
+    cores = []
+    for name in sorted(b_cpu, key=lambda x: int(x[3:])):
+        if name in a_cpu:
+            dt, di = b_cpu[name][0] - a_cpu[name][0], b_cpu[name][1] - a_cpu[name][1]
+            cores.append("%s %3d %%" % (name, round(100.0 * (dt - di) / dt)) if dt > 0 else "%s ?" % name)
+    rows = []
+    for key, (name, ticks, core) in b_thr.items():
+        before = a_thr.get(key)
+        if before is None:
+            continue
+        pct = 100.0 * (ticks - before[1]) / (seconds * tick)
+        if pct >= 0.5:
+            rows.append((pct, key[0], name, core))
+    rows.sort(reverse=True)
+    units = {}
+    unit_cache = {}
+    for pct, pid, name, core in rows:
+        u = unit_cache.setdefault(pid, _unit_of(pid))
+        units[u] = units.get(u, 0.0) + pct
+    out = ["Kerne (Auslastung in %%, über %d s): %s" % (seconds, "  ".join(cores) if cores else "nicht lesbar")]
+    out.append("Dienste (100 % = ein ganzer Kern):")
+    for u, pct in sorted(units.items(), key=lambda kv: -kv[1])[:top]:
+        out.append("  %5.1f %%  %s" % (pct, u))
+    if not units:
+        out.append("  (keine Last gemessen)")
+    out.append("Threads mit der größten Last (Kern, auf dem sie zuletzt liefen):")
+    for pct, pid, name, core in rows[:top_threads]:
+        out.append("  %5.1f %%  cpu%-2d  %s  [%s]" % (pct, core, name, unit_cache.get(pid, "?")))
+    return NL.join(out) + NL
+
+
+def system_load():
+    """Druck auf CPU, Speicher und Datenträger (PSI), freier Platz und die Prozesse mit dem größten Speicherbedarf: Gründe für Ruckeln und Abstürze."""
+    NL = chr(10)
+    out = []
+    for kind in ("cpu", "memory", "io"):
+        txt = _proc_read(PROC + "/pressure/" + kind).strip()
+        if txt:
+            out.append("Druck %s: %s" % (kind, txt.replace(NL, " | ")))
+    out.append("Freier Platz:")
+    out.append(run(["df", "-h", "/", "/run"], 8).strip())
+    out.append("Speicherbedarf (größte Prozesse):")
+    rows = run(["ps", "-eo", "rss,pcpu,comm", "--sort=-rss"], 8).splitlines()
+    out.extend(rows[:9])
+    return NL.join(out) + NL
+
+
+def net_counters():
+    """Zähler je Netzwerkkarte seit dem Start (Pakete, Fehler, verworfen) und die Verbindungsübersicht: zeigt Verlust und Überlast auf dem Weg."""
+    NL = chr(10)
+    rows = ["%-10s %12s %10s %6s %6s | %12s %10s %6s %6s" % ("Karte", "rx Byte", "rx Pakete", "rx Fehl", "rx verw", "tx Byte", "tx Pakete", "tx Fehl", "tx verw")]
+    for line in _proc_read(PROC + "/net/dev").splitlines()[2:]:
+        if ":" not in line:
+            continue
+        name, data = line.split(":", 1)
+        name, v = name.strip(), data.split()
+        if name == "lo" or len(v) < 16:
+            continue
+        rows.append("%-10s %12s %10s %6s %6s | %12s %10s %6s %6s" % (name, v[0], v[1], v[2], v[3], v[8], v[9], v[10], v[11]))
+    rows.append("")
+    rows.append(run(["ss", "-s"], 8).strip())
+    return NL.join(rows) + NL
+
+
+KERNEL_BAD = re.compile(r"(?i)fail|error|fault|timeout|timed out|reset|overflow|oom|out of memory|segfault|throttl|hung task|bug:|warn|undervolt|brownout|panic|watchdog|disconnect|denied|lockup|stall")
+KERNEL_SUBSYS = re.compile(r"(?i)mpp|rkvdec|rkvenc|vdpu|rga|iep|iommu|mali|drm|cma|thermal|usb|dwc|xhci|mmc|nvme|ext4|cpufreq|regulator|ethernet|r8125|stmmac|wlan|brcm|rtl|bluetooth")
+KERNEL_SEVERE = re.compile(r"(?i)oom|out of memory|segfault|hung task|panic|undervolt|brownout|throttl|lockup")
+KERNEL_NOISE = re.compile(r"(?i)looking up|probing|supply property|no regulator|fiq_debugger")
+
+
+def kernel_hints(n=120):
+    """Zeilen des Kernel-Protokolls zu Videodekoder, Speicher, Temperatur, Abstürzen und USB-Fehlern (der bisherige Abschnitt kennt nur USB, Bluetooth, WLAN)."""
+    lines = [l for l in run(["dmesg"], 10).splitlines()
+             if not KERNEL_NOISE.search(l) and ((KERNEL_BAD.search(l) and KERNEL_SUBSYS.search(l)) or KERNEL_SEVERE.search(l))]
+    return chr(10).join(lines[-n:]) + chr(10)
+
+
 def thread_load(n=22):
     """Auslastung je Thread (Momentaufnahme über eine Sekunde): zeigt, welcher Zweig oder Dienst einen Kern voll macht (Threads von GStreamer tragen den
     Namen des Elements, zum Beispiel sbf1:src oder mppvideodec)."""
@@ -627,6 +771,11 @@ def sections():
            ("Bildaufbau der Sendekette (belacoder: Bilder je Sekunde und Rückstand je Zweig, Warnungen)", tail_file("/run/pipbox-send/belacoder-live.txt", 60)),
            ("Stream-Prüfung der Quellen (erste 5 Sekunden jedes Eingangs: Codec, Profil, Bildzeiten, B-Bilder, Ton)", stream_probe()),
            ("Auslastung je Thread (Momentaufnahme)", thread_load()),
+           ("Auslastung je Kern und je Dienst (Momentaufnahme über 2 s)", cpu_report()),
+           ("System: Druck, freier Platz, Speicherbedarf", system_load()),
+           ("Netzwerk-Zähler (seit dem Start)", net_counters()),
+           ("Ereignisse der Sendekette (belacoder: Zweige starten, Zeitausrichtung)", tail_file("/run/pipbox-send/belacoder-events.txt", 80)),
+           ("nginx: letzte Fehler", tail_file("/var/log/nginx/error.log", 40)),
            ("Zustand der Software-Updates", tail_file("/run/pipbox-swupdate/status.json", 40)),
            ("Protokoll der Software-Updates", collapse_repeats(tail_file("/var/log/pipbox-swupdate.log", 150))),
            ("Protokoll der System-Updates", collapse_repeats(tail_file(f"{STATE}/update.log", 80)))]
@@ -644,6 +793,7 @@ def sections():
            and not re.search(r"(?i)portmapper|magicsock|derp|disco|netcheck", l)]
     out.append(("Journal tailscaled (nur Freigabe, Zertifikat, Anmeldung, Fehler)", "\n".join(tsj[-120:]) + "\n"))
     out.append(("Warnungen und Fehler des Systems (seit dem Start)", run(["journalctl", "-p", "warning", "-b", "--no-pager", "-o", "short-iso", "-n", "200"], 20)))
+    out.append(("Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)", kernel_hints()))
     out.append(("Kernel (USB, Bluetooth, WLAN)", "\n".join([l for l in run(["dmesg"], 10).splitlines()
                                                               if re.search(r"(?i)usb|bluetooth|btusb|wlan|wifi|cfg80211|rtl|brcm", l)][-150:]) + "\n"))
     return out

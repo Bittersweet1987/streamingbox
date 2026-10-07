@@ -32,6 +32,8 @@ RUN = "/run/pipbox-send"
 WORK = "/var/tmp/pipbox"
 STATUS = f"{RUN}/status.json"
 BC_STATS = f"{RUN}/belacoder-stats.json"       # JSON von belacoder, einmal je Sekunde (Bitrate, RTT, Sendepuffer, Neuübertragungen, Verlust, Encoder-Bilder), im RAM
+EVENTS = f"{RUN}/belacoder-events.txt"     # Ereignisse von belacoder (Zweige starten, Zeitausrichtung), für die Protokolle, im RAM
+EVENT_RX = re.compile(r"^(Aligned |Re-aligned |Aligning |Feed sbf[0-9]|Dynamic feed |Controller parts|Bitrate controller|control: no element)")
 STATS = f"{RUN}/belacoder-stats.txt"     # die letzten Regelzeilen von belacoder (nur Zahlen), im RAM
 STATS_KEEP = 3000
 LISTEN_PORT = 9100
@@ -379,6 +381,7 @@ class Sender:
         self._cfg_mt = None
         self._inact_mt = None
         self.stats = collections.deque(maxlen=STATS_KEEP)    # (Zeit, Zeile)
+        self.events = collections.deque(maxlen=120)          # Ereigniszeilen von belacoder (nur feste Meldungen ohne Adressen und Schlüssel)
         self.links = collections.deque(maxlen=300)           # Zustandszeilen der Wegewahl (srtla_send "links: ...")
         self.stop_ev = threading.Event()
         self.procs = {}
@@ -429,6 +432,9 @@ class Sender:
                 self.links.append((time.strftime("%H:%M:%S", time.gmtime()), line.strip()[:200]))
                 continue
             if name == "belacoder":
+                ev = line.strip()
+                if EVENT_RX.match(ev):                         # Ereignisse (Zweig gestartet, Zeitausrichtung): nur feste Meldungen, für die Protokolle
+                    self.events.append((time.strftime("%H:%M:%S", time.gmtime()), ev[:200]))
                 # Regelgrößen der Bitratenanpassung (nur Zahlen). Das installierte belacoder gibt sie nicht aus; eine mit
                 # DEBUG gebaute Fassung (zur Fehlersuche) schreibt "bs: ..." und "set bitrate ..." (jede 5. Zeile behalten).
                 t = line.strip()
@@ -443,7 +449,7 @@ class Sender:
     def flush_stats(self):
         try:
             os.makedirs(RUN, exist_ok=True)
-            for path, rows in ((STATS, self.stats), (f"{RUN}/srtla-links.txt", self.links)):
+            for path, rows in ((STATS, self.stats), (f"{RUN}/srtla-links.txt", self.links), (EVENTS, self.events)):
                 tmp = path + ".tmp"
                 with open(tmp, "w") as f:
                     f.write("".join(f"{t} {l}\n" for t, l in list(rows)))

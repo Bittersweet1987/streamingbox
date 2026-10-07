@@ -37,6 +37,24 @@ def sender():
                      {"cfg": CFG, "layout": ("cam-m", "cam-p", "cam-q"), "auto": True})
 
 
+class EventLines(unittest.TestCase):
+    def test_branch_start_and_alignment_lines_are_kept_for_the_logs(self):
+        import tempfile
+        s = sender()
+
+        class P:
+            stdout = ["Aligned sbf3 to the pipeline clock: offset 1066 ms (incl. 750 ms buffer)", "Feed sbf0 started",
+                      "rtmp://127.0.0.1:1935/publish/GEHEIM sonst nichts", "b: 12/3 Zahlen"]
+        s.pump("belacoder", P)
+        self.assertEqual([l for _, l in s.events], ["Aligned sbf3 to the pipeline clock: offset 1066 ms (incl. 750 ms buffer)", "Feed sbf0 started"])
+        d = tempfile.mkdtemp()
+        with mock.patch.object(ps, "RUN", d), mock.patch.object(ps, "STATS", d + "/s.txt"), mock.patch.object(ps, "EVENTS", d + "/e.txt"):
+            s.flush_stats()
+        text = open(d + "/e.txt", encoding="utf-8").read()
+        self.assertIn("Aligned sbf3", text)
+        self.assertNotIn("GEHEIM", text)
+
+
 class ExitText(unittest.TestCase):
     def test_signal_is_named(self):
         self.assertEqual(ps.exit_text(-13), "Code -13, Signal SIGPIPE")

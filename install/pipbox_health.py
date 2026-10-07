@@ -32,6 +32,54 @@ def rd(path, default=""):
         return default
 
 
+PROC = "/proc"
+_prev = [None]        # letzter Stand der Rechenzeiten (Kerne, Threads) für die Last seit der vorigen Zeile
+
+
+def _cpu_state():
+    cores, threads = {}, {}
+    for l in rd(PROC + "/stat").splitlines():
+        if l.startswith("cpu") and l[3:4].isdigit():
+            try:
+                v = [int(x) for x in l.split()[1:9]]
+            except ValueError:
+                continue
+            cores[l.split()[0]] = (sum(v), v[3] + v[4])
+    for d in glob.glob(PROC + "/[0-9]*/task/[0-9]*"):
+        t = rd(d + "/stat")
+        i = t.rfind(")")
+        f = t[i + 2:].split() if i >= 0 else []
+        try:
+            threads[d] = (t[t.find("(") + 1:i], int(f[11]) + int(f[12]), int(f[36]))
+        except (ValueError, IndexError):
+            continue
+    return time.monotonic(), cores, threads
+
+
+def cpu_text(top=2):
+    """Last je Kern seit der vorigen Zeile ("cores=25/11/10/6/1/0/0/0" in %) und die Threads mit der größten Last ("hot=sbf3_lq:src:99%@5": Name, Last,
+    Kern, auf dem er zuletzt lief; 100 % = ein ganzer Kern). Zeigt hinterher, welcher Thread einen Kern voll machte, auch wenn niemand hinsah."""
+    now = _cpu_state()
+    before, _prev[0] = _prev[0], now
+    if before is None:
+        return "cores=? hot=?"
+    dt = max(0.001, now[0] - before[0])
+    cores = []
+    for k in sorted(now[1], key=lambda x: int(x[3:])):
+        if k in before[1]:
+            tot, idle = now[1][k][0] - before[1][k][0], now[1][k][1] - before[1][k][1]
+            cores.append(str(round(100.0 * (tot - idle) / tot)) if tot > 0 else "?")
+    hot = []
+    for d, (name, ticks, core) in now[2].items():
+        b = before[2].get(d)
+        if b:
+            pct = 100.0 * (ticks - b[1]) / (dt * 100)
+            if pct >= 5:
+                hot.append((pct, name, core))
+    hot.sort(reverse=True)
+    return "cores=%s hot=%s" % ("/".join(cores) or "?", ",".join("%s:%d%%@%d" % (n.replace(" ", "_"), p, c) for p, n, c in hot[:top]) or "-")
+
+
 def running_names():
     """Namen aller laufenden Programme, mit einem einzigen Durchlauf durch /proc."""
     return {rd(d + "/comm") for d in glob.glob("/proc/[0-9]*")}
@@ -47,7 +95,7 @@ def line():
             f"mhz={'/'.join(map(str, freq[:8]))} memfree={mem.get('MemAvailable', 0) // 1024}M "
             f"eth1={'ja' if os.path.exists('/sys/class/net/eth1') else 'nein'} "
             f"belacoder={'ja' if 'belacoder' in names else 'nein'} srtla={'ja' if 'srtla_send' in names else 'nein'} "
-            f"bt={len(glob.glob('/sys/class/bluetooth/hci[0-9]'))}")
+            f"bt={len(glob.glob('/sys/class/bluetooth/hci[0-9]'))} {cpu_text()}")
 
 
 def main():
