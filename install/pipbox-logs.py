@@ -363,13 +363,39 @@ def sps_info(nal):
         r.bit()
     r.bit()
     width, height = w * 16, h * 16 * (1 if frame_mbs_only else 2)
+    coded, crop = (width, height), (0, 0, 0, 0)
     if r.bit():
         cl, cr, ct, cb = r.ue(), r.ue(), r.ue(), r.ue()
         unit_x = 1 if chroma == 0 else 2
         unit_y = (1 if chroma in (0, 3) else 2) * (1 if frame_mbs_only else 2)
         width -= (cl + cr) * unit_x
         height -= (ct + cb) * unit_y
-    return {"profile": profile, "level": level, "width": width, "height": height, "interlaced": not frame_mbs_only, "refs": refs, "poc": poc}
+        crop = (cl * unit_x, cr * unit_x, ct * unit_y, cb * unit_y)
+    info = {"profile": profile, "level": level, "width": width, "height": height, "interlaced": not frame_mbs_only, "refs": refs, "poc": poc,
+            "coded": coded, "crop": crop, "vui": False}
+    try:                                                   # Angaben zur Darstellung (VUI): Seitenverhältnis, Bildrate, Farbbereich; fehlen sie, bleibt es bei False
+        if r.bit():
+            info["vui"] = True
+            if r.bit():
+                idc = r.bits(8)
+                info["sar"] = (r.bits(16), r.bits(16)) if idc == 255 else idc
+            if r.bit():
+                r.bit()
+            if r.bit():
+                r.bits(3)
+                info["full_range"] = bool(r.bit())
+                if r.bit():
+                    r.bits(24)
+            if r.bit():
+                r.ue()
+                r.ue()
+            if r.bit():
+                ticks, scale = r.bits(32), r.bits(32)
+                if ticks:
+                    info["vui_fps"] = scale / (2.0 * ticks)
+    except ValueError:
+        pass
+    return info
 
 
 def _steps(ts):
@@ -434,6 +460,12 @@ def analyze_flv(data):
             line += ", Profil %s (%d), Stufe %.1f, %dx%d%s, Bezugsbilder %d, POC-Typ %d%s" % (
                 H264_PROFILES.get(sps["profile"], "?"), sps["profile"], sps["level"] / 10.0, sps["width"], sps["height"],
                 ", Zeilensprung" if sps["interlaced"] else "", sps["refs"], sps["poc"], " (B-Bilder möglich)" if sps["poc"] == 0 else "")
+            if any(sps.get("crop", (0, 0, 0, 0))):
+                line += ", kodiert %dx%d mit Beschnitt links/rechts/oben/unten %d/%d/%d/%d" % ((sps["coded"][0], sps["coded"][1]) + tuple(sps["crop"]))
+            if sps.get("vui"):
+                line += ", VUI: Bildrate %s, Seitenverhältnis %s, Farbbereich %s" % (
+                    ("%.2f" % sps["vui_fps"]) if "vui_fps" in sps else "?", sps.get("sar", "?"),
+                    {True: "voll", False: "begrenzt"}.get(sps.get("full_range"), "?"))
         elif sps:
             line += ", SPS nicht lesbar"
         elif 12 in vcodec:
@@ -457,6 +489,78 @@ def analyze_flv(data):
     else:
         out.append("Ton: keine Tonpakete gelesen")
     return NL.join(out)
+
+
+def gst_caps_of(text):
+    """Aus der Ausgabe von `gst-launch-1.0 -v`: die Eigenschaften (Caps) am Ausgang des Parsers (h264parse) und des Dekoders (mppvideodec)."""
+    found = {}
+    for line in text.splitlines():
+        if "caps = " not in line:
+            continue
+        caps = line.split("caps = ", 1)[1].strip()
+        if "h264parse" in line and ".GstPad:src" in line and caps.startswith("video/x-h264") and "in" not in found:
+            found["in"] = caps
+        if "GstMppVideoDec" in line and ".GstPad:src" in line and caps.startswith("video/x-raw") and "out" not in found:
+            found["out"] = caps
+    return found
+
+
+def decoder_probe(seconds=4, xml=None):
+    """Dekodiert von jedem laufenden H.264-Eingang kurz (seconds) probeweise mit dem Hardware-Dekoder der Box und schreibt auf, was der Dekoder liefert
+    (Format, Größe, Bildrate, Speicherart): Gründe dafür, dass der Zweig einer Quelle viel Rechenzeit braucht (Issue #35). Braucht gst-launch-1.0."""
+    import shutil
+    import tempfile
+    import xml.etree.ElementTree as ET
+    NL = chr(10)
+    if xml is None:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(RTMP_STAT, timeout=3) as r:
+                xml = r.read(2_000_000).decode("utf-8", "replace")
+        except Exception as e:
+            return "(Statistik nicht lesbar: %s)" % type(e).__name__ + NL
+    try:
+        root = ET.fromstring(xml)
+    except Exception:
+        return "(Statistik nicht auswertbar)" + NL
+    names = []
+    for st in root.iter("stream"):
+        n = (st.findtext("name") or "").strip()
+        if n and st.find("publishing") is not None and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", n):
+            names.append(n)
+    if not names:
+        return "(keine Quelle sendet)" + NL
+    if not shutil.which("gst-launch-1.0"):
+        return "(gst-launch-1.0 fehlt: keine Probe-Dekodierung)" + NL
+    tmp = tempfile.mkdtemp(prefix="probe-", dir=RUN if os.path.isdir(RUN) else None)
+    procs = []
+    try:
+        for i, n in enumerate(names[:4]):
+            path = os.path.join(tmp, "d%d.txt" % i)
+            cmd = ["timeout", str(seconds), "gst-launch-1.0", "-v", "rtmpsrc", "location=rtmp://127.0.0.1:1935/publish/%s" % n, "!", "flvdemux", "name=d",
+                   "d.video", "!", "h264parse", "!", "mppvideodec", "!", "fakesink", "sync=false"]
+            fh = open(path, "wb")
+            procs.append((n, path, fh, subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT)))
+        parts = []
+        for n, path, fh, pr in procs:
+            try:
+                pr.wait(seconds + 5)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+            fh.close()
+            try:
+                with open(path, "rb") as f:
+                    text = f.read(2_000_000).decode("utf-8", "replace")
+            except OSError:
+                text = ""
+            caps = gst_caps_of(text)
+            lines = ["[%s]" % n,
+                     "Eingang des Dekoders: %s" % (caps.get("in", "nichts gelesen")[:600]),
+                     "Ausgang des Dekoders: %s" % (caps.get("out", "kein Bild dekodiert (H.265 oder Fehler)")[:600])]
+            parts.append(NL.join(lines) + NL)
+        return NL.join(parts)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def stream_probe(seconds=5, xml=None):
@@ -770,6 +874,7 @@ def sections():
            ("Kameras am Eingang (nginx-Statistik)", rtmp_inputs()),
            ("Bildaufbau der Sendekette (belacoder: Bilder je Sekunde und Rückstand je Zweig, Warnungen)", tail_file("/run/pipbox-send/belacoder-live.txt", 60)),
            ("Stream-Prüfung der Quellen (erste 5 Sekunden jedes Eingangs: Codec, Profil, Bildzeiten, B-Bilder, Ton)", stream_probe()),
+           ("Dekoder-Ausgang je Quelle (Probe-Dekodierung, erste 4 Sekunden: Format, Größe, Bildrate, Speicherart)", decoder_probe()),
            ("Auslastung je Thread (Momentaufnahme)", thread_load()),
            ("Auslastung je Kern und je Dienst (Momentaufnahme über 2 s)", cpu_report()),
            ("System: Druck, freier Platz, Speicherbedarf", system_load()),
