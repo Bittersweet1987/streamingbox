@@ -16,6 +16,7 @@ import hmac
 import json
 import math
 import os
+import collections
 import random
 import re
 import secrets
@@ -4029,13 +4030,14 @@ class TwitchStore:
     NAME_RE = re.compile(r"[A-Za-z0-9_]{3,25}")
     TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,100}")
     DEFAULT_MESSAGE = "Akkustand niedrig, bitte Akku wechseln: {Kamera} ({Prozent} %)"
-    DEFAULTS = {"enabled": False, "login": "", "token": "", "channel": "", "threshold": 10, "message": DEFAULT_MESSAGE, "only_live": True}
+    DEFAULTS = {"enabled": False, "login": "", "token": "", "channel": "", "threshold": 10, "message": DEFAULT_MESSAGE, "only_live": True, "via_account": False}
 
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
         self.data = dict(self.DEFAULTS)
         self.warned = {}
+        self.account = None                      # TwitchLogin (Anmeldung per Geräte-Code), wenn vorhanden
         try:
             with open(path) as f:
                 saved = json.load(f)
@@ -4102,7 +4104,8 @@ class TwitchStore:
         if isinstance(saved.get("only_live"), bool):
             self.data["only_live"] = saved["only_live"]
         d = self.data
-        d["enabled"] = saved.get("enabled") is True and bool(d["channel"] and d["login"] and d["token"])
+        d["via_account"] = saved.get("via_account") is True        # eingeschaltet mit dem angemeldeten Twitch-Konto statt Bot-Konto und Token von Hand
+        d["enabled"] = saved.get("enabled") is True and (bool(d["channel"] and d["login"] and d["token"]) or d["via_account"])
         w = saved.get("warned")
         if isinstance(w, dict):
             self.warned = {k: float(t) for k, t in w.items() if isinstance(k, str) and KEY_RE.match(k) and isinstance(t, (int, float)) and not isinstance(t, bool)
@@ -4146,8 +4149,11 @@ class TwitchStore:
                 new["threshold"] = self._threshold(req["threshold"])
             if "message" in req:
                 new["message"] = self._message(req["message"])
-            if new["enabled"] and not (new["channel"] and new["login"] and new["token"]):
+            acc = self.account.login() if self.account else ""
+            manual = bool(new["channel"] and new["login"] and new["token"])
+            if new["enabled"] and not (manual or acc):
                 raise ValueError(self.ERR_MISSING)
+            new["via_account"] = bool(new["enabled"] and not manual)
             try:
                 self._write(new, self.warned)
             except OSError:
@@ -4158,13 +4164,21 @@ class TwitchStore:
         """Was die Oberfläche sieht: alles außer dem Token (nur, ob einer gespeichert ist)."""
         with self.lock:
             d = self.data
-            return {"enabled": d["enabled"], "channel": d["channel"], "login": d["login"], "token_set": bool(d["token"]), "threshold": d["threshold"],
-                    "message": d["message"], "only_live": d["only_live"]}
+            acc = self.account.login() if self.account else ""
+            return {"enabled": d["enabled"], "channel": d["channel"] or acc, "login": d["login"], "token_set": bool(d["token"]), "threshold": d["threshold"],
+                    "message": d["message"], "only_live": d["only_live"], "account": acc}
 
     def settings(self):
         """Alle Einstellungen samt Token, nur für den Chat-Client und den Hintergrunddienst. Nie nach außen geben."""
         with self.lock:
-            return dict(self.data)
+            d = dict(self.data)
+        acc = self.account.login() if self.account else ""
+        if acc:                                                    # angemeldetes Twitch-Konto hat Vorrang vor dem von Hand eingetragenen Token
+            tok = self.account.token()
+            if tok:
+                d["login"], d["token"] = acc, tok
+                d["channel"] = d["channel"] or acc
+        return d
 
     # ---- für welche Kamera schon gewarnt wurde
     def warned_keys(self):
@@ -4240,7 +4254,8 @@ class TwitchChat:
     NOT_ALLOWED = "Der Bot darf im Kanal nicht schreiben (z. B. nur Follower)"
     LOGIN_NOTICE_RE = re.compile(r"authentication failed|login unsuccessful|improperly formatted", re.I)      # so meldet Twitch eine Absage vor der Begrüßung
 
-    def __init__(self, host=None, port=None, tls=True, context=None, connect_timeout=10.0, total=15.0, notice_wait=2.0, clock=time.monotonic):
+    def __init__(self, host=None, port=None, tls=True, context=None, connect_timeout=10.0, total=15.0, notice_wait=2.0, clock=time.monotonic, paths=None):
+        self.paths = paths or ChatPaths()
         self.host, self.port, self.tls, self.context = host or self.HOST, port or self.PORT, tls, context
         self.connect_timeout, self.total, self.notice_wait, self.clock = connect_timeout, total, notice_wait, clock
 
@@ -4295,7 +4310,7 @@ class TwitchChat:
             return False, "Ungültige Anfrage"                       # nichts, was eine Zeile umbrechen oder einen Befehl einschleusen könnte, geht auf die Leitung
         until = self.clock() + self.total
         try:
-            sock = socket.create_connection((self.host, self.port), timeout=max(0.1, min(self.connect_timeout, until - self.clock())))
+            sock, _ = self.paths.connect(self.host, self.port, timeout=max(0.1, min(self.connect_timeout, until - self.clock())))
         except OSError:
             return False, self.NO_CONNECT
         try:
@@ -4353,6 +4368,763 @@ class TwitchChat:
         if notice is None:
             return True, self.OK
         return False, self.NOT_ALLOWED + (": " + notice if notice else "")
+
+
+class ChatPaths:
+    """Wege ins Internet für den Chat (Anmeldung, Lesen, Schreiben, Moderation). Die Box hat je Sendeweg eine eigene Quelladresse mit eigener Route (Quell-Routing),
+    wie sie auch srtla_send benutzt: Ein Socket, der an die Adresse eines Sendewegs gebunden wird, geht genau über diesen Weg hinaus. Der Chat nimmt die gewählten
+    Sendewege der Reihe nach, den besten zuerst (nach der Güte in srtla-links.txt, sonst nach der Reihenfolge der Einstellung), und weicht bei Fehler oder
+    Stille auf den nächsten aus; zuletzt kommt die normale Route. Ein Weg, der versagt hat, rückt für `hold` Sekunden ans Ende. Das ist Ausweichen, kein
+    Bündeln: Eine TCP-Verbindung lässt sich nicht auf mehrere Wege verteilen, und der Chat braucht nur wenige Bytes. Ohne Quelle (Tests) gilt nur die normale Route."""
+
+    def __init__(self, sources=None, clock=time.monotonic, links_file="/run/pipbox-send/srtla-links.txt"):
+        self.sources, self.clock, self.links_file = sources, clock, links_file
+        self.bad = {}
+        self.lock = threading.Lock()
+
+    def _quality(self):
+        """{Adresse: Güte} aus den letzten Zeilen von srtla-links.txt (kleiner ist besser; Reserve-Wege gelten als schlechter)."""
+        out = {}
+        try:
+            with open(self.links_file, errors="replace") as f:
+                lines = f.read()[-6000:].splitlines()
+        except OSError:
+            return out
+        for ln in lines:
+            m = re.search(r"links: (\d+\.\d+\.\d+\.\d+) .*?guete=(-?\d+) (genutzt|reserve)", ln)
+            if m:
+                g = int(m.group(2))
+                out[m.group(1)] = (9999 if g < 0 else g) + (0 if m.group(3) == "genutzt" else 100000)
+        return out
+
+    def order(self):
+        try:
+            srcs = [x for x in (self.sources() if self.sources else []) if isinstance(x, str) and x]
+        except Exception:
+            srcs = []
+        q = self._quality()
+        now = self.clock()
+        with self.lock:
+            good = [x for x in srcs if self.bad.get(x, 0) <= now]
+            bad = [x for x in srcs if x not in good]
+        good.sort(key=lambda x: q.get(x, 50000))                                  # stabil: gleiche Güte behält die Reihenfolge der Einstellung
+        return good + bad + [None]
+
+    def fail(self, src, hold=300.0):
+        if src:
+            with self.lock:
+                self.bad[src] = self.clock() + hold
+
+    def connect(self, host, port, timeout=6.0):
+        """(Socket, Quelladresse) über den ersten Weg, der klappt; OSError, wenn keiner geht."""
+        last = OSError()
+        for src in self.order():
+            try:
+                return socket.create_connection((host, port), timeout=timeout, source_address=(src, 0) if src else None), src
+            except OSError as e:
+                last = e
+                self.fail(src, 120.0)
+        raise last
+
+    def request(self, method, url, data=None, headers=None, timeout=15.0):
+        """(Status, Antworttext als Bytes) einer HTTP(S)-Anfrage über den ersten Weg, der antwortet; (0, b"") ohne Verbindung."""
+        import http.client
+        import urllib.parse
+        u = urllib.parse.urlsplit(url)
+        cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+        target = u.path + ("?" + u.query if u.query else "")
+        for src in self.order():
+            conn = None
+            try:
+                conn = cls(u.hostname, u.port, timeout=timeout, source_address=(src, 0) if src else None)
+                conn.request(method, target, body=data, headers=headers or {})
+                r = conn.getresponse()
+                return r.status, r.read(200_000)
+            except (OSError, http.client.HTTPException, ValueError):
+                self.fail(src, 120.0)
+            finally:
+                try:
+                    if conn:
+                        conn.close()
+                except OSError:
+                    pass
+        return 0, b""
+
+
+class TwitchLogin:
+    """Anmeldung beim Twitch-Konto des Nutzers per Geräte-Code ("Device Code Grant Flow" von Twitch): Die Box zeigt einen Code und einen Link, der Nutzer meldet
+    sich auf twitch.tv selbst an und bestätigt die Rechte; die Box holt sich danach die Zugangsdaten ab. Die Zugangsdaten des Nutzers sehen wir nie.
+
+    Die Anwendung ("IRL4YOU BOX", Typ "Public") hat nur eine Client-ID, die nicht geheim ist; ein Client-Secret gibt es nicht und wird nicht gebraucht.
+    Der Zugangsschlüssel gilt 4 Stunden und wird im Hintergrund erneuert (keep). Der Erneuerungsschlüssel ist nur einmal verwendbar: Jede Erneuerung liefert einen
+    neuen, der sofort atomar gespeichert wird. Bei einer öffentlichen Anwendung verfällt er nach 30 Tagen ohne Nutzung (dann: neu anmelden). Gespeichert wird in
+    <state>/twitch-login.json (Rechte 0600). Tokens stehen nie in einer Antwort der Oberfläche, in Meldungen oder Protokollen. Im Vorschau-Modus (demo) läuft die
+    Anmeldung ohne Netz ab. Adresse, Uhr und Wartezeit sind für Tests einstellbar."""
+    CLIENT_ID = "a9w1hzb4d6nu70re8wxt6rpyxths35"
+    ID_BASE = "https://id.twitch.tv/oauth2/"
+    SCOPES = "chat:read chat:edit"
+    SCOPES_MOD = "chat:read chat:edit moderator:manage:banned_users moderator:manage:chat_messages"      # nur, wenn der Nutzer die Moderation einschaltet
+    GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+    REFRESH_BEFORE = 600                       # Sekunden vor dem Ablauf erneuern
+    KEEP_EVERY = 30.0
+    ERR_NET = "Keine Verbindung zu Twitch"
+    ERR_DENIED = "Die Anmeldung wurde abgelehnt oder ist abgelaufen"
+
+    def __init__(self, path, client_id=None, id_base=None, clock=time.time, sleep=time.sleep, demo=False, paths=None):
+        self.paths = paths or ChatPaths()
+        self.path, self.client_id = path, client_id or self.CLIENT_ID
+        self.base = id_base or self.ID_BASE
+        self.clock, self.sleep, self.demo = clock, sleep, demo
+        self.lock = threading.RLock()
+        self.tokens = None                     # {"access", "refresh", "expires_at", "login", "user_id", "scopes"}
+        self.pending = None                    # {"device_code", "user_code", "uri", "expires_at", "interval"}
+        self.state, self.error = "aus", ""
+        self.gen = 0                           # zählt Anmeldeversuche: ein abgebrochener Versuch beendet seinen Abfrage-Faden
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+            if isinstance(saved, dict) and isinstance(saved.get("access"), str) and isinstance(saved.get("refresh"), str):
+                self.tokens = {"access": saved["access"], "refresh": saved["refresh"], "expires_at": float(saved.get("expires_at", 0)),
+                               "login": str(saved.get("login", ""))[:25], "user_id": str(saved.get("user_id", ""))[:20],
+                               "scopes": [str(x)[:60] for x in saved.get("scopes", [])][:30]}
+                self.state = "angemeldet"
+        except (OSError, ValueError, TypeError):
+            pass
+
+    # ---- Anfragen an Twitch (nur Standardbibliothek)
+    def _call(self, url, fields=None, headers=None):
+        """(Status, JSON-dict) einer Anfrage über die Wege des Chats; bei Netzfehlern (0, {})."""
+        import urllib.parse
+        data = urllib.parse.urlencode(fields).encode() if fields is not None else None
+        hdr = dict(headers or {}, **{"User-Agent": "irl4you-box"})
+        if data is not None:
+            hdr["Content-Type"] = "application/x-www-form-urlencoded"
+        status, body = self.paths.request("POST" if data is not None else "GET", url, data, hdr)
+        try:
+            out = json.loads(body.decode("utf-8", "replace") or "{}")
+        except ValueError:
+            out = {}
+        return status, out if isinstance(out, dict) else {}
+
+    def _write(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                os.fchmod(f.fileno(), 0o600)
+                json.dump(self.tokens, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+    # ---- Zustand für die Oberfläche (ohne Tokens)
+    def status(self):
+        with self.lock:
+            if self.demo:
+                self._demo_step()
+            t, p = self.tokens, self.pending
+            scopes = list((t or {}).get("scopes", []))
+            out = {"state": self.state, "login": (t or {}).get("login", ""), "scopes": scopes, "error": self.error,
+                   "mod": "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes}
+            if p and self.state == "wartet":
+                out.update(code=p["user_code"], uri=p["uri"], expires_in=max(0, int(p["expires_at"] - self.clock())))
+            return out
+
+    def ready(self):
+        with self.lock:
+            return bool(self.tokens and self.state == "angemeldet")
+
+    def login(self):
+        with self.lock:
+            return (self.tokens or {}).get("login", "") if self.state == "angemeldet" else ""
+
+    def user_id(self):
+        with self.lock:
+            return (self.tokens or {}).get("user_id", "") if self.state == "angemeldet" else ""
+
+    def token(self):
+        """Gültiger Zugangsschlüssel oder "" (erneuert bei Bedarf sofort)."""
+        with self.lock:
+            if not (self.tokens and self.state == "angemeldet"):
+                return ""
+            if self.tokens["expires_at"] - self.clock() < 60:
+                self.refresh()
+            if self.state == "angemeldet" and self.tokens and self.tokens["expires_at"] - self.clock() > 0:
+                return self.tokens["access"]
+            return ""
+
+    # ---- Anmelden
+    def start(self, mod=False):
+        scopes = self.SCOPES_MOD if mod else self.SCOPES
+        with self.lock:
+            if self.state == "wartet" and self.pending and self.pending["expires_at"] > self.clock() and self.pending.get("scopes") == scopes:
+                return self.status()
+            self.gen += 1
+            gen = self.gen
+            self.error = ""
+            if self.demo:
+                self.pending = {"device_code": "demo", "user_code": "ABCD-EFGH", "uri": "https://www.twitch.tv/activate?device-code=ABCDEFGH",
+                                "expires_at": self.clock() + 1800, "interval": 5, "since": self.clock(), "scopes": scopes}
+                self.state = "wartet"
+                return self.status()
+            st, d = self._call(self.base + "device", {"client_id": self.client_id, "scopes": scopes})
+            if st != 200 or not all(isinstance(d.get(k), str) for k in ("device_code", "user_code", "verification_uri")):
+                self.state, self.error = ("fehler", self.ERR_NET if st == 0 else "Twitch hat die Anmeldung nicht angenommen")
+                raise ValueError(self.error)
+            try:
+                interval = max(2, min(30, int(d.get("interval", 5))))
+                expires = max(60, min(3600, int(d.get("expires_in", 1800))))
+            except (TypeError, ValueError):
+                interval, expires = 5, 1800
+            self.pending = {"device_code": d["device_code"], "user_code": d["user_code"][:20], "uri": d["verification_uri"][:300],
+                            "expires_at": self.clock() + expires, "interval": interval, "scopes": scopes}
+            self.state = "wartet"
+        threading.Thread(target=self._poll, args=(gen,), daemon=True).start()
+        return self.status()
+
+    def cancel(self):
+        with self.lock:
+            self.gen += 1
+            self.pending = None
+            if self.state == "wartet":
+                self.state = "angemeldet" if self.tokens else "aus"
+            return self.status()
+
+    def _poll(self, gen):
+        while True:
+            with self.lock:
+                p = self.pending
+                if gen != self.gen or not p or self.state != "wartet":
+                    return
+                if p["expires_at"] <= self.clock():
+                    self.state, self.error, self.pending = "fehler", self.ERR_DENIED, None
+                    return
+                wait, device, scopes = p["interval"], p["device_code"], p.get("scopes", self.SCOPES)
+            self.sleep(wait)
+            st, d = self._call(self.base + "token", {"client_id": self.client_id, "scopes": scopes, "device_code": device, "grant_type": self.GRANT})
+            with self.lock:
+                if gen != self.gen or self.state != "wartet":
+                    return
+                if st == 200 and isinstance(d.get("access_token"), str) and isinstance(d.get("refresh_token"), str):
+                    self._adopt(d)
+                    return
+                msg = str(d.get("message", "")).lower()
+                if st == 400 and "authorization_pending" in msg:
+                    continue
+                if st == 400 and "slow_down" in msg:
+                    self.pending["interval"] = min(30, self.pending["interval"] + 5)
+                    continue
+                if st == 0:
+                    continue                                    # Netz kurz weg: weiter versuchen, bis der Code abläuft
+                self.state, self.error, self.pending = "fehler", self.ERR_DENIED, None
+                return
+
+    def _adopt(self, d):
+        """Neue Zugangsdaten von Twitch übernehmen (mit Sperre aufgerufen): Konto prüfen, atomar speichern."""
+        scopes = d.get("scope")
+        scopes = [str(x)[:60] for x in scopes][:30] if isinstance(scopes, list) else self.SCOPES.split()
+        try:
+            expires = max(60.0, float(d.get("expires_in", 14400)))
+        except (TypeError, ValueError):
+            expires = 14400.0
+        old = self.tokens or {}
+        t = {"access": d["access_token"], "refresh": d["refresh_token"], "expires_at": self.clock() + expires, "scopes": scopes,
+             "login": old.get("login", ""), "user_id": old.get("user_id", "")}
+        st, v = self._call(self.base + "validate", None, {"Authorization": "OAuth " + t["access"]})
+        if st == 200 and isinstance(v.get("login"), str):
+            t["login"], t["user_id"] = v["login"][:25].lower(), str(v.get("user_id", ""))[:20]
+            if isinstance(v.get("scopes"), list):
+                t["scopes"] = [str(x)[:60] for x in v["scopes"]][:30]
+        self.tokens = t
+        self.pending, self.state, self.error = None, "angemeldet", ""
+        try:
+            self._write()
+        except OSError:
+            self.error = "Die Anmeldung konnte nicht gespeichert werden"
+
+    # ---- Erneuern und Abmelden
+    def refresh(self):
+        """Zugangsschlüssel erneuern (mit Sperre). Netzfehler lassen alles, wie es ist; ein abgelehnter Erneuerungsschlüssel bedeutet: neu anmelden."""
+        with self.lock:
+            if not self.tokens:
+                return False
+            st, d = self._call(self.base + "token", {"client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": self.tokens["refresh"]})
+            if st == 200 and isinstance(d.get("access_token"), str) and isinstance(d.get("refresh_token"), str):
+                self._adopt(d)
+                return True
+            if st in (400, 401):
+                keep = self.tokens.get("login", "")
+                self.tokens, self.pending, self.state = None, None, "abgelaufen"
+                self.error = keep
+                try:
+                    os.remove(self.path)
+                except OSError:
+                    pass
+            return False
+
+    def keep(self):
+        """Hintergrunddienst: erneuert rechtzeitig vor dem Ablauf (läuft, solange die Box läuft, auch ohne Sendung)."""
+        while True:
+            with self.lock:
+                if self.tokens and self.state == "angemeldet" and self.tokens["expires_at"] - self.clock() < self.REFRESH_BEFORE:
+                    self.refresh()
+            self.sleep(self.KEEP_EVERY)
+
+    def logout(self):
+        with self.lock:
+            self.gen += 1
+            t = self.tokens
+            self.tokens, self.pending, self.state, self.error = None, None, "aus", ""
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+        if t and not self.demo:
+            self._call(self.base + "revoke", {"client_id": self.client_id, "token": t["access"]})      # Fehler egal: lokal ist die Anmeldung weg
+        return self.status()
+
+    # ---- Vorschau-Modus
+    def _demo_step(self):
+        if self.state == "wartet" and self.pending and self.clock() - self.pending.get("since", 0) > 6:
+            self.tokens = {"access": "demo", "refresh": "demo", "expires_at": self.clock() + 14400, "login": "demo_streamer", "user_id": "1",
+                           "scopes": (self.pending.get("scopes") or self.SCOPES).split()}
+            self.pending, self.state = None, "angemeldet"
+
+
+class TwitchReader:
+    """Liest den Chat des eigenen Kanals für den Bereich "Chat" der Oberfläche (IRC über TLS, nur Standardbibliothek, nur Lesen).
+
+    Gelesen wird **anonym** wie von einem Zuschauer (Name "justinfanNNNNN"): Dazu ist kein Token nötig, und der Token des Bot-Kontos kommt so nie in die Nähe
+    dieser Verbindung. Der Kanal ist der aus der Twitch-Karte (TwitchStore). Die Verbindung steht nur, solange die Oberfläche den Chat abfragt (poll):
+    Kommt IDLE Sekunden lang keine Abfrage, schließt der Hintergrundteil sie wieder (das schont Strom und Mobilfunk). Abbrüche werden mit wachsender
+    Wartezeit wiederholt. Die letzten KEEP Nachrichten bleiben im Speicher; poll(since) liefert, was nach der Nummer `since` dazukam.
+    Alles, was Twitch schickt, wird vor dem Speichern bereinigt (nur druckbare Zeichen, Längen begrenzt, Farben und Emote-Angaben streng geprüft);
+    die Oberfläche setzt es als Text ein, nie als HTML. Im Vorschau-Modus (demo) entstehen Beispielnachrichten, ohne Netz."""
+    HOST, PORT = "irc.chat.twitch.tv", 6697
+    KEEP = 300
+    IDLE = 120.0
+    COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+    MID_RE = re.compile(r"[0-9a-fA-F-]{20,40}")
+    BADGES = ("broadcaster", "moderator", "vip", "subscriber", "founder", "staff", "partner")        # nur diese Abzeichen zeigt die Oberfläche
+    EMOTE_ID_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
+    NOTICE_KINDS = {"sub": "sub", "resub": "sub", "subgift": "sub", "submysterygift": "sub", "giftpaidupgrade": "sub", "anongiftpaidupgrade": "sub",
+                    "raid": "raid", "announcement": "notice", "ritual": "notice"}
+    UNESC = {"s": " ", ":": ";", "\\": "\\", "r": "", "n": ""}
+
+    STALE = 330.0                        # Sekunden ohne jede Zeile (Twitch schickt etwa alle 5 Minuten ein PING): Verbindung gilt als tot, nächster Weg
+
+    def __init__(self, store, demo=False, host=None, port=None, tls=True, context=None, clock=time.monotonic, wall=time.time, sleep=time.sleep, paths=None):
+        self.paths = paths or ChatPaths()
+        self.store, self.demo = store, demo
+        self.host, self.port, self.tls, self.context = host or self.HOST, port or self.PORT, tls, context
+        self.clock, self.wall, self.sleep = clock, wall, sleep
+        self.lock = threading.Lock()
+        self.items = collections.deque(maxlen=self.KEEP)
+        self.next_id = 1
+        self.state = "aus"                  # aus | verbinde | ok | fehler
+        self.channel = ""
+        self.thread = None
+        self.last_poll = 0.0
+        self.demo_at = 0.0
+
+    # ---- Zeilen von Twitch zerlegen
+    @classmethod
+    def _tags(cls, raw):
+        out = {}
+        for part in raw.split(";"):
+            k, _, v = part.partition("=")
+            if k and len(out) < 60:
+                out[k] = re.sub(r"\\(.)", lambda m: cls.UNESC.get(m.group(1), m.group(1)), v)[:600]
+        return out
+
+    @staticmethod
+    def _clean(text, limit):
+        t = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+        return t[:limit]
+
+    @classmethod
+    def _emotes(cls, raw, length):
+        """"25:0-4,12-16/1902:6-10" -> [[id, von, bis], ...]; nur gültige Kennungen und Bereiche im Text."""
+        out = []
+        for chunk in raw.split("/")[:30]:
+            eid, _, ranges = chunk.partition(":")
+            if not cls.EMOTE_ID_RE.fullmatch(eid):
+                continue
+            for r in ranges.split(",")[:40]:
+                a, _, b = r.partition("-")
+                if a.isdigit() and b.isdigit() and int(a) <= int(b) < length:
+                    out.append([eid, int(a), int(b)])
+        return sorted(out, key=lambda e: e[1])
+
+    def parse(self, line):
+        """Eine IRC-Zeile -> Eintrag (dict ohne id/t) oder None. PING und anderes beachtet der Aufrufer."""
+        tags = {}
+        if line.startswith("@"):
+            raw, _, line = line.partition(" ")
+            tags = self._tags(raw[1:])
+        prefix = ""
+        if line.startswith(":"):
+            prefix, _, line = line.partition(" ")
+        cmd, _, rest = line.partition(" ")
+        cmd = cmd.upper()
+        if cmd == "CLEARMSG":                                         # eine Nachricht wurde gelöscht
+            mid = tags.get("target-msg-id", "")
+            return {"type": "del", "meta": True, "mid": mid, "text": "", "emotes": []} if self.MID_RE.fullmatch(mid) else None
+        if cmd == "CLEARCHAT":                                        # Timeout, Bann oder der ganze Chat geleert
+            uid = tags.get("target-user-id", "")
+            dur = tags.get("ban-duration", "")
+            return {"type": "clear", "meta": True, "uid": uid if uid.isdigit() and len(uid) <= 20 else "",
+                    "seconds": int(dur) if dur.isdigit() and len(dur) <= 8 else 0, "text": "", "emotes": []}
+        if cmd not in ("PRIVMSG", "USERNOTICE"):
+            return None
+        _, _, msg = rest.partition(" :")
+        nick = prefix[1:].partition("!")[0]
+        name = self._clean(tags.get("display-name") or nick, 40)
+        color = tags.get("color", "")
+        color = color if self.COLOR_RE.fullmatch(color) else ""
+        kind, text = "msg", msg
+        if cmd == "PRIVMSG" and text.startswith("\x01ACTION ") and text.endswith("\x01"):
+            kind, text = "me", text[8:-1]
+        text = self._clean(text, 500)
+        item = {"type": kind, "name": name, "color": color, "text": text, "emotes": self._emotes(tags.get("emotes", ""), len(text))}
+        if cmd == "USERNOTICE":
+            item["type"] = self.NOTICE_KINDS.get(tags.get("msg-id", ""), "notice")
+            item["name"], item["emotes"] = "", []
+            system = self._clean(tags.get("system-msg", ""), 300)
+            item["text"] = (system + (" – " + text if text else "")) or text
+            item["color"] = ""
+        bits = tags.get("bits", "")
+        if bits.isdigit():
+            item["bits"] = min(int(bits), 10_000_000)
+        if cmd == "PRIVMSG":                                          # Kennungen der Nachricht und des Absenders (für Löschen, Timeout und Bann)
+            if self.MID_RE.fullmatch(tags.get("id", "")):
+                item["mid"] = tags["id"]
+            uid = tags.get("user-id", "")
+            if uid.isdigit() and len(uid) <= 20:
+                item["uid"] = uid
+            item["login"] = self._clean(nick, 25).lower()
+            names = [b.partition("/")[0] for b in tags.get("badges", "").split(",")[:20]]
+            item["badges"] = [b for b in self.BADGES if b in names]
+        sent = tags.get("tmi-sent-ts", "")                           # Zeitpunkt, an dem Twitch die Nachricht angenommen hat (Millisekunden)
+        if sent.isdigit() and len(sent) <= 13:
+            item["ts"] = int(sent) // 1000
+        return item if item["text"] else None
+
+    def _add(self, item):
+        with self.lock:
+            item["id"], item["t"] = self.next_id, int(item.get("ts") or self.wall())
+            self.next_id += 1
+            self.items.append(item)
+
+    # ---- Abfrage durch die Oberfläche
+    def poll(self, since=0):
+        ch = self.store.data.get("channel", "") if self.store else ""
+        now = self.clock()
+        with self.lock:
+            self.last_poll = now
+        if self.demo:
+            self._demo(now)
+            ch = ch or "demo"
+            state = "ok"
+        elif not ch:
+            return {"state": "kein-kanal", "channel": "", "items": [], "last": 0}
+        else:
+            self._ensure(ch)
+            state = self.state
+        with self.lock:
+            last = self.next_id - 1
+            if since > last:
+                since = 0                           # die Box wurde neu gestartet: Verlauf von vorn
+            items = [i for i in self.items if i["id"] > since]
+        return {"state": state, "channel": ch, "items": items, "last": last}
+
+    def _ensure(self, ch):
+        with self.lock:
+            alive = self.thread is not None and self.thread.is_alive() and self.channel == ch
+            if alive:
+                return
+            if self.channel != ch:
+                self.items.clear()
+            self.channel = ch
+            self.state = "verbinde"
+            t = threading.Thread(target=self._run, args=(ch,), daemon=True)
+            self.thread = t
+        t.start()
+
+    def _idle(self):
+        return self.clock() - self.last_poll > self.IDLE
+
+    def _run(self, ch):
+        wait = 3.0
+        while not self._idle() and self.channel == ch:
+            try:
+                self._session(ch)
+                wait = 3.0
+            except Exception:
+                self.state = "fehler"
+            end = self.clock() + wait
+            while self.clock() < end and not self._idle() and self.channel == ch:
+                self.sleep(0.5)
+            wait = min(wait * 2, 60.0)
+        with self.lock:
+            if self.channel == ch:
+                self.state = "aus"
+
+    def _session(self, ch):
+        sock, src = self.paths.connect(self.host, self.port, timeout=8)
+        try:
+            if self.tls:
+                sock = (self.context or ssl.create_default_context()).wrap_socket(sock, server_hostname=self.host)
+            nick = "justinfan%05d" % random.randint(0, 99999)
+            sock.sendall(("PASS SCHMOOPIIE\r\nNICK %s\r\n" % nick).encode("ascii"))
+            rd = _IrcLines(sock, self.clock)
+            until = self.clock() + 15
+            while True:                                     # auf die Begrüßung warten
+                line = rd.get(until)
+                if line is None:
+                    raise OSError
+                cmd = line.partition(" ")[2].partition(" ")[0] if line.startswith(":") else line.partition(" ")[0]
+                if cmd == "001":
+                    break
+                if cmd == "PING":
+                    sock.sendall(b"PONG :tmi.twitch.tv\r\n")
+            sock.sendall(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nJOIN #" + ch.encode("ascii") + b"\r\n")
+            self.state = "ok"
+            heard = self.clock()
+            while not self._idle() and self.channel == ch:
+                line = rd.get(self.clock() + 5)
+                if line is None:
+                    if self.clock() - heard > self.STALE:
+                        self.paths.fail(src, 300.0)                          # still geworden: diesen Weg meiden, über den nächsten neu verbinden
+                        raise OSError("still")
+                    continue
+                heard = self.clock()
+                if line.startswith("PING"):
+                    sock.sendall(b"PONG :tmi.twitch.tv\r\n")
+                    continue
+                if "RECONNECT" in line[:60]:
+                    return
+                item = self.parse(line)
+                if item:
+                    self._add(item)
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    # ---- Vorschau-Modus: Beispielnachrichten
+    DEMO = [("Anna_Streams", "#FF4500", "Hallo aus dem Chat! Das Bild ist heute richtig scharf"), ("kamerafreak", "#1E90FF", "Welche Kamera ist das gerade?"),
+            ("Moderator_Max", "#2E8B57", "Bitte keine Werbung im Chat"), ("nightowl", "", "gg 🎉"), ("Lena", "#DAA520", "Der Ton ist super")]
+
+    def _demo(self, now):
+        if now - self.demo_at < 2.0 and self.items:
+            return
+        self.demo_at = now
+        n = self.next_id
+        if n % 11 == 0:
+            self._add({"type": "sub", "name": "", "color": "", "text": "Anna_Streams hat den Kanal abonniert (Stufe 1)", "emotes": []})
+        else:
+            i = n % len(self.DEMO)
+            name, color, text = self.DEMO[i]
+            badges = {"Moderator_Max": ["moderator"], "Anna_Streams": ["subscriber"], "Lena": ["vip", "subscriber"]}.get(name, [])
+            self._add({"type": "msg", "name": name, "color": color, "text": text, "emotes": [], "mid": "%08x-0000-4000-8000-000000000000" % n,
+                       "uid": str(100 + i), "login": name.lower(), "badges": badges})
+
+
+class TwitchMod:
+    """Moderation im Chat des eigenen Kanals über die Twitch-Schnittstelle (Helix): Nachricht löschen, Timeout, Bann und Bann aufheben. Die Befehle "/ban",
+    "/timeout" und "/unban" im IRC gibt es bei Twitch nicht mehr, darum läuft alles über die Schnittstelle mit dem Zugangsschlüssel des angemeldeten Kontos.
+
+    Nötig sind die Rechte moderator:manage:banned_users und moderator:manage:chat_messages; der Nutzer bestätigt sie nur, wenn er die Moderation einschaltet
+    (TwitchLogin.start(mod=True)). Das angemeldete Konto muss Streamer oder Moderator des Kanals sein. Namen werden über "Get Users" in Kennungen aufgelöst
+    (zwischengespeichert). Fehler kommen als kurze deutsche Meldung (ValueError); Tokens stehen nie darin. Im Vorschau-Modus (demo) geschieht nichts im Netz."""
+    API = "https://api.twitch.tv/helix/"
+    MAX_SECONDS = 1209600                       # 14 Tage, das Höchste, was Twitch für einen Timeout erlaubt
+    ERR_NET = "Keine Verbindung zu Twitch"
+    ERR_LOGIN = "Zuerst mit Twitch anmelden"
+    ERR_SCOPE = "Moderation ist noch nicht eingeschaltet"
+    ERR_AUTH = "Anmeldung abgelaufen, bitte neu anmelden"
+    ERR_FORBIDDEN = "Dazu fehlt die Berechtigung (Moderator im Kanal?)"
+    ERR_OTHER = "Twitch hat die Anfrage nicht angenommen"
+
+    def __init__(self, store, account, api_base=None, client_id=None, demo_reader=None, demo=False, paths=None):
+        self.store, self.account = store, account
+        self.paths = paths or getattr(account, "paths", None) or ChatPaths()
+        self.api = api_base or self.API
+        self.client_id = client_id or TwitchLogin.CLIENT_ID
+        self.demo, self.demo_reader = demo, demo_reader
+        self.ids = {}
+        self.lock = threading.Lock()
+
+    def _call(self, method, path, params=None, body=None):
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+        tok = self.account.token()
+        if not tok:
+            raise ValueError(self.ERR_LOGIN)
+        url = self.api + path + ("?" + urllib.parse.urlencode(params) if params else "")
+        data = json.dumps(body).encode() if body is not None else None
+        hdr = {"Authorization": "Bearer " + tok, "Client-Id": self.client_id, "User-Agent": "irl4you-box"}
+        if data is not None:
+            hdr["Content-Type"] = "application/json"
+        status, raw = self.paths.request(method, url, data, hdr)
+        if status == 0:
+            raise ValueError(self.ERR_NET)
+        try:
+            out = json.loads(raw.decode("utf-8", "replace") or "{}")
+        except ValueError:
+            out = {}
+        out = out if isinstance(out, dict) else {}
+        if status in (200, 201, 204):
+            return out
+        if status == 401:
+            raise ValueError(self.ERR_AUTH)
+        if status == 403:
+            raise ValueError(self.ERR_FORBIDDEN)
+        msg = TwitchReader._clean(str(out.get("message", "")), 120)
+        raise ValueError(msg if status == 400 and msg else self.ERR_OTHER)
+
+    def _context(self):
+        """(Kanal-Kennung, Moderator-Kennung): der Kanal aus den Einstellungen, der Moderator ist das angemeldete Konto."""
+        if not self.account.ready():
+            raise ValueError(self.ERR_LOGIN)
+        if not self.account.status().get("mod"):
+            raise ValueError(self.ERR_SCOPE)
+        me, mylogin = self.account.user_id(), self.account.login()
+        ch = (self.store.settings().get("channel") or mylogin).lower()
+        return (me if ch == mylogin else self.lookup(ch)), me
+
+    def lookup(self, login):
+        """Kennung eines Kontos aus dem Namen (Get Users)."""
+        login = str(login).strip().lstrip("@").lower()
+        if not TwitchStore.NAME_RE.fullmatch(login):
+            raise ValueError("Ungültiger Name")
+        with self.lock:
+            if login in self.ids:
+                return self.ids[login]
+        d = self._call("GET", "users", {"login": login})
+        rows = d.get("data") if isinstance(d.get("data"), list) else []
+        if not rows or not isinstance(rows[0], dict) or not str(rows[0].get("id", "")).isdigit():
+            raise ValueError("Dieses Konto gibt es nicht")
+        with self.lock:
+            if len(self.ids) > 200:
+                self.ids.clear()
+            self.ids[login] = str(rows[0]["id"])
+            return self.ids[login]
+
+    def do(self, req):
+        """req: {"action": "delete"|"timeout"|"ban"|"unban", "message_id" | "user_id" | "user", "seconds", "reason"}."""
+        if not isinstance(req, dict):
+            raise ValueError("Ungültige Anfrage")
+        act = req.get("action")
+        if act not in ("delete", "timeout", "ban", "unban"):
+            raise ValueError("Ungültige Anfrage")
+        if self.demo:
+            return self._demo(act, req)
+        bc, me = self._context()
+        base = {"broadcaster_id": bc, "moderator_id": me}
+        if act == "delete":
+            mid = req.get("message_id")
+            if not isinstance(mid, str) or not TwitchReader.MID_RE.fullmatch(mid):
+                raise ValueError("Ungültige Anfrage")
+            self._call("DELETE", "moderation/chat", dict(base, message_id=mid))
+            return {"ok": True, "action": act, "message": "Gelöscht"}
+        uid = self._target(req)
+        if act == "unban":
+            self._call("DELETE", "moderation/bans", dict(base, user_id=uid))
+            return {"ok": True, "action": act, "user_id": uid, "message": "Bann aufgehoben"}
+        data = {"user_id": uid}
+        reason = TwitchReader._clean(str(req.get("reason") or ""), 200)
+        if reason:
+            data["reason"] = reason
+        if act == "timeout":
+            try:
+                sec = int(req.get("seconds", 600))
+            except (TypeError, ValueError):
+                raise ValueError("Dauer: Zahl in Sekunden")
+            data["duration"] = max(1, min(self.MAX_SECONDS, sec))
+        self._call("POST", "moderation/bans", base, {"data": data})
+        return {"ok": True, "action": act, "user_id": uid, "message": "Timeout" if act == "timeout" else "Gebannt"}
+
+    def _target(self, req):
+        uid = req.get("user_id")
+        if isinstance(uid, str) and uid.isdigit() and len(uid) <= 20:
+            return uid
+        if isinstance(req.get("user"), str):
+            return self.lookup(req["user"])
+        raise ValueError("Ungültige Anfrage")
+
+    def _demo(self, act, req):
+        if act == "delete" and self.demo_reader is not None and isinstance(req.get("message_id"), str):
+            self.demo_reader._add({"type": "del", "meta": True, "mid": req["message_id"], "text": "", "emotes": []})
+        if act in ("timeout", "ban") and self.demo_reader is not None and str(req.get("user_id") or "").isdigit():
+            self.demo_reader._add({"type": "clear", "meta": True, "uid": str(req["user_id"]), "seconds": int(req.get("seconds") or 0) if act == "timeout" else 0,
+                                   "text": "", "emotes": []})
+        return {"ok": True, "action": act, "user_id": str(req.get("user_id") or "1"),
+                "message": {"delete": "Gelöscht", "timeout": "Timeout", "ban": "Gebannt", "unban": "Bann aufgehoben"}[act]}
+
+
+class TwitchSender:
+    """Nachrichten des Streamers aus der Oberfläche in den Chat (über das angemeldete Twitch-Konto, sonst Bot-Konto und Token von Hand). Höchstens eine
+    Nachricht je Sekunde. Befehle mit "/" oder "." am Anfang werden nie als Text gesendet: "/ban Name [Grund]", "/timeout Name [Sekunden] [Grund]" und
+    "/unban Name" gehen als Moderation über die Twitch-Schnittstelle (TwitchMod), alles andere wird abgelehnt."""
+    COMMANDS = ("ban", "timeout", "unban")
+    MIN_GAP = 1.0
+
+    def __init__(self, store, chat=None, clock=time.monotonic, demo_reader=None, mod=None):
+        self.store, self.chat, self.clock, self.mod = store, chat or TwitchChat(), clock, mod
+        self.demo_reader = demo_reader              # nur im Vorschau-Modus: die Nachricht erscheint im Beispiel-Chat, nichts geht ins Netz
+        self.last = -1e9
+        self.lock = threading.Lock()
+
+    def _command(self, t):
+        parts = t[1:].split()
+        cmd = parts[0].lower() if t[0] == "/" and parts else ""
+        if cmd not in self.COMMANDS or len(parts) < 2 or self.mod is None:
+            raise ValueError("Befehle: /ban Name, /timeout Name [Sekunden], /unban Name")
+        with self.lock:
+            now = self.clock()
+            if now - self.last < self.MIN_GAP:
+                raise ValueError("Bitte kurz warten")
+            self.last = now
+        req = {"action": cmd, "user": parts[1]}
+        rest = parts[2:]
+        if cmd == "timeout" and rest and rest[0].isdigit():
+            req["seconds"] = int(rest[0])
+            rest = rest[1:]
+        if cmd != "unban" and rest:
+            req["reason"] = " ".join(rest)
+        out = self.mod.do(req)
+        return {"ok": True, "message": "%s: %s" % (out.get("message", ""), parts[1].lstrip("@"))}
+
+    def say(self, text):
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Nachricht fehlt")
+        t = text.strip()
+        if t[0] in "/.":
+            return self._command(t)
+        cfg = self.store.settings()
+        if not (cfg["login"] and cfg["token"] and cfg["channel"]):
+            raise ValueError("Zuerst mit Twitch anmelden")
+        with self.lock:
+            now = self.clock()
+            if now - self.last < self.MIN_GAP:
+                raise ValueError("Bitte kurz warten")
+            self.last = now
+        if self.demo_reader is not None:
+            self.demo_reader._add({"type": "msg", "name": cfg["login"], "color": "#9146FF", "text": TwitchChat.clean_text(t) or "", "emotes": []})
+            return {"ok": True, "message": TwitchChat.OK}
+        ok, msg = self.chat.send(cfg["login"], cfg["token"], cfg["channel"], t)
+        if not ok:
+            raise ValueError(msg)
+        return {"ok": True, "message": msg}
 
 
 class TwitchNotifier:
@@ -5551,6 +6323,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.uiaccess.status(self.local_ip()))
         if path == "/api/twitch":
             return self.reply(200, self.twitch.status())
+        if path == "/api/twitch/login":
+            return self.reply(200, self.twitchlogin.status())
+        if path == "/api/chat":
+            qs = urllib.parse.parse_qs((self.path.split("?", 1) + [""])[1])
+            try:
+                since = max(0, int((qs.get("since") or ["0"])[0]))
+            except ValueError:
+                since = 0
+            out = self.chatreader.poll(since)
+            out["account"] = self.twitchlogin.status()
+            return self.reply(200, out)
         if path == "/api/hdmi":
             return self.reply(200, self.hdmi.status())
         if path == "/api/network":
@@ -5715,6 +6498,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, self.djisvc.command(d))
             if path == "/api/uiaccess":
                 return self.reply(200, self.uiaccess.set(d.get("block_client_wifi"), self.local_ip()))
+            if path == "/api/twitch/login":
+                act = d.get("action")
+                if act == "start":
+                    return self.reply(200, self.twitchlogin.start(mod=d.get("mod") is True))
+                if act == "cancel":
+                    return self.reply(200, self.twitchlogin.cancel())
+                return self.reply(400, {"error": "Ungültige Anfrage"})
+            if path == "/api/twitch/logout":
+                return self.reply(200, self.twitchlogin.logout())
+            if path == "/api/chat/mod":
+                return self.reply(200, self.chatmod.do(d))
+            if path == "/api/chat/send":
+                return self.reply(200, self.chatsender.say(d.get("text")))
             if path == "/api/twitch":
                 return self.reply(200, self.twitch.save(d))
             if path == "/api/twitch/test":
@@ -5813,7 +6609,19 @@ def main():
     Handler.djisvc.pipeline = Handler.pipeline
     Handler.transfer = SettingsTransfer(args.state, Handler.cams, Handler.pipeline, Handler.srtla, Handler.autostart, Handler.names, Handler.djisvc,
                                         Handler.wifi, Handler.send, args.demo)
-    Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, demo=args.demo)
+    def chat_sources():                                           # Quelladressen der gewählten Sendewege, in der Reihenfolge der Einstellung
+        ups = list(((Handler.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
+        ips = {x["iface"]: x["ip"] for x in iface_ips() if x.get("ip")}
+        return [ips[u] for u in ups if u in ips]
+    Handler.chatpaths = ChatPaths(chat_sources)
+    Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, chat=TwitchChat(paths=Handler.chatpaths), demo=args.demo)
+    Handler.twitchlogin = TwitchLogin(os.path.join(args.state, "twitch-login.json"), demo=args.demo, paths=Handler.chatpaths)
+    Handler.twitch.store.account = Handler.twitchlogin                                # angemeldetes Konto ersetzt Bot-Konto und Token von Hand
+    if not args.demo:
+        threading.Thread(target=Handler.twitchlogin.keep, daemon=True).start()
+    Handler.chatreader = TwitchReader(Handler.twitch.store, demo=args.demo, paths=Handler.chatpaths)
+    Handler.chatmod = TwitchMod(Handler.twitch.store, Handler.twitchlogin, paths=Handler.chatpaths, demo=args.demo, demo_reader=Handler.chatreader if args.demo else None)
+    Handler.chatsender = TwitchSender(Handler.twitch.store, chat=TwitchChat(paths=Handler.chatpaths), demo_reader=Handler.chatreader if args.demo else None, mod=Handler.chatmod)       # liest den Kanal der Twitch-Karte (dieselben Einstellungen)
     Handler.hdmi = HdmiService(args.state, Handler.cams, args.demo)
     if not args.demo:
         threading.Thread(target=Handler.twitch.run, daemon=True).start()
