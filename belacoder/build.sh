@@ -26,9 +26,11 @@ patch -p1 --quiet < "$HERE/belacoder-stall-output.patch"
 patch -p1 --quiet < "$HERE/belacoder-stats.patch"
 # Kamera-Zweige, die im laufenden Betrieb gestartet und gestoppt werden (Steuerkanal -C, Statistik -S, Ausrichtung -A), Engine pipbox_live.py
 patch -p1 --quiet < "$HERE/belacoder-live-feeds.patch"
+# Jedes Bild, das vergrößert wird, einmal in normalen Speicher kopieren (die Bilder des Hardware-Dekoders liegen in langsam lesbarem Speicher), Issue #35
+patch -p1 --quiet < "$HERE/belacoder-frame-copy.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
-gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb11\" belacoder.c -o belacoder.new \
+gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12\" belacoder.c -o belacoder.new \
   -I"$R/usr/include/gstreamer-1.0" -I"$R/usr/lib/aarch64-linux-gnu/gstreamer-1.0/include" \
   -I"$R/usr/include/glib-2.0" -I"$R/usr/lib/aarch64-linux-gnu/glib-2.0/include" -I/usr/include/srt \
   -l:libgstapp-1.0.so.0 -l:libgstbase-1.0.so.0 -l:libgstreamer-1.0.so.0 -l:libgobject-2.0.so.0 -l:libglib-2.0.so.0 -lsrt -ldl

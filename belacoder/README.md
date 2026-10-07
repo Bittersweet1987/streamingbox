@@ -1,6 +1,6 @@
 # belacoder mit toleranterem Bitraten-Regler, Stall-Wächter am Ausgang und Kamera-Zweigen
 
-Vier Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status). Der vierte, `belacoder-live-feeds.patch` (von Bittersweet1987, aus seinem Projekt `streamingbox`, mit der Steuerung `pipbox_live.py` des Pakets), fügt Kamera-Zweige `sbf0` bis `sbf7` hinzu, die im laufenden Betrieb gestartet und gestoppt werden, einen Steuerkanal (`-C`), eine Statistikdatei (`-S`) und einen Ausrichtungspuffer (`-A`). Er ist die Grundlage der Engine für "Alle Kameras immer bereit" (Kennung `-sb11`, mindestens `-sb10` nötig). Er steht wie belacoder unter GPL-3.0.
+Fünf Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status). Der vierte, `belacoder-live-feeds.patch` (von Bittersweet1987, aus seinem Projekt `streamingbox`, mit der Steuerung `pipbox_live.py` des Pakets), fügt Kamera-Zweige `sbf0` bis `sbf7` hinzu, die im laufenden Betrieb gestartet und gestoppt werden, einen Steuerkanal (`-C`), eine Statistikdatei (`-S`) und einen Ausrichtungspuffer (`-A`). Er ist die Grundlage der Engine für "Alle Kameras immer bereit" (Kennung `-sb11`, mindestens `-sb10` nötig). Er steht wie belacoder unter GPL-3.0.
 
 `belacoder-jitter-tolerant.patch` ändert die Funktion `update_bitrate()` in `belacoder.c` aus
 [BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Alle
@@ -48,3 +48,9 @@ reagiert darauf. Rückweg: `belacoder.vor-stallpatch` (Sicherung der Fassung dav
 
 `sudo sh build.sh` (installiert nach `/opt/pipbox/bin/belacoder`; `BELACODER_DEBUG=1` baut mit Ausgabe der Reglerwerte). Die Sendekette
 nimmt dieses Programm, wenn es existiert, sonst das Original aus `/usr/bin`. Rückweg: `/opt/pipbox/bin/belacoder` löschen.
+
+## Bilder vor dem Vergrößern kopieren (`belacoder-frame-copy.patch`, Issue #35)
+
+Der Hardware-Dekoder (`mppvideodec`) legt seine Bilder in Speicher ohne Zwischenspeicher der CPU ab. Die CPU liest daraus sehr langsam, und der Skalierer (`videoscale`, nearest) liest beim Vergrößern jedes Quellpixel mehrfach (ein Mal je Ausgabepixel). Gemessen auf einer Orange Pi 5 Plus (RK3588) mit einem 720p-Bild, das auf 1080p vergrößert wird: **43 ms je Bild direkt aus dem Dekoderspeicher** (mehr als die 33 ms eines Bildes bei 30 Bildern/s), **3,5 ms nach einer einmaligen Kopie** in normalen Speicher (die Kopie allein 1 ms). Auf einer Box mit 4 GB Speicher stand der Zweig dadurch auf einem Kern bei 100 %, das Bild kam 1 s zu spät und der Ausgang blieb stehen.
+
+Der Patch hängt an die Warteschlange `<Zweig>_lq` (hinter dem Dekoder) eine Prüfung: Wird das Bild größer als es ist (Ziel laut `<Zweig>_scc`), kopiert sie es einmal in normalen Speicher (mit Zeitstempeln und Metadaten). Bilder, die gleich groß bleiben oder verkleinert werden, laufen unverändert weiter (dort kostet die Kopie mehr, als sie spart). `SB_FRAME_COPY=0` schaltet es ab.

@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.124 (Beta)
+- **Behoben: Ein Bild, das auf der Box vergrößert wird (zum Beispiel 720p von Litchi oder DJI Fly als Hauptbild oder bei 90–100 % Größe), stoppte den ganzen Ausgang** (Issue #35). Ursache, gemessen: Der Hardware-Dekoder legt seine Bilder in Speicher ohne CPU-Zwischenspeicher ab; der Skalierer liest beim Vergrößern jedes Quellpixel mehrfach daraus. Auf einer RK3588 dauerte 720p auf 1080p **43 ms je Bild** (mehr als die 33 ms bei 30 Bildern/s), nach einer einmaligen Kopie in normalen Speicher **3,5 ms**. Auf der Box des Anwenders (4 GB) stand der Zweig bei 100 % eines Kerns, das Bild kam etwa 1 s zu spät, danach erzeugte der Compositor keine neuen Bilder mehr.
+  - Neu: fünfter belacoder-Patch `belacoder/belacoder-frame-copy.patch` (belacoder `-sb12`). Er kopiert ein Bild, das größer werden soll, einmal in normalen Speicher, bevor es skaliert wird. Gleich große oder verkleinerte Bilder (die 1080p-Kameras als kleine Bilder, das 1080p-Hauptbild) laufen unverändert weiter. `SB_FRAME_COPY=0` schaltet es ab. Ohne Skalierung ändert sich nichts.
+  - Gemessen auf einer Orange Pi 5 Plus (8 GB) mit einem 720p-Hauptbild und künstlicher Speicherlast (um die knappere Box nachzustellen): vorher 97 % eines Kerns, 15 Bilder/s und 1,1 s Rückstand, **nachher 9 %, 30 Bilder/s, −110 ms**. Die drei echten 1080p-Kameras: unverändert (Zweige bei 1–6 %).
+  - **Beim Update baut die Box den belacoder neu** (der Installer erkennt den neuen Patch); das braucht Internet und einige Minuten. Auf der Box des Anwenders mit Litchi noch nicht geprüft.
+
 ## 0.9.123 (Beta)
 - **Neu: Die Protokolle zeigen, was der Dekoder aus einer Quelle macht** (Issue #35: bei einer Quelle läuft der Zweig nach dem Dekoder auf einem Kern bei 100 %, bei den anderen nicht).
   - **Dekoder-Ausgang je Quelle:** Die Box dekodiert von jedem sendenden H.264-Eingang 4 Sekunden probeweise mit dem Hardware-Dekoder und schreibt auf, was hineingeht und herauskommt (Format, Größe, Bildrate, Seitenverhältnis, Farbinformationen, Speicherart).
