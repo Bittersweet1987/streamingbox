@@ -118,6 +118,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .sig .sigdot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;animation:sigpulse 1.8s ease-in-out infinite;transition:color .35s ease}
 .sig.warn .sigdot{animation-duration:1.1s}.sig.crit .sigdot{animation-duration:.7s}
 .sig svg{display:block;width:80px;height:20px;overflow:visible}
+.sig .sgv{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;min-width:3ch;color:currentColor}
 .sig .sgs{display:flex;flex-direction:column;justify-content:space-between;height:20px;min-width:20px;margin-right:-2px;font-size:9px;font-weight:700;line-height:1;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
 .sig .sg{fill:none;stroke:color-mix(in srgb,var(--text) 20%,transparent);stroke-width:1;vector-effect:non-scaling-stroke}
 .sig polyline{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 2px currentColor)}
@@ -412,7 +413,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </div>
   </section>
 
-  <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="net_sig" class="sig" role="img" aria-label="Verbindung: keine Messung" title="Verbindung: keine Messung"><i class="sigdot"></i><span class="sgs" aria-hidden="true"><span id="sg_max">10</span><span id="sg_mid">5,5</span><span id="sg_min">1</span></span><svg viewBox="0 0 80 20" preserveAspectRatio="none" aria-hidden="true"><path class="sg" d="M0 1H80M0 10H80M0 19H80"></path><polyline id="net_line" points=""></polyline></svg></span><span id="cam_dots" class="camdots" role="img"></span><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Konto und Ansicht des Chats" aria-label="Konto und Ansicht des Chats">⚙</button></summary>
+  <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="net_sig" class="sig" role="img" aria-label="Verbindung: keine Messung" title="Verbindung: keine Messung"><i class="sigdot"></i><span class="sgs" aria-hidden="true"><span id="sg_max">10</span><span id="sg_mid">5,5</span><span id="sg_min">1</span></span><svg viewBox="0 0 80 20" preserveAspectRatio="none" aria-hidden="true"><path class="sg" d="M0 1H80M0 10H80M0 19H80"></path><polyline id="net_line" points=""></polyline></svg><span id="sg_val" class="sgv"></span></span><span id="cam_dots" class="camdots" role="img"></span><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Konto und Ansicht des Chats" aria-label="Konto und Ansicht des Chats">⚙</button></summary>
     <div class="twacc" id="tw_accrow"><span id="tw_acc_t" class="muted"></span><button type="button" id="tw_acc_go" class="sec small">Mit Twitch anmelden</button></div>
     <div id="chat_optbox" class="chatopts" hidden>
       <div class="accrow" id="tw_accpanel" hidden><span id="tw_acc_t2" class="muted"></span><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="tw_acc_out" class="sec small">Abmelden</button></div>
@@ -2382,7 +2383,7 @@ function renderDetails(m){
   const f1=x=>x==null||x<0?"–":(+x).toFixed(1), n0=x=>x==null||x<0?"–":String(Math.round(x));
   const s=d.send;
   $("det_send").innerHTML=!s?'<span class="muted">Keine Daten (die Sendung läuft nicht).</span>':
-    drow("Bitrate",`<b>${f1(s.send_mbps)}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
+    drow("Bitrate",`<b>${f1(upTotal(m))}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
     +drow("Laufzeit (Ping, RTT)",`<b>${f1(s.rtt_ms)}</b> ms`)
     +Object.entries(m.uplinks||{}).filter(([n,u])=>u&&u.srtt!=null).map(([n,u])=>drow('<span class="muted">· '+esc(ifd(n))+'</span>',`${n0(u.srtt)} ms`)).join("")
     +drow("Sendepuffer",`<b>${n0(s.snd_buf_ms)}</b> ms <span class="muted">(${n0(s.snd_buf_pkts)} Pakete)</span>`)
@@ -2400,6 +2401,11 @@ function renderDetails(m){
     +drow("Frei",`<b>${f1(k.free_gb)}</b> GB`)+drow("Gesamt",`${f1(k.total_gb)} GB`);
 }
 $("statdet").addEventListener("toggle",()=>{ if($("statdet").open) tick(); });
+// Gesamt-Upload der gewählten Sendewege in Mbit/s (Zähler der Netzwerkkarten, dieselbe Zahl wie neben "Live")
+function upTotal(m){
+  const upl=((srtlaData&&srtlaData.settings)||{}).uplinks||[]; let nets=Object.entries(m.net||{}); const sel=nets.filter(([n])=>upl.includes(n)); if(sel.length) nets=sel;
+  return nets.reduce((a,[n,r])=>a+(+r.tx_mbit||0),0);
+}
 // Signalbalken neben "Chat": aus den Messwerten der Sendung (Wege, Laufzeit, Sendepuffer, Senderate); grau, wenn nicht gesendet wird
 function sigLevel(m){
   const s=m.details&&m.details.send; if(!s) return null;
@@ -2407,18 +2413,19 @@ function sigLevel(m){
   if(ups.length&&!on) return 0;
   let q=4;
   if(ups.length&&on<ups.length) q-=1;                                                                  // ein gewählter Weg fällt aus
-  const want=(s.bitrate_kbps||0)/1000; if(want>0&&s.send_mbps!=null){ const r=s.send_mbps/want; if(r<.5) q-=2; else if(r<.8) q-=1; }
+  const want=(s.bitrate_kbps||0)/1000; if(want>0){ const r=upTotal(m)/want; if(r<.5) q-=2; else if(r<.8) q-=1; }
   if(s.rtt_ms!=null){ if(s.rtt_ms>1000) q-=2; else if(s.rtt_ms>400) q-=1; }
   if(s.snd_buf_ms!=null){ if(s.snd_buf_ms>3000) q-=2; else if(s.snd_buf_ms>1500) q-=1; }
   return Math.max(0,Math.min(4,q));
 }
 const sigPts=[], SIG_WIN=30000;                                                                      // Verlauf der Senderate (Zeit, kbit/s), wie die Streamstatus-Anzeige
-function sigNice(v){ const safe=Math.max(10000,v), mag=Math.pow(10,Math.floor(Math.log10(safe))), f=safe/mag; return (f<=1?1:f<=2?2:f<=5?5:10)*mag; }
+function sigNice(v){ for(const c of [5000,10000,15000,20000,30000,50000,100000]) if(v*1.05<=c) return c; return Math.ceil(v/10000)*10000; }
 function sigDraw(){
   const line=$("net_line"); if(!line||!sigPts.length) return;
   const now=Date.now(), cut=now-SIG_WIN; while(sigPts.length>1&&sigPts[1].t<=cut) sigPts.shift();
-  const pts=sigPts.map(p=>({t:Math.max(cut,p.t),v:p.v})), FLOOR=1000, ceil=sigNice(Math.max(...pts.map(p=>p.v)));
+  const pts=sigPts.map(p=>({t:Math.max(cut,p.t),v:p.v})), FLOOR=0, ceil=sigNice(Math.max(...pts.map(p=>p.v)));
   const plot=pts.length===1?[{t:Math.max(cut,now-2000),v:pts[0].v},pts[0]]:pts, mb=v=>(v/1000).toLocaleString(undefined,{maximumFractionDigits:1});
+  $("sg_val").textContent=mb(pts[pts.length-1].v);
   $("sg_max").textContent=mb(ceil); $("sg_mid").textContent=mb((FLOOR+ceil)/2); $("sg_min").textContent=mb(FLOOR);
   line.setAttribute("points",plot.map(p=>(Math.min(80,(p.t-cut)/SIG_WIN*80)).toFixed(1)+","+(19-(Math.max(FLOOR,Math.min(ceil,p.v))-FLOOR)/(ceil-FLOOR)*18).toFixed(1)).join(" "));
 }
@@ -2426,7 +2433,7 @@ setInterval(()=>{ if(!document.hidden) sigDraw(); },200);
 function paintSig(m){
   const el=$("net_sig"); if(!el) return;
   const q=sigLevel(m), sd=m.details&&m.details.send;
-  sigPts.push({t:Date.now(),v:q==null?0:Math.max(0,(+sd.send_mbps||0)*1000)}); sigDraw();
+  sigPts.push({t:Date.now(),v:q==null?0:Math.max(0,upTotal(m)*1000)}); sigDraw();
   el.classList.remove("ok","warn","crit"); if(q!=null) el.classList.add(q>=3?"ok":q===2?"warn":"crit");
   const tip=q==null?"Verbindung: keine Messung (es wird nicht gesendet)":q>=3?"Verbindung: gut":q===2?"Verbindung: mäßig":"Verbindung: schlecht";
   el.setAttribute("title",tip); el.setAttribute("aria-label",tip);
