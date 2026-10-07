@@ -759,16 +759,41 @@ class Session(unittest.TestCase):
 
     def test_charging_stays_unknown_for_models_where_it_was_not_observed(self):
         async def go():
-            sim = CameraSim(battery=80, mv=4400, ma=0)
-            self.install({ADDR: sim})
-            dm = dd.Daemon(tempfile.mkdtemp())
-            await self.setup_cam(dm)                                              # Osmo Action 5 Pro
-            await dm.handle({"cmd": "connect", "addr": ADDR})
-            cam = dm.cameras[ADDR]
-            self.assertTrue(await self.wait_state(cam, ("streaming",)))
-            self.assertIsNone(cam.public()["charging"])
-            self.assertEqual(cam.public()["battery"], 80)
-            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            for kind, model in (("pocket3", "Osmo Pocket 3"), ("action5", "Osmo 360")):        # die Osmo 360 teilt sich die Art "action5", gemessen ist nur die Action 5 Pro
+                sim = CameraSim(battery=80, mv=4400, ma=0)
+                self.install({ADDR: sim})
+                dm = dd.Daemon(tempfile.mkdtemp())
+                await self.setup_cam(dm, kind=kind, model=model)
+                await dm.handle({"cmd": "connect", "addr": ADDR})
+                cam = dm.cameras[ADDR]
+                self.assertTrue(await self.wait_state(cam, ("streaming",)), model)
+                self.assertIsNone(cam.public()["charging"], model)
+                self.assertEqual(cam.public()["battery"], 80)
+                await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_cable_on_an_action_5_pro_and_an_action_6_from_the_measurements_of_6_october(self):
+        """Echte Werte aus dem Journal der Box (Kabel je einmal abgezogen und angesteckt): aus dem Akku -606 bis -765 mA, beim Anstecken kurz -54,
+        am Kabel positiv (+696 bis +4464 mA)."""
+        measured = {
+            ("action5", "Osmo Action 5 Pro"): [(-638, False), (-688, False), (-606, False), (-54, True), (1052, True), (4464, True), (2167, True)],
+            ("action6", "Osmo Action 6"): [(-763, False), (-765, False), (696, True), (2734, True), (3083, True)],
+        }
+
+        async def go():
+            for (kind, model), series in measured.items():
+                sim = CameraSim(battery=60, mv=4350, ma=series[-1][0])
+                self.install({ADDR: sim})
+                dm = dd.Daemon(tempfile.mkdtemp())
+                await self.setup_cam(dm, kind=kind, model=model)
+                await dm.handle({"cmd": "connect", "addr": ADDR})
+                cam = dm.cameras[ADDR]
+                self.assertTrue(await self.wait_state(cam, ("streaming",)), model)
+                for ma, want in series:
+                    sim.client.cb(None, sim.status_message(ma=ma))
+                    await asyncio.sleep(0.03)
+                    self.assertIs(cam.public()["charging"], want, f"{model} {ma} mA")
+                await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
     def test_status_journal_only_lists_bytes_that_rarely_change(self):
@@ -797,7 +822,7 @@ class Session(unittest.TestCase):
             sim = CameraSim(battery=18)
             self.install({ADDR: sim})
             dm = dd.Daemon(tempfile.mkdtemp())
-            await self.setup_cam(dm)
+            await self.setup_cam(dm, kind="pocket3", model="Osmo Pocket 3")      # ein Modell, bei dem das Laden nicht gemessen ist
             self.assertIsNone(dm.cameras[ADDR].public()["battery"])               # vor dem ersten Wert: unbekannt
             self.assertIsNone(dm.cameras[ADDR].public()["battery_age"])
             await dm.handle({"cmd": "connect", "addr": ADDR})
