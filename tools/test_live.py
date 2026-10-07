@@ -243,6 +243,19 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(any(l.startswith("pad pipcomp sink_0") for l in lines))   # das große Bild bleibt, wie es ist
         self.assertTrue(any(l.startswith("pad pipcomp sink_1 alpha 1.00") for l in lines))
 
+    def test_portrait_small_picture_keeps_its_aspect_ratio(self):
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1080, "h": 1920, "audio": True}}
+        self.f.states = {0: 3, 1: 3, 2: 1, 3: 1}
+        self.tick()
+        lines = self.f.take()
+        w = [int(l.split()[-1]) for l in lines if l.startswith("pad pipcomp sink_1 width")][-1]
+        h = [int(l.split()[-1]) for l in lines if l.startswith("pad pipcomp sink_1 height")][-1]
+        self.assertLess(w, h)                                                   # Rahmen hochkant
+        self.assertLessEqual(abs(w * 1920 - h * 1080), 2 * 1920)               # Seitenverhaeltnis der Quelle (bis auf Rundung auf gerade Zahlen)
+        caps = [l for l in lines if l.startswith("set sbf1_scc caps")][-1]
+        self.assertIn(f"width={w},height={h}", caps)
+        self.assertIn("set sbf1_crop left 0", lines)                          # kein Beschnitt
+
     def test_feed_commands_wait_for_the_cooldown(self):
         self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
         self.f.pub = {"dji-a": {"w": 0, "h": 0, "audio": False}}

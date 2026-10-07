@@ -1419,7 +1419,7 @@ class PipelineStore:
 
     def status(self, cams):
         keys = [c["key"] for c in cams]
-        return {"config": dict(self.cfg, styles=clean_styles(self.cfg.get("styles"))), "plugin_style": plugin_style(), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown")} for c in cams],
+        return {"config": dict(self.cfg, styles=clean_styles(self.cfg.get("styles"))), "plugin_style": plugin_style(), "cameras": [{"key": c["key"], "name": c["name"], "state": c.get("state", "unknown"), "w": c.get("w", 0), "h": c.get("h", 0)} for c in cams],
                 "corners": list(pip_corners()), "preview": self.build() if self.cfg.get("main") in keys else "",
                 "needs_plugin": self.cfg.get("type") == "pip", "plugin_present": os.path.exists("/opt/pipbox/gst/libgstpbpip.so")}
 
@@ -1962,7 +1962,9 @@ class CameraStore:
                 bw = (int(st.findtext("bw_video") or 0) + int(st.findtext("bw_audio") or 0))
                 fps = st.findtext("meta/video/frame_rate")
                 key = st.findtext("name")
-                res[key] = {"fps": float(fps) if fps else None, "mbit": round(bw / 1e6, 1)}
+                w, h = st.findtext("meta/video/width"), st.findtext("meta/video/height")
+                res[key] = {"fps": float(fps) if fps else None, "mbit": round(bw / 1e6, 1),
+                            "w": int(w) if w and w.isdigit() else 0, "h": int(h) if h and h.isdigit() else 0}
         return res
 
     def listing(self, host, addr_for=None):
@@ -1986,7 +1988,8 @@ class CameraStore:
                         "url": "" if src == "hdmi" else f"rtmp://{host}:1935/{self.app}/{c['key']}",
                         "state": "unknown" if live is None else
                                  ("live" if st else "offline"),
-                        "fps": st and st["fps"], "mbit": st and st["mbit"]})
+                        "fps": st and st["fps"], "mbit": st and st["mbit"],
+                        "w": (st or {}).get("w", 0), "h": (st or {}).get("h", 0)})
         return out
 
 
