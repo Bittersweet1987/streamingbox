@@ -247,6 +247,281 @@ def drop_noise(text, keep=15):
     return "\n".join(out) + "\n"
 
 
+RTMP_STAT = "http://127.0.0.1:1936/"
+
+
+def rtmp_inputs(xml=None):
+    """Was jede Kamera am Eingang (nginx) sendet: Auflösung, Bildrate, Profil, Stufe, Codec, Datenrate, Zuschauer (Issue #35: ein Bild, das die Box
+    nicht verarbeitet, lässt sich nur mit diesen Angaben der Quelle erklären). Die Schlüssel ersetzt der Bereiniger wie überall."""
+    if xml is None:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(RTMP_STAT, timeout=3) as r:
+                xml = r.read(2_000_000).decode("utf-8", "replace")
+        except Exception as e:                                          # nginx aus, Statistik nicht da, Zeitüberschreitung
+            return "(nicht lesbar: %s)\n" % type(e).__name__
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml)
+    except Exception:
+        return "(Statistik nicht auswertbar)\n"
+    rows = []
+    for st in root.iter("stream"):
+        def f(path):
+            return (st.findtext(path) or "").strip() or "?"
+        pub = "sendet" if st.find("publishing") is not None else "nur Zuschauer"
+        try:
+            mbit = "%.1f" % ((int(st.findtext("bw_video") or 0) + int(st.findtext("bw_audio") or 0)) / 1e6)
+        except ValueError:
+            mbit = "?"
+        rows.append("%-28s %s  %sx%s  Bildrate %s  Codec %s/%s  Profil %s  Stufe %s  Video %s kbit/s  Gesamt %s Mbit/s  Zuschauer %s  seit %s ms" % (
+            f("name"), pub, f("meta/video/width"), f("meta/video/height"), f("meta/video/frame_rate"), f("meta/video/codec"), f("meta/audio/codec"),
+            f("meta/video/profile"), f("meta/video/level"), str(int((st.findtext("bw_video") or "0")) // 1000) if (st.findtext("bw_video") or "0").isdigit() else "?",
+            mbit, f("nclients"), f("time")))
+    return ("\n".join(rows) + "\n") if rows else "(keine Streams)\n"
+
+
+NL = chr(10)
+H264_PROFILES = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High", 110: "High 10", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
+
+
+class _Bits:
+    def __init__(self, data):
+        self.d, self.pos = data, 0
+
+    def bit(self):
+        i = self.pos >> 3
+        if i >= len(self.d):
+            raise ValueError("zu kurz")
+        v = (self.d[i] >> (7 - (self.pos & 7))) & 1
+        self.pos += 1
+        return v
+
+    def bits(self, n):
+        v = 0
+        for _ in range(n):
+            v = (v << 1) | self.bit()
+        return v
+
+    def ue(self):
+        zeros = 0
+        while self.bit() == 0:
+            zeros += 1
+            if zeros > 32:
+                raise ValueError("ungültig")
+        return (1 << zeros) - 1 + self.bits(zeros)
+
+    def se(self):
+        k = self.ue()
+        return (k + 1) // 2 if k & 1 else -(k // 2)
+
+
+def sps_info(nal):
+    """Aus einer H.264-SPS (NAL-Einheit mit Kopfbyte): Profil, Stufe, Größe, Zeilensprung, Bezugsbilder, Bildreihenfolge (POC-Typ). Zahlen, nie Bilddaten."""
+    raw = bytearray()
+    zeros = 0
+    for b in nal[1:]:                                  # Emulationsschutz (00 00 03) entfernen
+        if zeros >= 2 and b == 3:
+            zeros = 0
+            continue
+        zeros = zeros + 1 if b == 0 else 0
+        raw.append(b)
+    r = _Bits(bytes(raw))
+    profile, _compat, level = r.bits(8), r.bits(8), r.bits(8)
+    r.ue()
+    chroma = 1
+    if profile in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        chroma = r.ue()
+        if chroma == 3:
+            r.bit()
+        r.ue()
+        r.ue()
+        r.bit()
+        if r.bit():                                    # Skalierungslisten: übersprungen
+            for i in range(8 if chroma != 3 else 12):
+                if r.bit():
+                    last, nxt = 8, 8
+                    for _ in range(16 if i < 6 else 64):
+                        if nxt:
+                            nxt = (last + r.se() + 256) % 256
+                        last = nxt or last
+    r.ue()
+    poc = r.ue()
+    if poc == 0:
+        r.ue()
+    elif poc == 1:
+        r.bit()
+        r.se()
+        r.se()
+        for _ in range(r.ue()):
+            r.se()
+    refs = r.ue()
+    r.bit()
+    w, h = r.ue() + 1, r.ue() + 1
+    frame_mbs_only = r.bit()
+    if not frame_mbs_only:
+        r.bit()
+    r.bit()
+    width, height = w * 16, h * 16 * (1 if frame_mbs_only else 2)
+    if r.bit():
+        cl, cr, ct, cb = r.ue(), r.ue(), r.ue(), r.ue()
+        unit_x = 1 if chroma == 0 else 2
+        unit_y = (1 if chroma in (0, 3) else 2) * (1 if frame_mbs_only else 2)
+        width -= (cl + cr) * unit_x
+        height -= (ct + cb) * unit_y
+    return {"profile": profile, "level": level, "width": width, "height": height, "interlaced": not frame_mbs_only, "refs": refs, "poc": poc}
+
+
+def _steps(ts):
+    d = [b - a for a, b in zip(ts, ts[1:])]
+    if not d:
+        return "?"
+    s = sorted(d)
+    back = sum(1 for x in d if x < 0)
+    return "%d/%d/%d ms (kleinster/mittlerer/größter Schritt), Rückwärtssprünge %d" % (s[0], s[len(s) // 2], s[-1], back)
+
+
+def analyze_flv(data):
+    """Liest die ersten Sekunden eines FLV-Stücks und beschreibt, wie die Quelle sendet: Codec, Profil, Auflösung, Bildzeiten, Schlüsselbilder, B-Bilder,
+    Tonspur. Nur Kopfdaten und Zeiten, keine Bildinhalte (Issue #35: Litchi statt DJI Fly)."""
+    if len(data) < 13 or data[:3] != b"FLV":
+        return "(kein FLV-Datenstrom gelesen, %d Byte)" % len(data)
+    flags = data[4]
+    p = 13
+    vts, ats, key_ts, cts_nonzero, vcount, vcodec = [], [], [], 0, 0, set()
+    sps, acfg, acodec, ptypes = None, None, set(), set()
+    while p + 11 <= len(data):
+        t = data[p]
+        size = (data[p + 1] << 16) | (data[p + 2] << 8) | data[p + 3]
+        ts = (data[p + 7] << 24) | (data[p + 4] << 16) | (data[p + 5] << 8) | data[p + 6]
+        body = data[p + 11:p + 11 + size]
+        if len(body) < size:
+            break
+        if t == 9 and body:
+            vcodec.add(body[0] & 15)
+            is_config = (body[0] & 15) in (7, 12) and len(body) >= 2 and body[1] == 0          # Decoder-Konfiguration, kein Bild
+            if not is_config:
+                vcount += 1
+                vts.append(ts)
+                if body[0] >> 4 == 1:
+                    key_ts.append(ts)
+            if (body[0] & 15) == 7 and len(body) >= 5:
+                ptypes.add(body[1])
+                cts = int.from_bytes(body[2:5], "big", signed=False)
+                if body[1] == 1 and cts not in (0, 0xFFFFFF):
+                    cts_nonzero += 1
+                if body[1] == 0 and len(body) > 13 and sps is None:
+                    try:
+                        n_sps = body[10] & 31
+                        ln = int.from_bytes(body[11:13], "big")
+                        if n_sps >= 1:
+                            sps = sps_info(body[13:13 + ln])
+                    except (ValueError, IndexError):
+                        sps = {"error": True}
+        elif t == 8 and body:
+            ats.append(ts)
+            acodec.add(body[0] >> 4)
+            if (body[0] >> 4) == 10 and len(body) >= 4 and body[1] == 0 and acfg is None:
+                x = (body[2] << 8) | body[3]
+                acfg = ((x >> 11) & 31, (x >> 7) & 15, (x >> 3) & 15)
+        p += 11 + size + 4
+    AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350]
+    out = ["Kopf: Bild %s, Ton %s" % ("ja" if flags & 1 else "nein", "ja" if flags & 4 else "nein")]
+    if vcount:
+        vname = ", ".join({7: "H.264", 12: "H.265 (Kennung 12)"}.get(c, "Kennung %d" % c) for c in sorted(vcodec))
+        line = "Bild: %s" % vname
+        if sps and not sps.get("error"):
+            line += ", Profil %s (%d), Stufe %.1f, %dx%d%s, Bezugsbilder %d, POC-Typ %d%s" % (
+                H264_PROFILES.get(sps["profile"], "?"), sps["profile"], sps["level"] / 10.0, sps["width"], sps["height"],
+                ", Zeilensprung" if sps["interlaced"] else "", sps["refs"], sps["poc"], " (B-Bilder möglich)" if sps["poc"] == 0 else "")
+        elif sps:
+            line += ", SPS nicht lesbar"
+        elif 12 in vcodec:
+            line += " (der Dekoder der Box kann das nur mit Zusatzteil)"
+        out.append(line)
+        dur = (vts[-1] - vts[0]) / 1000.0 if len(vts) > 1 else 0
+        out.append("Bilder: %d in %.1f s (%.1f je Sekunde), %s" % (vcount, dur, (vcount - 1) / dur if dur else 0, _steps(vts)))
+        out.append("Schlüsselbilder: %d%s; Bilder mit Zeitversatz (B-Bilder): %d; Pakettypen %s" % (
+            len(key_ts), (" alle %d ms" % (sum(b - a for a, b in zip(key_ts, key_ts[1:])) // (len(key_ts) - 1))) if len(key_ts) > 1 else "",
+            cts_nonzero, sorted(ptypes) or "?"))
+        out.append("Erster Bildzeitstempel: %d ms" % vts[0])
+    else:
+        out.append("Bild: keine Bildpakete gelesen")
+    if ats:
+        name = ", ".join({10: "AAC", 2: "MP3", 1: "ADPCM", 0: "PCM"}.get(c, "Kennung %d" % c) for c in sorted(acodec))
+        extra = ""
+        if acfg:
+            extra = ", %s Hz, %d Kanäle" % (AAC_RATES[acfg[1]] if acfg[1] < len(AAC_RATES) else "?", acfg[2])
+        out.append("Ton: %s%s, %d Pakete, %s" % (name, extra, len(ats), _steps(ats)))
+        out.append("Erster Tonzeitstempel: %d ms" % ats[0])
+    else:
+        out.append("Ton: keine Tonpakete gelesen")
+    return NL.join(out)
+
+
+def stream_probe(seconds=5, xml=None):
+    """Zieht von jedem laufenden Eingang kurz (seconds) den FLV-Datenstrom bei nginx und beschreibt ihn (analyze_flv). Braucht gst-launch-1.0
+    (rtmpsrc), sonst steht nur der Hinweis da. Die Schlüssel ersetzt der Bereiniger."""
+    import shutil
+    import tempfile
+    import xml.etree.ElementTree as ET
+    if xml is None:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(RTMP_STAT, timeout=3) as r:
+                xml = r.read(2_000_000).decode("utf-8", "replace")
+        except Exception as e:
+            return "(Statistik nicht lesbar: %s)" % type(e).__name__ + NL
+    try:
+        root = ET.fromstring(xml)
+    except Exception:
+        return "(Statistik nicht auswertbar)" + NL
+    names = []
+    for st in root.iter("stream"):
+        n = (st.findtext("name") or "").strip()
+        if n and st.find("publishing") is not None and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", n):
+            names.append(n)
+    if not names:
+        return "(keine Quelle sendet)" + NL
+    if not shutil.which("gst-launch-1.0"):
+        return "(gst-launch-1.0 fehlt: keine Stream-Prüfung)" + NL
+    tmp = tempfile.mkdtemp(prefix="probe-", dir=RUN if os.path.isdir(RUN) else None)
+    procs = []
+    try:
+        for i, n in enumerate(names[:6]):
+            path = os.path.join(tmp, "s%d.flv" % i)
+            cmd = ["timeout", str(seconds), "gst-launch-1.0", "-q", "rtmpsrc", "location=rtmp://127.0.0.1:1935/publish/%s" % n, "!", "filesink", "location=" + path]
+            procs.append((n, path, subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
+        parts = []
+        for n, path, pr in procs:
+            try:
+                pr.wait(seconds + 5)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+            try:
+                with open(path, "rb") as f:
+                    data = f.read(4_000_000)
+            except OSError:
+                data = b""
+            parts.append("[%s]%s%s%s" % (n, NL, analyze_flv(data), NL))
+        return NL.join(parts)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def thread_load(n=22):
+    """Auslastung je Thread (Momentaufnahme über eine Sekunde): zeigt, welcher Zweig oder Dienst einen Kern voll macht (Threads von GStreamer tragen den
+    Namen des Elements, zum Beispiel sbf1:src oder mppvideodec)."""
+    out = run(["top", "-H", "-b", "-n", "2", "-d", "1", "-w", "200"], 10)
+    frames = out.split("\ntop - ")
+    last = frames[-1] if frames else out
+    lines = last.splitlines()
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("PID "):
+            return "\n".join(lines[i:i + 1 + n]) + "\n"
+    return out[-3000:]
+
+
 def wifi_cards():
     """Zustand der WLAN-Karten für die Fehlersuche (Issue #8, Netzsuche): Karten, Fähigkeiten, Funk, Treiber, gefundene Funkstationen. Namen und MAC-Adressen
     werden danach bereinigt."""
@@ -348,6 +623,10 @@ def sections():
            ("Zustand der Sendekette (nur während des Sendens vorhanden)", tail_file("/run/pipbox-send/status.json", 80)),
            ("Sendewege (srtla_send)", tail_file("/run/pipbox-send/srtla-links.txt", 40)),
            ("Regler (belacoder, letzte Zeilen)", tail_file("/run/pipbox-send/belacoder-stats.txt", 40)),
+           ("Kameras am Eingang (nginx-Statistik)", rtmp_inputs()),
+           ("Bildaufbau der Sendekette (belacoder: Bilder je Sekunde und Rückstand je Zweig, Warnungen)", tail_file("/run/pipbox-send/belacoder-live.txt", 60)),
+           ("Stream-Prüfung der Quellen (erste 5 Sekunden jedes Eingangs: Codec, Profil, Bildzeiten, B-Bilder, Ton)", stream_probe()),
+           ("Auslastung je Thread (Momentaufnahme)", thread_load()),
            ("Zustand der Software-Updates", tail_file("/run/pipbox-swupdate/status.json", 40)),
            ("Protokoll der Software-Updates", collapse_repeats(tail_file("/var/log/pipbox-swupdate.log", 150))),
            ("Protokoll der System-Updates", collapse_repeats(tail_file(f"{STATE}/update.log", 80)))]

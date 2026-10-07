@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.9.120 (Beta)
+- **Neu: Die Protokolle (Download in der Oberfläche) enthalten jetzt, was zum Verstehen von Bildfehlern gebraucht wird** (Anlass: Issue #35, DJI Mini 2 erzeugt ein Standbild; im Protokoll fehlten die Angaben der Quelle und die Kennzahlen der Sendekette). Vier neue Abschnitte:
+  - **Kameras am Eingang (nginx-Statistik):** je Stream Auflösung, Bildrate, Codec, Profil, Stufe, Datenrate, Zuschauer und Laufzeit (die Schlüssel werden wie überall ersetzt).
+  - **Bildaufbau der Sendekette (belacoder):** die Kennzahlen der Engine (Bilder je Sekunde und Rückstand je Zweig, Encoder, Compositor) und ihre Warnungen.
+  - **Stream-Prüfung der Quellen:** liest für 5 Sekunden in jeden laufenden Eingang hinein und beschreibt ihn: Codec, Profil, Stufe, Auflösung, Bezugsbilder, Bildzeiten (Rate, Schrittweite, Rückwärtssprünge), Schlüsselbilder, B-Bilder (Zeitversatz), Tonspur (Codec, Rate, Kanäle) und die ersten Zeitstempel. Nur Kopfdaten und Zeiten, keine Bildinhalte. Anlass: Dieselbe Drohne streamt mit DJI Fly richtig und mit Litchi nicht; so sieht man, was Litchi anders sendet. Braucht `gst-launch-1.0` (rtmpsrc), sonst steht nur ein Hinweis da.
+  - **Auslastung je Thread (Momentaufnahme):** zeigt, welcher Zweig oder Dienst einen Kern voll macht (Threads von GStreamer tragen den Namen des Elements).
+  - Tests: `tools/test_logs.py` (4 neue Tests, mit einer Beispielstatistik von nginx). Am echten nginx und auf einer Box mit laufender Sendung nicht von uns geprüft: das Format der Statistik ist aus dem bestehenden Code der Oberfläche übernommen.
+
 ## 0.9.119 (Beta)
 - **Neu: Verbindungen (Netzwerkschnittstellen) lassen sich benennen.** In den Einstellungen (Sendewege) steht neben jeder Verbindung ein Stift (✎); damit vergibst du einen eigenen Namen, zum Beispiel für „eth1“ den Namen „Router Keller“. Der Name ergänzt die Bezeichnung, er ersetzt sie nicht: Im Status (Up- und Download, Laufzeit je Weg) steht „eth1 (Router Keller)“, bei den Sendewegen „LAN (Router Keller)“, in der Verbindungswahl der Kameras ebenfalls. Leer lassen entfernt den Namen.
   - Gespeichert in `device-names.json` (Schlüssel `net:<Schnittstelle>`, getrennt von den Namen der WLAN- und Bluetooth-Sticks), also auch in der Sicherung der Einstellungen. Name: höchstens 40 Zeichen, keine Sonderzeichen. Technik: `DeviceNames.conn_names`, `POST /api/devname` (wie bei den Sticks), `conn_names` in `/api/metrics` und `/api/srtla`.
