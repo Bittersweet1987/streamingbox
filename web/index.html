@@ -69,6 +69,11 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .cam .top .cn{flex:0 1 270px;min-width:0}
 .cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
 .cam .top .dyn{display:inline-block;min-width:9.6em;text-align:right;font-variant-numeric:tabular-nums}
+.qrline{margin-top:4px;display:flex;align-items:center;gap:6px;opacity:.75}.qrline:hover,.qrline:focus-within{opacity:1}
+.qrline select{width:auto;min-width:0;padding:1px 4px;font-size:12px;height:24px}
+.qrbox{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+.qri{display:flex;flex-direction:column;align-items:flex-start;gap:2px;max-width:100%;font-size:11px}
+.qri svg{width:150px;max-width:100%;height:auto;border-radius:3px}
 .cam code{display:block;margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
 .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);margin-left:6px}
 .cam a.ren{color:var(--text);text-decoration:none;border-bottom:1px dotted var(--muted)}
@@ -363,6 +368,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <input id="f_key" placeholder="Schlüssel (leer = automatisch)" maxlength="32">
       <button type="submit">Kamera hinzufügen</button>
     </form>
+    <div class="qrline" id="qrnew"><select id="qrn_app" aria-label="App"></select> <button type="button" class="sec" id="qrn_go" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn" id="qrn_help" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
+    <div class="ph" id="qrn_help_txt" hidden>IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro (Labs-Firmware): die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>
+    <div id="qrn_out"></div>
     <div id="formerr" class="err"></div>
     <div class="ph" data-hlp>Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
     <div class="sech">Hauptverbindung</div>
@@ -701,14 +709,114 @@ function camNetHtml(c){
   if(c.iface&&!netOpts.some(o=>o.iface===c.iface)) opts.push(`<option value="${esc(c.iface)}" selected>${esc(c.iface)} (nicht verbunden)</option>`);
   return `<span class="camnet"><select class="camnetsel" data-id="${c.id}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz" aria-label="Verbindung">${opts.join("")}</select></span>`;
 }
+// QR-Code-Erzeuger (Bytemodus, Fehlerkorrektur M, bei langem Text L, Version 1 bis 10), eigene Umsetzung nach ISO/IEC 18004, ohne Fremdcode
+const QR=(()=>{
+  const EXP=new Uint8Array(512), LOG=new Uint8Array(256);
+  for(let i=0,x=1;i<255;i++){ EXP[i]=x; LOG[x]=i; x<<=1; if(x&256) x^=0x11d; }
+  for(let i=255;i<512;i++) EXP[i]=EXP[i-255];
+  const mul=(a,b)=>a&&b?EXP[LOG[a]+LOG[b]]:0;
+  const gen=n=>{ let g=[1]; for(let i=0;i<n;i++){ const r=new Array(g.length+1).fill(0); for(let j=0;j<g.length;j++){ r[j]^=g[j]; r[j+1]^=mul(g[j],EXP[i]); } g=r; } return g; };
+  const rs=(data,n)=>{ const g=gen(n), r=new Array(n).fill(0); for(const d of data){ const f=d^r.shift(); r.push(0); if(f) for(let i=0;i<n;i++) r[i]^=mul(g[i+1],f); } return r; };
+  // je Version: [Gesamtzahl Codewörter, Korrekturwörter je Block, [[Blöcke, Datenwörter je Block], …]]
+  const V=[null,[26,10,[[1,16]]],[44,16,[[1,28]]],[70,26,[[1,44]]],[100,18,[[2,32]]],[134,24,[[2,43]]],[172,16,[[4,27]]],[196,18,[[4,31]]],
+    [242,22,[[2,38],[2,39]]],[292,22,[[3,36],[2,37]]],[346,26,[[4,43],[1,44]]]];
+  const VL=[null,[26,7,[[1,19]]],[44,10,[[1,34]]],[70,15,[[1,55]]],[100,20,[[1,80]]],[134,26,[[1,108]]],[172,18,[[2,68]]],[196,20,[[2,78]]],
+    [242,24,[[2,97]]],[292,30,[[2,116]]],[346,18,[[2,68],[2,69]]]];
+  const AL=[null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50]];
+  const MASK=[(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+(y>>1))%2===0,
+    (x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+  function penalty(m,n){
+    let p=0, dark=0;
+    const line=get=>{ let run=1; for(let i=1;i<=n;i++){ if(i<n&&get(i)===get(i-1)) run++; else { if(run>=5) p+=run-2; run=1; } }
+      for(let i=0;i+11<=n;i++){ const w=[];for(let k=0;k<11;k++)w.push(get(i+k)); const s=w.join("");
+        if(s==="10111010000"||s==="00001011101") p+=40; } };
+    for(let y=0;y<n;y++){ line(i=>m[y][i]); line(i=>m[i][y]); for(let x=0;x<n;x++){ dark+=m[y][x]; if(x&&y&&m[y][x]===m[y][x-1]&&m[y][x]===m[y-1][x]&&m[y][x]===m[y-1][x-1]) p+=3; } }
+    return p+Math.floor(Math.abs(dark*20-n*n*10)/(n*n))*10;
+  }
+  function make(text,V,ecb){
+    const bytes=[...new TextEncoder().encode(text)];
+    let v=1, cap=0;
+    for(;v<=10;v++){ cap=V[v][2].reduce((a,[c,d])=>a+c*d,0); if(bytes.length<=(cap*8-(v<10?12:20))>>3) break; }
+    if(v>10) return null;
+    const bits=[], put=(val,k)=>{ for(let i=k-1;i>=0;i--) bits.push((val>>i)&1); };
+    put(4,4); put(bytes.length,v<10?8:16); bytes.forEach(b=>put(b,8));
+    put(0,Math.min(4,cap*8-bits.length)); while(bits.length%8) bits.push(0);
+    for(let q=0;bits.length<cap*8;q^=1) put(q?0x11:0xec,8);
+    const cw=[]; for(let i=0;i<bits.length;i+=8) cw.push(parseInt(bits.slice(i,i+8).join(""),2));
+    const [, ecn, groups]=V[v], blocks=[]; let pos=0;
+    for(const [c,d] of groups) for(let i=0;i<c;i++){ const data=cw.slice(pos,pos+d); pos+=d; blocks.push({data,ec:rs(data,ecn)}); }
+    const all=[]; for(let i=0;i<Math.max(...blocks.map(b=>b.data.length));i++) for(const b of blocks) if(i<b.data.length) all.push(b.data[i]);
+    for(let i=0;i<ecn;i++) for(const b of blocks) all.push(b.ec[i]);
+    const n=17+4*v, B=[...Array(n)].map(()=>new Array(n).fill(0)), fn=[...Array(n)].map(()=>new Array(n).fill(false));
+    const set=(x,y,val)=>{ B[y][x]=val?1:0; fn[y][x]=true; };
+    const finder=(cx,cy)=>{ for(let dy=-4;dy<=4;dy++) for(let dx=-4;dx<=4;dx++){ const x=cx+dx,y=cy+dy; if(x<0||y<0||x>=n||y>=n) continue;
+      const d=Math.max(Math.abs(dx),Math.abs(dy)); set(x,y,d<=1||d===3); } };
+    finder(3,3); finder(n-4,3); finder(3,n-4);
+    for(let i=8;i<n-8;i++){ set(i,6,i%2===0); set(6,i,i%2===0); }
+    const al=AL[v];
+    for(const cy of al) for(const cx of al){ if((cx===6&&cy===6)||(cx===6&&cy===al[al.length-1])||(cy===6&&cx===al[al.length-1])) continue;
+      for(let dy=-2;dy<=2;dy++) for(let dx=-2;dx<=2;dx++) set(cx+dx,cy+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1); }
+    for(let i=0;i<9;i++){ if(i!==6){ fn[8][i]=true; fn[i][8]=true; } }
+    for(let i=0;i<8;i++){ fn[8][n-1-i]=true; fn[n-1-i][8]=true; }
+    set(8,n-8,1);
+    if(v>=7) for(let i=0;i<18;i++){ const a=n-11+i%3, b=Math.floor(i/3); fn[b][a]=true; fn[a][b]=true; }
+    const bo=[]; all.forEach(b=>{ for(let i=7;i>=0;i--) bo.push((b>>i)&1); });
+    let k=0;
+    for(let right=n-1;right>=1;right-=2){ if(right===6) right=5;
+      for(let vert=0;vert<n;vert++) for(let j=0;j<2;j++){ const x=right-j, y=((right+1)&2)===0?n-1-vert:vert;
+        if(!fn[y][x]){ B[y][x]=k<bo.length?bo[k]:0; k++; } } }
+    const vbits=(()=>{ if(v<7) return 0; let r=v; for(let i=0;i<12;i++) r=(r<<1)^((r>>11)*0x1f25); return (v<<12)|r; })();
+    let best=null, bestP=1e9;
+    for(let mk=0;mk<8;mk++){
+      const m=B.map(r=>r.slice());
+      for(let y=0;y<n;y++) for(let x=0;x<n;x++) if(!fn[y][x]&&MASK[mk](x,y)) m[y][x]^=1;
+      const fd=(ecb<<3)|mk; let r=fd; for(let i=0;i<10;i++) r=(r<<1)^((r>>9)*0x537);
+      const fb=((fd<<10)|r)^0x5412, bit=i=>(fb>>i)&1;
+      for(let i=0;i<=5;i++) m[i][8]=bit(i);
+      m[7][8]=bit(6); m[8][8]=bit(7); m[8][7]=bit(8);
+      for(let i=9;i<15;i++) m[8][14-i]=bit(i);
+      for(let i=0;i<8;i++) m[8][n-1-i]=bit(i);
+      for(let i=8;i<15;i++) m[n-15+i][8]=bit(i);
+      m[n-8][8]=1;
+      if(v>=7) for(let i=0;i<18;i++){ const a=n-11+i%3, b=Math.floor(i/3), t=(vbits>>i)&1; m[b][a]=t; m[a][b]=t; }
+      const pn=penalty(m,n); if(pn<bestP){ bestP=pn; best=m; }
+    }
+    return best;
+  }
+  const matrix=text=>make(text,V,0)||make(text,VL,1);   // erst Korrektur M, passt der Text nicht, dann L
+  const svg=text=>{ const m=matrix(text); if(!m) return ""; const n=m.length; let d="";
+    for(let y=0;y<n;y++) for(let x=0;x<n;x++) if(m[y][x]) d+=`M${x+4} ${y+4}h1v1h-1z`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n+8} ${n+8}" width="220" height="220" shape-rendering="crispEdges" role="img" aria-label="QR-Code"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`; };
+  return {matrix, svg};
+})();
+// Verbindungsdaten für IRL Pro (Larix) als Link, den die Kamera-App des Handys oder IRL Pro einliest
+const larixLink=(url,name)=>"larix://set/v1?conn[][url]="+encodeURIComponent(url)+"&conn[][name]="+encodeURIComponent(name);
+const QR_APPS=[["irlpro","IRL Pro"],["moblin","Moblin"],["gopro","GoPro (HERO 8–11)"],["gopro13","GoPro (HERO 12/13)"]];
+const qrApp={}, qrOut={}, qrHelp=new Set();                         // je Kamera: gewählte App und der angezeigte QR-Code (fertiger HTML-Text)
+const qrBox=items=>`<div class="qrbox">${items.map(([svg,label])=>`<div class="qri">${svg||'<span class="muted">zu lang</span>'}${label?`<span class="muted">${label}</span>`:""}</div>`).join("")}</div>`;
+async function qrBuild(c,app){
+  if(app==="irlpro") return qrBox([[QR.svg(larixLink(c.url,c.name)),""]]);
+  if(app==="moblin") return qrBox([[QR.svg("moblin://?"+encodeURIComponent(JSON.stringify({streams:[{name:c.name,url:c.url,video:{codec:"H.264/AVC"}}]}))),""]]);
+  // GoPro (Labs-Firmware): 1 WLAN merken (nur wenn die Box einen Hotspot hat), 2 RTMP-Adresse merken, 3 Livestream starten (1080p)
+  const items=[];
+  const hs=((wifiData&&wifiData.cards)||[]).find(x=>x.hotspot&&x.hotspot.running);
+  if(hs){ try{ const r=await srtlaCall("GET","/api/wifi/hotspot?iface="+encodeURIComponent(hs.iface)); items.push([QR.svg('!MJOIN="'+r.ssid+":"+r.password+'"'),"WLAN"]); }catch(x){} }
+  items.push([QR.svg('!MRTMP="'+c.url+'"'),"RTMP"]);
+  items.push([QR.svg((app==="gopro13"?"":"oW1mVr1080!W")+"!GL"),"Start"]);
+  items.forEach((it,i)=>{ it[1]=(i+1)+" "+it[1]; });
+  return qrBox(items);
+}
+let lastCams=[];
+const qrCan=c=>!!c.url&&c.via_src!=="hdmi"&&!(c.key||"").startsWith("dji-");   // RTMP-Kameras wie ein Handy; DJI und HDMI richtet die Box selbst ein
 function renderCams(list){
   const box=$("cams");
+  lastCams=list;
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
   // Kameras ohne Signal stehen unten; sonst bleibt die Reihenfolge der Anlage (Array.sort ist stabil)
   const quiet=c=>c.state==="live"||c.state==="unknown"?0:1;
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
-  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts]);
+  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts,qrOut,[...qrHelp]]);
   // Pfeile: mit dem Nachbarn in der angezeigten Liste die Plätze tauschen (die Fußleiste am Handy folgt dieser Reihenfolge, Issue #32)
   const mv=(c,i,dir)=>{ const o=list[i+dir], t=dir<0?"Kamera nach oben schieben":"Kamera nach unten schieben"; return `<button type="button" class="mv" data-id="${c.id}" data-with="${o?o.id:""}" title="${t}" aria-label="${t}"${o?"":" disabled"}>${dir<0?"▲":"▼"}</button>`; };
   if(box.dataset.sig!==sig){
@@ -716,7 +824,7 @@ function renderCams(list){
     box.innerHTML=list.length?list.map((c,i)=>
       `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
-      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)} <button class="del" data-id="${c.id}">Entfernen</button></span></div>${c.url?`<code>${esc(c.url)}</code>`:""}</div>`).join("")
+      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro (Labs-Firmware): die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -731,6 +839,41 @@ $("cams").addEventListener("click",async e=>{
   if(!e.target.classList.contains("del")) return; const id=e.target.dataset.id;
   if(!confirm("Kamera entfernen?")) return;
   await fetch("/api/cameras/"+id,{method:"DELETE"}); tick();
+});
+// Code ohne Namenseingabe: legt bei Bedarf selbst eine neue RTMP-Kamera mit automatischem Schlüssel an und zeigt ihren Code
+$("qrn_app").innerHTML=QR_APPS.map(a=>`<option value="${a[0]}">${a[1]}</option>`).join("");
+const qrnId={};
+$("qrn_app").addEventListener("change",()=>{ $("qrn_out").innerHTML=""; });
+$("qrn_help").addEventListener("click",()=>{ const h=$("qrn_help_txt"); h.hidden=!h.hidden; $("qrn_help").setAttribute("aria-expanded",String(!h.hidden)); });
+$("qrn_go").addEventListener("click",async()=>{
+  const out=$("qrn_out"); if(out.innerHTML){ out.innerHTML=""; return; }
+  const app=$("qrn_app").value, base=((QR_APPS.find(a=>a[0]===app)||[0,"Kamera"])[1]).replace(/ \(.*\)/,"");
+  const metrics=async()=>(await (await fetch("/api/metrics")).json()).cameras||[];
+  let list=await metrics(), c=list.find(x=>x.id===qrnId[app]);
+  if(!c){
+    const n=list.filter(x=>(x.name||"").startsWith(base)).length+1;
+    const r=await fetch("/api/cameras",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:base+" "+n,key:""})});
+    if(!r.ok){ $("formerr").textContent=(await r.json().catch(()=>({}))).error||""; return; }
+    const cam=await r.json(); qrnId[app]=cam.id; list=await metrics(); c=list.find(x=>x.id===cam.id);
+  }
+  if(!c||!c.url) return;
+  out.innerHTML=await qrBuild(c,app); tick();
+});
+$("cams").addEventListener("click",e=>{
+  const h=e.target.closest(".qrhb"); if(!h) return;
+  if(qrHelp.has(h.dataset.id)) qrHelp.delete(h.dataset.id); else qrHelp.add(h.dataset.id);
+  renderCams(lastCams);
+});
+$("cams").addEventListener("click",async e=>{
+  const b=e.target.closest(".qrb"); if(!b) return;
+  const id=b.dataset.id, c=lastCams.find(x=>x.id===id); if(!c) return;
+  if(qrOut[id]){ delete qrOut[id]; renderCams(lastCams); return; }
+  const sel=b.parentNode.querySelector(".qrsel"); qrApp[id]=sel?sel.value:"irlpro";
+  qrOut[id]=await qrBuild(c,qrApp[id]); renderCams(lastCams);
+});
+$("cams").addEventListener("change",e=>{
+  const t=e.target.closest(".qrsel"); if(!t) return;
+  qrApp[t.dataset.id]=t.value; delete qrOut[t.dataset.id]; renderCams(lastCams);
 });
 $("cams").addEventListener("click",async e=>{
   const b=e.target.closest(".mv"); if(!b||b.disabled||!b.dataset.with) return;
@@ -1740,8 +1883,7 @@ function seamlessTo(main,key){      // läuft die Sendekette im Tausch-Betrieb u
 }
 $("swapbtns").addEventListener("click",async e=>{
   const b=e.target.closest(".swapto"); if(!b) return;
-  const live=!!(sendData&&sendData.active);
-  if(live&&!seamlessTo(pipeData&&pipeData.config&&pipeData.config.main,b.dataset.key)&&!confirm(`Hauptbild: ${b.textContent.trim()} verwenden?\n\nDer Encoder startet dafür neu, das Bild ist etwa 5 Sekunden unterbrochen.`)) return;
+  // keine Rückfrage beim Wechsel des Hauptbilds (Nutzerwunsch 7. Okt 2026); das Bild kann dabei kurz unterbrochen sein
   try{ const r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key}); $("liveerr").textContent=(r&&r.note)||"Getauscht."; pipeDirty=false; pipeLoad(); }catch(x){ $("liveerr").textContent=x.message; }
 });
 async function doLiveStop(){
