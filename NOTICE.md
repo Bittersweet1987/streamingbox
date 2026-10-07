@@ -94,6 +94,7 @@ unverändert unter `/usr/bin` liegen; das gepatchte wird nach `/opt/pipbox/bin` 
 Der vierte Patch, `belacoder-live-feeds.patch` (Kamera-Zweige, die im laufenden Betrieb gestartet und gestoppt werden, Steuerkanal, Statistik), stammt von
 Bittersweet1987 und beruht auf dessen Projekt `streamingbox` (GPL-3.0); er wurde am 6. Oktober 2026 als Pull Request #27 zu diesem Projekt beigetragen und
 steht wie belacoder unter GPL-3.0. Die zugehörige Steuerung `pipbox_live.py` hat er neu geschrieben und mit demselben Pull Request beigetragen.
+Der fünfte Patch, `belacoder-frame-copy.patch` (Kopie der vergrößerten Bilder in normalen Speicher, Issue #35), ist neu geschrieben und steht ebenfalls unter GPL-3.0.
 
 ### WLAN
 
