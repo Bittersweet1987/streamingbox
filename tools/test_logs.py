@@ -344,6 +344,49 @@ class HelperRun(unittest.TestCase):
         with mock.patch.object(H, "RTMP_STAT", "http://127.0.0.1:9/"):
             self.assertIn("nicht lesbar", H.rtmp_inputs())
 
+    def test_rtmp_connections_show_clients_even_without_picture(self):
+        xml = ("<rtmp><server><application><live><stream><name>cam-9684aa</name><nclients>1</nclients>"
+               "<client><id>1</id><address>10.42.0.169</address><time>5000</time><flashver>FMLE/3.0</flashver><dropped>0</dropped><avsync>12</avsync>"
+               "<publishing/></client>"
+               "<client><id>2</id><address>192.168.80.5</address><time>100</time><flashver>LNX 10,0,32,18</flashver></client>"
+               "</stream></live></application></server></rtmp>")
+        out = H.rtmp_clients(xml)
+        self.assertIn("sendet", out)
+        self.assertIn("schaut", out)
+        self.assertIn("FMLE/3.0", out)
+        sc = H.Scrubber()
+        sc.secret_key("cam-9684aa")
+        self.assertNotIn("9684aa", sc.scrub(out))
+        self.assertIn("keine Verbindungen", H.rtmp_clients("<rtmp/>"))
+        self.assertIn("nicht auswertbar", H.rtmp_clients("<rtmp><oops"))
+
+    def test_hotspot_report_lists_devices_and_login_events(self):
+        def fake_run(cmd, timeout=15, limit=400_000):
+            if cmd[0] == "nmcli":
+                return "wlan0:Heimnetz\nwlan1:pipbox-hotspot-wlan1\n"
+            if cmd[0] == "wpa_cli" and cmd[3] == "status":
+                return "ssid=IRL4YOU-BOX\nmode=AP\nfreq=2412\nwpa_state=COMPLETED\n"
+            if cmd[0] == "wpa_cli":
+                return "d4:32:60:2a:ed:72\nflags=[AUTH][ASSOC][AUTHORIZED]\n"
+            if cmd[0] == "ip":
+                return "10.42.0.169 lladdr d4:32:60:2a:ed:72 REACHABLE\n"
+            if cmd[0] == "journalctl":
+                return ("2026-10-07T19:02:40 wpa_supplicant[391]: wlan1: AP-STA-CONNECTED d4:32:60:2a:ed:72\n"
+                        "2026-10-07T19:02:41 wpa_supplicant[391]: wlan1: Reject scan trigger since one is already pending\n"
+                        "2026-10-07T19:05:00 wpa_supplicant[391]: wlan1: AP-STA-DISCONNECTED d4:32:60:2a:ed:72\n")
+            return ""
+        with mock.patch.object(H, "run", side_effect=fake_run):
+            out = H.hotspot_report()
+        self.assertIn("mode=AP", out)
+        self.assertIn("AP-STA-CONNECTED", out)
+        self.assertIn("AP-STA-DISCONNECTED", out)
+        self.assertNotIn("Reject scan", out)
+        self.assertNotIn("Heimnetz", out)                                           # nur Karten mit dem Hotspot der Box
+        sc = H.Scrubber()
+        self.assertNotIn("d4:32:60:2a:ed:72", sc.scrub(out))
+        with mock.patch.object(H, "run", return_value="wlan0:Heimnetz\n"):
+            self.assertIn("kein Hotspot", H.hotspot_report())
+
     def test_thread_load_takes_the_last_frame_of_top(self):
         nl = chr(10)
         head = "    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND"
