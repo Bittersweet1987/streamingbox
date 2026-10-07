@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.121 (Beta)
+- **Neu geordnet: Hauptmenü und Karte „Kameras“.** Reihenfolge nach „Status“: **Verbindungen**, **SRTLA: Server, Bitrate und Latenz**, **Kameras**, dann „Bildaufbau: Kameras, Bild-in-Bild, Positionen“ und der Rest wie bisher.
+  - Die Karte „Kameras“ hat Untermenüs, standardmäßig zugeklappt: **Aktive Kameras** (vorher „RTMP-Kameras“, mit Liste und Hauptverbindung), **Neue RTMP-Kamera anlegen** (Name, Schlüssel, „Kamera hinzufügen“, QR-Code), **DJI-Kameras (Bluetooth)** und **HDMI- und USB-Kameras**. Ganz am Ende steht als eigenes Untermenü **Akku-Warnung im Twitch-Chat (nur bei DJI)** (vorher im DJI-Menü).
+  - Die Karte „Verbindungen“ ebenfalls: **Verbindungen zum Senden (Upload)**, **WLAN-Verbindungen (z. B. Handy-Hotspot, auch zum Senden nutzbar)**, **Bluetooth (für DJI-Kameras)** und **Zugriff auf diese Oberfläche**.
+  - **Neu: Hinweis bei ungespeicherten Änderungen.** Statt „Alles im grünen Bereich“ steht rot „Noch nicht gespeicherte Änderungen in „Bild-in-Bild“ Anpassungen“; ein Klick springt zum Knopf „Bildaufbau speichern“ (am Handy steht der Hinweis bei den Meldungen). Gemeldete Warnungen bleiben dahinter stehen. „Akku-Warnung im Twitch-Chat“ heißt jetzt „Akku-Warnung im Twitch-Chat (nur bei DJI)“.
+  - **Hinweistexte** hinter dem runden „i“ jetzt auch am Rechner (vorher nur am Handy); die beiden „?“-Knöpfe (QR-Codes, Automatik beim Start) sehen genauso aus.
+  - Englische Texte für die neuen Beschriftungen und für die Texte der erweiterten Protokolle (0.9.120), die bisher fehlten (Test `test_english_is_complete`). Die anderen Sprachen folgen mit der nächsten Übersetzungsrunde.
+  - Nur die Seite (`web/index.html`) und die Texte; keine Änderung an der Technik. Aussehen nicht von uns im Browser an einer laufenden Box geprüft, nur die Struktur (Reihenfolge, Untermenüs, Zustand zu).
+
 ## 0.9.120 (Beta)
 - **Neu: Die Protokolle (Download in der Oberfläche) enthalten jetzt, was zum Verstehen von Bildfehlern gebraucht wird** (Anlass: Issue #35, DJI Mini 2 erzeugt ein Standbild; im Protokoll fehlten die Angaben der Quelle und die Kennzahlen der Sendekette). Vier neue Abschnitte:
   - **Kameras am Eingang (nginx-Statistik):** je Stream Auflösung, Bildrate, Codec, Profil, Stufe, Datenrate, Zuschauer und Laufzeit (die Schlüssel werden wie überall ersetzt).
