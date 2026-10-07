@@ -92,12 +92,14 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 #srtlacard .autolbl{margin-bottom:12px}
 .bkform{grid-template-columns:1fr 1fr}
 .bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
-.ibtn,.ibrow{display:none}
-@media(max-width:620px){.wform{grid-template-columns:1fr}
-  .ibtn{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
-  .ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
-  .ibrow{display:block;margin:0 0 4px}.ibrow .ibtn{margin-left:0}
-  .hlp:not(.open){display:none}}
+/* Hilfetexte (Issue #21): hinter dem runden "i", auf dem Handy und am Rechner gleich */
+.ibtn{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+.ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
+.ibrow{display:block;margin:0 0 4px}.ibrow .ibtn{margin-left:0}
+.hlp:not(.open){display:none}
+.helpbtn{width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+.helpbtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
+@media(max-width:620px){.wform{grid-template-columns:1fr}}
 .wstat{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);margin-top:8px}
 .wstat .wdot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.wstat.ok .wdot{background:var(--ok)}
 .wstat.bad .wdot{background:var(--crit)}
@@ -282,10 +284,11 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .dcam .dsec{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
 .dcam .dsec>summary{cursor:pointer;font-size:13px;padding:4px 0}
 /* Akku-Warnung im Twitch-Chat (Unterabschnitt der DJI-Kameras): der Titel sieht aus wie die Überschriften .sech (z. B. "DJI-Kameras (Bluetooth)"), davor das übliche Aufklappdreieck */
-#tw_sec>summary{display:block;cursor:pointer;list-style:none;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:4px 0 6px}
-#tw_sec>summary::-webkit-details-marker{display:none}
-#tw_sec>summary::before{content:"\25B8  "}
-#tw_sec[open]>summary::before{content:"\25BE  "}
+.subsec>summary{display:block;cursor:pointer;list-style:none;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:14px 0 6px}
+.subsec>summary::-webkit-details-marker{display:none}
+.subsec>summary::before{content:"\25B8  "}
+.subsec[open]>summary::before{content:"\25BE  "}
+.livehealth a.unsavedlnk,.alert a.unsavedlnk{color:var(--crit);font-weight:600;text-decoration:underline;cursor:pointer}
 #tw_sum{white-space:nowrap}
 #tw_sec label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px;min-width:0}
 #tw_sec label.f input{width:100%}
@@ -313,7 +316,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 #livecard #liveerr,#livecard #livewhy{min-height:0;margin-top:8px}#livecard #liveerr:empty,#livecard #livewhy:empty{display:none}
 .livesrv{font-size:12px;margin-top:3px}.liveup{margin-left:16px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.liveup small{font-size:13px;font-weight:400;color:var(--muted)}
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
-.autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}.helpbtn{width:22px;height:22px;padding:0;border-radius:50%;font-size:13px;line-height:1;background:transparent;color:var(--muted);border:1px solid var(--line);cursor:pointer;vertical-align:middle}
+.autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
 </style>
@@ -360,24 +363,90 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </details>
   </details>
 
+  <details class="card wide" id="netcard" open><summary><span class="sumh">Verbindungen</span></summary>
+    <details class="subsec" id="net_up"><summary>Verbindungen zum Senden (Upload)</summary>
+    <div class="ph" style="margin-top:0">Die Box sendet gleichzeitig über alle Netze mit Häkchen (Bonding). Das Häkchen wird sofort gespeichert und wirkt auch während der Sendung nach wenigen Sekunden. Das Kameranetz darf mitgenutzt werden.</div>
+    <div id="b_ups"></div>
+<div id="neterr" class="err"></div>
+    <div id="upinfo" class="ph"></div>
+    </details>
+    <details class="subsec" id="net_wifi"><summary>WLAN-Verbindungen (z. B. Handy-Hotspot, auch zum Senden nutzbar)</summary><div class="sens"><div id="wificard">
+    <div class="ph" style="margin-top:0">Verbindet die Box mit einem WLAN, zum Beispiel dem Hotspot eines Handys. Danach in der Zeile der WLAN-Karte „Zum Senden verwenden“ ankreuzen (wird sofort gespeichert). Das Passwort wird nur an das Netzwerk-Programm der Box übergeben und nicht gespeichert.</div>
+    <div id="wifidev"></div>
+    <div id="hsmsg" class="ph" style="margin:6px 0" role="status"></div>
+    <div class="wform">
+      <label class="muted">WLAN-Karte<select id="w_if"></select></label>
+      <label class="muted">Netzname (SSID)<input id="w_ssid" maxlength="32" autocomplete="off"></label>
+      <label class="muted">Passwort<input id="w_pw" type="password" maxlength="64" autocomplete="new-password" placeholder="leer bei offenem Netz"></label>
+    </div>
+    <label class="muted" style="display:block;margin:8px 0"><input type="checkbox" id="w_hidden"> verstecktes Netz (Name wird nicht ausgesendet)</label>
+    <div class="actions"><button id="w_scan" type="button" class="sec">Netze suchen</button> <button id="w_connect" type="button">Verbinden</button> <button id="w_disc" type="button" class="sec">Trennen</button></div>
+    <div id="wifimsg" class="ph" style="margin:8px 0" role="status"></div>
+    <div id="wifinets" class="ph"></div>
+    <div id="wifisaved" class="ph"></div>
+  </div></div>
+    </details>
+    <details class="subsec" id="net_bt"><summary>Bluetooth (für DJI-Kameras)</summary>
+    <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
+    <div id="btcard"><div class="ph">Wird geladen …</div></div>
+    </details>
+    <details class="subsec" id="net_ua"><summary>Zugriff auf diese Oberfläche</summary>
+    <label class="chk"><input type="checkbox" id="ua_block"> Über fremde WLANs sperren</label>
+    <div class="ph" data-hlp>Die Oberfläche ist unverschlüsselt (HTTP). In einem WLAN, in dem die Box nur Gast ist (Hotel, Handy-Hotspot, fremdes Netz), kann dort jeder mitlesen. Ist der Schalter an, antwortet die Box in solchen WLANs nicht. Erreichbar bleiben Ethernet, der Hotspot der Box, USB und Tailscale (HTTPS). Wer sich aussperrt, schaltet den Schalter über Ethernet oder Tailscale wieder aus.</div>
+    <div id="ua_info" class="ph"></div>
+    <div id="ua_err" class="err"></div>
+    </details>
+  </details>
+
+  <details class="card wide" id="srtlacard" open><summary><span class="sumh">SRTLA: Server, Bitrate und Latenz</span><span class="lockhint" id="srtlalock" hidden> · Streammodus ist an</span></summary>
+    <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">i</button></div>
+    <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
+    <div id="autostatus" class="ph" hidden></div>
+        <div class="sech" style="margin-top:0">SRTLA-Server</div>
+    <div class="ph" style="margin-top:0">SRTLA-Server speichern und per Auswahl umschalten. Die Stream-ID ist ein Zugangsschlüssel: sie wird auf der Box gespeichert und hier nie wieder angezeigt.</div>
+    <div class="srvrow"><select id="srv_sel"></select><button id="srv_edit" type="button" class="sec">Bearbeiten</button><button id="srv_del" type="button" class="sec">Löschen</button></div>
+    <form id="srvform" class="add" style="margin-top:10px">
+      <input id="s_name" placeholder="Name (z. B. Mein Server)" maxlength="40" required>
+      <input id="s_host" placeholder="Adresse (z. B. srtla.example.de)" maxlength="253" required autocomplete="off">
+      <input id="s_port" placeholder="Port" type="number" min="1" max="65535" required>
+      <input id="s_sid" type="password" placeholder="Stream-ID (optional)" maxlength="512" autocomplete="new-password">
+      <button type="submit" id="srv_save">Server hinzufügen</button>
+      <button type="button" id="srv_cancel" class="sec" hidden>Abbrechen</button>
+    </form>
+    <label class="muted" style="display:block;margin-top:10px">Verteilung auf die Netze
+      <select id="b_spread" style="width:100%;max-width:560px;margin-top:4px"><option value="best">Beste Leitung bevorzugen, andere als Reserve (empfohlen, stabiler)</option><option value="all">Alle Leitungen gleichzeitig nutzen (auch langsamere)</option></select></label>
+    <div class="sech">Bitrate und Latenz</div>
+    <div class="add" style="margin-top:6px">
+      <label class="muted">Mindestbitrate (kbit/s)<input id="b_min" type="number" min="100" max="19999" step="50" style="width:100%"></label>
+      <label class="muted">Höchstbitrate (kbit/s)<input id="b_max" type="number" min="200" max="20000" step="100" style="width:100%"></label>
+      <label class="muted">Latenz (ms)<input id="b_lat" type="number" min="100" max="10000" step="100" style="width:100%"></label>
+    </div>
+    <div class="actions"><button id="b_save" type="button">Bitrate, Latenz und Verteilung speichern</button></div>
+<div id="srtlaerr" class="err"></div>
+    <div id="srtlainfo" class="ph"></div>
+  </details>
+
   <details class="card wide" id="c_cams" open><summary><span class="sumh">Kameras</span></summary>
-    <div class="sech" style="margin-top:0">RTMP-Kameras</div>
+    <details class="subsec" id="rtmp_sec"><summary>Aktive Kameras</summary>
     <div id="cams"></div>
+    <div class="ph" data-hlp>Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
+    <div class="sech">Hauptverbindung</div>
+    <div class="ph" style="margin-top:0">Gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung (Handy, Drohne, DJI-Kamera und so weiter). Eine andere Verbindung wählt man je Kamera in der Liste „Aktive Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
+    <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
+    <div id="netinfo" class="ph"></div>
+    </details>
+    <details class="subsec" id="rtmp_new"><summary>Neue RTMP-Kamera anlegen</summary>
     <form id="addcam" class="add">
       <input id="f_name" placeholder="Name, z. B. Hauptkamera" maxlength="40" required>
       <input id="f_key" placeholder="Schlüssel (leer = automatisch)" maxlength="32">
       <button type="submit">Kamera hinzufügen</button>
     </form>
-    <div class="qrline" id="qrnew"><select id="qrn_app" aria-label="App"></select> <button type="button" class="sec" id="qrn_go" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn" id="qrn_help" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
+    <div class="qrline" id="qrnew"><select id="qrn_app" aria-label="App"></select> <button type="button" class="sec" id="qrn_go" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn" id="qrn_help" aria-label="Erklärung zeigen" aria-expanded="false">i</button></div>
     <div class="ph" id="qrn_help_txt" hidden>IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro (Labs-Firmware): die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>
     <div id="qrn_out"></div>
     <div id="formerr" class="err"></div>
-    <div class="ph" data-hlp>Die Kamera sendet an die angezeigte RTMP-Adresse. Die Adresse gilt für die Verbindung der Kamera: je Kamera hier in der Zeile wählbar (DJI-Kameras in ihrer eigenen Karte), sonst für die Hauptverbindung, die Sie darunter bei „Hauptverbindung“ gewählt haben.</div>
-    <div class="sech">Hauptverbindung</div>
-    <div class="ph" style="margin-top:0">Gilt für die angezeigte RTMP-Adresse jeder Kamera ohne eigene Verbindung (Handy, Drohne, DJI-Kamera und so weiter). Eine andere Verbindung wählt man je Kamera in der Liste „RTMP-Kameras“ oben; jede DJI-Kamera wählt sie unten in ihrer eigenen Karte.</div>
-    <div class="add" style="margin-bottom:6px"><select id="netsel"></select></div>
-    <div id="netinfo" class="ph"></div>
-    <div class="sech">DJI-Kameras (Bluetooth)</div><div id="djicard">
+    </details>
+    <details class="subsec" id="dji_sec"><summary>DJI-Kameras (Bluetooth)</summary><div id="djicard">
     <div id="djinote" class="muted"></div>
     <div id="djiadapt" class="ph"></div>
     <div id="djicams"></div>
@@ -385,25 +454,9 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="djiscan"></div>
     <div class="ph" data-hlp>Kamera einschalten und wach halten, Kopplung an der Kamera bestätigen. Sie tritt dem gewählten WLAN bei und streamt zu dieser Box. Unterstützt: Osmo Action 3, 4, 5 Pro, 6, Osmo 360, Osmo Pocket 3 und 4. Welche Kamera Hauptbild oder Bild-in-Bild ist, wählen Sie in der Karte „Bildaufbau“.</div>
     <div id="djierr" class="err"></div>
-    <details class="dsec" id="tw_sec"><summary>Akku-Warnung im Twitch-Chat <span class="muted" id="tw_sum"></span></summary>
-      <label class="chk"><input type="checkbox" id="tw_on"> Einschalten</label>
-      <div class="twgrid">
-        <label class="f sens">Kanal (Konto, auf dem gestreamt wird)<input id="tw_channel" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-        <label class="f sens">Bot-Konto (Name)<input id="tw_login" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-        <label class="f">Token des Bot-Kontos<input id="tw_token" type="password" maxlength="120" autocomplete="new-password"></label>
-      </div>
-      <div class="ph" data-hlp>Token mit dem Recht „chat:edit“, wie bei NOALBS. Er muss zum Bot-Konto gehören.</div>
-      <div class="twrow">
-        <label class="f">Warnen bei (%)<input id="tw_thr" type="number" min="1" max="50" step="1"></label>
-        <label class="f grow">Nachricht ({Kamera} und {Prozent} werden ersetzt)<input id="tw_msg" maxlength="300" autocomplete="off"></label>
-      </div>
-      <label class="chk"><input type="checkbox" id="tw_live"> Nur während der Sendung</label>
-      <div class="actions"><button id="tw_save" type="button">Speichern</button><button id="tw_test" type="button" class="sec" disabled>Testnachricht senden</button></div>
-      <div id="tw_status" class="ph" role="status"></div>
-      <div id="tw_err" class="err"></div>
-    </details>
   </div>
-  <div class="sech">HDMI- und USB-Kameras</div><div id="hdmicard">
+  </details>
+  <details class="subsec" id="hdmi_sec"><summary>HDMI- und USB-Kameras</summary><div id="hdmicard">
     <details class="dcam" id="hdmi_cam" open>
       <summary><span class="dname">HDMI-Eingang</span><span class="dright"><span class="dstate" id="hdmi_state"></span></span></summary>
       <div class="dbody">
@@ -422,6 +475,24 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     </details>
     <div class="ph" data-hlp>Das Bild wird in der Box zu einer normalen Kamera „HDMI“ und steht dann in „Bildaufbau“ wie alle anderen.</div>
   </div>
+  </details>
+  <details class="subsec" id="tw_sec"><summary>Akku-Warnung im Twitch-Chat (nur bei DJI) <span class="muted" id="tw_sum"></span></summary>
+    <label class="chk"><input type="checkbox" id="tw_on"> Einschalten</label>
+    <div class="twgrid">
+      <label class="f sens">Kanal (Konto, auf dem gestreamt wird)<input id="tw_channel" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <label class="f sens">Bot-Konto (Name)<input id="tw_login" maxlength="25" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <label class="f">Token des Bot-Kontos<input id="tw_token" type="password" maxlength="120" autocomplete="new-password"></label>
+    </div>
+    <div class="ph" data-hlp>Token mit dem Recht „chat:edit“, wie bei NOALBS. Er muss zum Bot-Konto gehören.</div>
+    <div class="twrow">
+      <label class="f">Warnen bei (%)<input id="tw_thr" type="number" min="1" max="50" step="1"></label>
+      <label class="f grow">Nachricht ({Kamera} und {Prozent} werden ersetzt)<input id="tw_msg" maxlength="300" autocomplete="off"></label>
+    </div>
+    <label class="chk"><input type="checkbox" id="tw_live"> Nur während der Sendung</label>
+    <div class="actions"><button id="tw_save" type="button">Speichern</button><button id="tw_test" type="button" class="sec" disabled>Testnachricht senden</button></div>
+    <div id="tw_status" class="ph" role="status"></div>
+    <div id="tw_err" class="err"></div>
+  </details>
   </details>
 
 
@@ -479,65 +550,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div id="pipeerr" class="err"></div>
     <div id="pipeinfo" class="ph"></div>
     <details class="sens"><summary class="muted">Technische Beschreibung ansehen (für die Fehlersuche)</summary><pre id="pipeprev"></pre></details>
-  </details>
-
-  <details class="card wide" id="srtlacard" open><summary><span class="sumh">SRTLA: Server, Bitrate und Latenz</span><span class="lockhint" id="srtlalock" hidden> · Streammodus ist an</span></summary>
-    <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">?</button></div>
-    <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
-    <div id="autostatus" class="ph" hidden></div>
-        <div class="sech" style="margin-top:0">SRTLA-Server</div>
-    <div class="ph" style="margin-top:0">SRTLA-Server speichern und per Auswahl umschalten. Die Stream-ID ist ein Zugangsschlüssel: sie wird auf der Box gespeichert und hier nie wieder angezeigt.</div>
-    <div class="srvrow"><select id="srv_sel"></select><button id="srv_edit" type="button" class="sec">Bearbeiten</button><button id="srv_del" type="button" class="sec">Löschen</button></div>
-    <form id="srvform" class="add" style="margin-top:10px">
-      <input id="s_name" placeholder="Name (z. B. Mein Server)" maxlength="40" required>
-      <input id="s_host" placeholder="Adresse (z. B. srtla.example.de)" maxlength="253" required autocomplete="off">
-      <input id="s_port" placeholder="Port" type="number" min="1" max="65535" required>
-      <input id="s_sid" type="password" placeholder="Stream-ID (optional)" maxlength="512" autocomplete="new-password">
-      <button type="submit" id="srv_save">Server hinzufügen</button>
-      <button type="button" id="srv_cancel" class="sec" hidden>Abbrechen</button>
-    </form>
-    <label class="muted" style="display:block;margin-top:10px">Verteilung auf die Netze
-      <select id="b_spread" style="width:100%;max-width:560px;margin-top:4px"><option value="best">Beste Leitung bevorzugen, andere als Reserve (empfohlen, stabiler)</option><option value="all">Alle Leitungen gleichzeitig nutzen (auch langsamere)</option></select></label>
-    <div class="sech">Bitrate und Latenz</div>
-    <div class="add" style="margin-top:6px">
-      <label class="muted">Mindestbitrate (kbit/s)<input id="b_min" type="number" min="100" max="19999" step="50" style="width:100%"></label>
-      <label class="muted">Höchstbitrate (kbit/s)<input id="b_max" type="number" min="200" max="20000" step="100" style="width:100%"></label>
-      <label class="muted">Latenz (ms)<input id="b_lat" type="number" min="100" max="10000" step="100" style="width:100%"></label>
-    </div>
-    <div class="actions"><button id="b_save" type="button">Bitrate, Latenz und Verteilung speichern</button></div>
-<div id="srtlaerr" class="err"></div>
-    <div id="srtlainfo" class="ph"></div>
-  </details>
-
-  <details class="card wide" id="netcard" open><summary><span class="sumh">Verbindungen</span></summary>
-    <div class="sech">Verbindungen zum Senden (Upload)</div>
-    <div class="ph" style="margin-top:0">Die Box sendet gleichzeitig über alle Netze mit Häkchen (Bonding). Das Häkchen wird sofort gespeichert und wirkt auch während der Sendung nach wenigen Sekunden. Das Kameranetz darf mitgenutzt werden.</div>
-    <div id="b_ups"></div>
-        <div class="sens"><div class="sech">WLAN-Verbindungen (z. B. Handy-Hotspot, auch zum Senden nutzbar)</div><div id="wificard">
-    <div class="ph" style="margin-top:0">Verbindet die Box mit einem WLAN, zum Beispiel dem Hotspot eines Handys. Danach in der Zeile der WLAN-Karte „Zum Senden verwenden“ ankreuzen (wird sofort gespeichert). Das Passwort wird nur an das Netzwerk-Programm der Box übergeben und nicht gespeichert.</div>
-    <div id="wifidev"></div>
-    <div id="hsmsg" class="ph" style="margin:6px 0" role="status"></div>
-    <div class="wform">
-      <label class="muted">WLAN-Karte<select id="w_if"></select></label>
-      <label class="muted">Netzname (SSID)<input id="w_ssid" maxlength="32" autocomplete="off"></label>
-      <label class="muted">Passwort<input id="w_pw" type="password" maxlength="64" autocomplete="new-password" placeholder="leer bei offenem Netz"></label>
-    </div>
-    <label class="muted" style="display:block;margin:8px 0"><input type="checkbox" id="w_hidden"> verstecktes Netz (Name wird nicht ausgesendet)</label>
-    <div class="actions"><button id="w_scan" type="button" class="sec">Netze suchen</button> <button id="w_connect" type="button">Verbinden</button> <button id="w_disc" type="button" class="sec">Trennen</button></div>
-    <div id="wifimsg" class="ph" style="margin:8px 0" role="status"></div>
-    <div id="wifinets" class="ph"></div>
-    <div id="wifisaved" class="ph"></div>
-  </div></div>
-    <div class="sech">Bluetooth (für DJI-Kameras)</div>
-    <div class="ph" style="margin-top:0">Die Bluetooth-Sticks dieser Box. Steht ein Stick als nicht nutzbar da, fehlt ihm der Treiber oder er wird nicht unterstützt.</div>
-    <div id="btcard"><div class="ph">Wird geladen …</div></div>
-<div id="neterr" class="err"></div>
-    <div id="upinfo" class="ph"></div>
-    <div class="sech">Zugriff auf diese Oberfläche</div>
-    <label class="chk"><input type="checkbox" id="ua_block"> Über fremde WLANs sperren</label>
-    <div class="ph" data-hlp>Die Oberfläche ist unverschlüsselt (HTTP). In einem WLAN, in dem die Box nur Gast ist (Hotel, Handy-Hotspot, fremdes Netz), kann dort jeder mitlesen. Ist der Schalter an, antwortet die Box in solchen WLANs nicht. Erreichbar bleiben Ethernet, der Hotspot der Box, USB und Tailscale (HTTPS). Wer sich aussperrt, schaltet den Schalter über Ethernet oder Tailscale wieder aus.</div>
-    <div id="ua_info" class="ph"></div>
-    <div id="ua_err" class="err"></div>
   </details>
 
   <details class="card wide" id="rcard">
@@ -1328,6 +1340,23 @@ $("ua_block").addEventListener("change",async e=>{
   catch(x){ $("ua_err").textContent=x.message; e.target.checked=!e.target.checked; }
 });
 let lastNet=null;
+// Zeile "Alles im grünen Bereich" und Hinweise: ungespeicherte Änderungen am Bildaufbau (Vorschau, Kameras, Ecken ...) stehen rot davor und führen zum Speichern-Knopf
+let lastAlerts=[], healthSig="";
+function paintHealth(){
+  const un=!!(typeof pipeDirty!=="undefined"&&(pipeDirty||pipDelayDirty));
+  const note='<a href="#p_save" class="unsavedlnk">Noch nicht gespeicherte Änderungen in „Bild-in-Bild“ Anpassungen</a>';
+  const items=lastAlerts.map(a=>`<span class="${a.level}">${a.text}</span>`);
+  const hl=$("livehealth"), phone=getComputedStyle(hl).display==="none";                      // am Handy ist die Zeile ausgeblendet: dort steht der Hinweis bei den Meldungen
+  const h=(un?[`<span class="crit">${note}</span>`].concat(items):(items.length?items:['<span class="ok">● Alles im grünen Bereich</span>'])).join(" · ");
+  const a=lastAlerts.map(x=>`<div class="alert ${x.level}">${x.text}</div>`).join("")+(un&&phone?`<div class="alert crit">${note}</div>`:"");
+  const sig=h+"|"+a; if(sig===healthSig) return; healthSig=sig;
+  hl.innerHTML=h; $("alerts").innerHTML=a;
+}
+setInterval(paintHealth,500);
+document.addEventListener("click",e=>{
+  const l=e.target.closest&&e.target.closest("a.unsavedlnk"); if(!l) return; e.preventDefault();
+  const c=$("pipecard"); c.open=true; const b=$("p_save"); b.scrollIntoView({behavior:"smooth",block:"center"}); setTimeout(()=>b.focus({preventScroll:true}),400);
+});
 // Eigene Namen der Verbindungen (Issue: Benennungsmöglichkeit), ergänzend zur Schnittstelle: "eth1 (Name)"
 let connNames={};
 const ifd=n=>connNames[n]?`${n} (${connNames[n]})`:n;
@@ -2291,8 +2320,7 @@ async function tick(){
     if(due("ua","netcard",20000)) uaLoad();
     if(due("dji","c_cams",20000)) await djiLoad();
     if(due("upd","updcard",60000)){ try{ const ur=await fetch("/api/update"); if(ur.ok) renderUpdate(await ur.json()); }catch(e){} }
-    $("livehealth").innerHTML=m.alerts.length?m.alerts.map(a=>`<span class="${a.level}">${a.text}</span>`).join(" · "):'<span class="ok">● Alles im grünen Bereich</span>';
-    $("alerts").innerHTML=m.alerts.length?m.alerts.map(a=>`<div class="alert ${a.level}">${a.text}</div>`).join(""):"";
+    lastAlerts=m.alerts||[]; paintHealth();
   }catch(e){ /* keine Antwort: beim nächsten Durchlauf wieder */ }
 }
 // ---- Karten zuklappen: Zustand wird im Browser gemerkt ----
