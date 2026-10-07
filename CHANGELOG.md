@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.9.130 (Beta)
+- **Handyansicht: weniger Platz oben verschenkt.** Rand über der Kopfleiste 4 statt 12 Pixel, Abstand zum Inhalt 6 statt 16, Abstand zwischen den Karten 10 statt 14; bei 375 Pixel Breite beginnt die Chat-Karte rund 28 Pixel weiter oben. Auf Geräten mit Notch bleibt der Abstand zur Notch erhalten.
+- **Handyansicht: der Hinweisblock unter der Kopfleiste (zum Beispiel „Kein SRTLA-Server ausgewählt“ oder „Kamera … sendet gerade nicht“) erscheint nur noch, wenn es etwas zu melden gibt.** Sonst verschwindet er samt Abstand (weitere 25 Pixel Platz). Braucht einen Browser mit `:has` (iOS Safari ab 15.4, Chrome ab 105, Firefox ab 121); ältere zeigen nur den leeren Abstand.
+- **Chat: jede zweite Nachricht minimal anders hinterlegt**, damit man die Nachrichten besser unterscheidet. Die Ereigniskarten (Sub, Raid, Cheer …) behalten ihre eigene Farbe.
+- Keine neuen Texte, keine neuen Übersetzungen.
+
 ## 0.9.129 (Beta)
 - **Behoben: Die Amplitude im Chat und die „Bitrate“ in Status → Details zeigten zu hohe, zappelnde Werte.** Sie nahmen die Senderate aus dem Sender (`send_mbps`); die lag auf einer Box mit 12 Mbit/s eingestellter Bitrate bei 15,6 bis 17,6, während die Zähler der Netzwerkkarten rund 13,6 Mbit/s zeigten. Beide Anzeigen nehmen jetzt die Summe der Zähler der gewählten Sendewege, dieselbe Zahl wie „Mbit/s ↑“ neben „Live“. Die Güte-Farbe der Amplitude nutzt ebenfalls diesen Wert.
 - Die Skala der Amplitude geht jetzt von 0 bis 5, 10, 15, 20, 30 oder 50 Mbit/s (Mitte = Hälfte); rechts vom Verlauf steht die aktuelle Zahl.
