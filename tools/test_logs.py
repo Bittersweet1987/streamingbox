@@ -418,6 +418,107 @@ class HelperRun(unittest.TestCase):
         with mock.patch("shutil.which", return_value=None):
             self.assertIn("gst-launch-1.0 fehlt", H.stream_probe(xml=xml))
 
+    def fake_proc(self, procs, stat_cpu):
+        """Baut ein kleines /proc: procs = {pid: (cgroup, cmdline, {tid: (name, ticks, kern)})}, stat_cpu = Text der Datei stat."""
+        d = tempfile.mkdtemp()
+        nl = chr(10)
+
+        def wr(path, text):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        wr(d + "/stat", stat_cpu)
+        for pid, (cg, cmd, threads) in procs.items():
+            wr("%s/%s/cgroup" % (d, pid), cg + nl)
+            wr("%s/%s/cmdline" % (d, pid), cmd)
+            for tid, (name, ticks, core) in threads.items():
+                fields = ["S", "1", "1", "1", "0", "0", "0", "0", "0", "0", "0", str(ticks), "0", "0", "0", "20", "0", "1", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", str(core)]
+                wr("%s/%s/task/%s/stat" % (d, pid, tid), "%s (%s) %s" % (tid, name, " ".join(fields)))
+        return d
+
+    def test_cpu_report_names_busy_services_threads_and_cores(self):
+        nl = chr(10)
+        before = {"100": ("0::/system.slice/pipbox-send.service", "belacoder", {"100": ("sbf3_lq:src", 1000, 5), "101": ("mux:src", 100, 6)}),
+                  "200": ("0::/system.slice/nginx.service", "nginx", {"200": ("nginx", 500, 1)}),
+                  "300": ("0::/", "", {"300": ("kworker/0:1", 50, 0)})}
+        after = {"100": ("0::/system.slice/pipbox-send.service", "belacoder", {"100": ("sbf3_lq:src", 1200, 5), "101": ("mux:src", 106, 6)}),
+                 "200": ("0::/system.slice/nginx.service", "nginx", {"200": ("nginx", 506, 1)}),
+                 "300": ("0::/", "", {"300": ("kworker/0:1", 51, 0)})}
+        stat_a = "cpu  0 0 0 0 0 0 0 0" + nl + "cpu0 100 0 0 900 0 0 0 0" + nl + "cpu5 100 0 0 900 0 0 0 0" + nl
+        stat_b = "cpu  0 0 0 0 0 0 0 0" + nl + "cpu0 150 0 0 950 0 0 0 0" + nl + "cpu5 1100 0 0 900 0 0 0 0" + nl
+        da, db = self.fake_proc(before, stat_a), self.fake_proc(after, stat_b)
+        calls = []
+
+        def fake_sleep(sec):
+            calls.append(sec)
+            H.PROC = db                                            # nach dem Schlafen liest der Helfer den späteren Stand
+        old = H.PROC
+        H.PROC = da
+        try:
+            with mock.patch.object(os, "sysconf", create=True, return_value=100):
+                out = H.cpu_report(2, sleep=fake_sleep)
+        finally:
+            H.PROC = old
+        self.assertEqual(calls, [2])
+        self.assertIn("cpu5 100 %", out)                          # voll ausgelastet
+        self.assertIn("cpu0  50 %", out)
+        self.assertIn("103.0 %  pipbox-send.service", out)          # 200 + 6 Takte in 2 s
+        self.assertIn("  3.0 %  nginx.service", out)
+        self.assertIn("  0.5 %  Kernel", out)                        # Kernel-Thread ohne Dienst
+        self.assertIn("sbf3_lq:src", out)
+        self.assertIn("cpu5", out.split("Threads mit der größten Last")[1])               # der Kern, auf dem der Thread lief
+        self.assertLess(out.index("pipbox-send.service"), out.index("nginx.service"))           # nach Last sortiert
+
+    def test_cpu_report_without_proc_says_so_instead_of_failing(self):
+        old = H.PROC
+        H.PROC = os.path.join(tempfile.mkdtemp(), "gibtsnicht")
+        try:
+            out = H.cpu_report(0, sleep=lambda s: None)
+        finally:
+            H.PROC = old
+        self.assertIn("nicht lesbar", out)
+
+    def test_system_load_net_counters_and_kernel_hints(self):
+        nl = chr(10)
+        d = tempfile.mkdtemp()
+        os.makedirs(d + "/pressure")
+        os.makedirs(d + "/net")
+        with open(d + "/pressure/cpu", "w") as f:
+            f.write("some avg10=1.00 avg60=0.50 avg300=0.10 total=123" + nl)
+        with open(d + "/net/dev", "w") as f:
+            f.write("Inter-|   Receive" + nl + " face |bytes" + nl + "    lo: 5 1 0 0 0 0 0 0 5 1 0 0 0 0 0 0" + nl
+                    + "  eth1: 1000 10 2 3 0 0 0 0 2000 20 4 5 0 0 0 0" + nl)
+
+        def fake_run(cmd, timeout=15, limit=400_000):
+            if cmd[0] == "dmesg":
+                return ("[1.0] usb 1-1: new device" + nl + "[2.0] mpp_rkvdec: iommu page fault at 0x1000" + nl + "[3.0] rk3588 thermal: throttling" + nl)
+            return "AUSGABE-" + cmd[0] + nl
+        old = H.PROC
+        H.PROC = d
+        try:
+            with mock.patch.object(H, "run", side_effect=fake_run):
+                load, net, kern = H.system_load(), H.net_counters(), H.kernel_hints()
+        finally:
+            H.PROC = old
+        self.assertIn("Druck cpu: some avg10=1.00", load)
+        self.assertIn("AUSGABE-df", load)
+        self.assertIn("eth1", net)
+        self.assertIn("2000", net)
+        self.assertNotIn(" lo ", net)
+        self.assertIn("AUSGABE-ss", net)
+        self.assertIn("iommu page fault", kern)
+        self.assertIn("throttling", kern)
+        self.assertNotIn("new device", kern)
+
+    def test_bundle_has_the_cpu_and_system_sections(self):
+        def fake_run(cmd, timeout=15, limit=400_000):
+            return ""
+        with mock.patch.object(H, "run", side_effect=fake_run), mock.patch.object(H, "cpu_report", return_value="x"),                 mock.patch.object(H, "stream_probe", return_value="x"), mock.patch.object(H, "rtmp_inputs", return_value="x"):
+            text = H.build()
+        for title in ("Auslastung je Kern und je Dienst", "System: Druck, freier Platz, Speicherbedarf", "Netzwerk-Zähler", "Ereignisse der Sendekette",
+                      "nginx: letzte Fehler", "Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)"):
+            self.assertIn("===== " + title, text)
+
     def test_size_is_capped_and_head_kept(self):
         big = "x" * 1000 + "\n"
         with mock.patch.object(H, "MAX_TOTAL", 60_000), \

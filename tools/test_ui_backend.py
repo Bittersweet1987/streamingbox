@@ -550,6 +550,37 @@ class LogModeSwitch(unittest.TestCase):
             self.assertEqual(h.mode(), "ausfuehrlich")         # ohne Datei wie bisher auf der Karte
 
 
+class HealthCpuText(unittest.TestCase):
+    """Zeile des Zustandsprotokolls: Last je Kern und der Thread mit der größten Last seit der vorigen Zeile."""
+
+    def put(self, d, pid, tid, name, ticks, core):
+        os.makedirs("%s/%s/task/%s" % (d, pid, tid), exist_ok=True)
+        fields = ["S"] + ["0"] * 10 + [str(ticks), "0"] + ["0"] * 23 + [str(core)]
+        with open("%s/%s/task/%s/stat" % (d, pid, tid), "w") as f:
+            f.write("%s (%s) %s" % (tid, name, " ".join(fields)))
+
+    def test_busiest_thread_and_core_load_between_two_lines(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pipbox_health", os.path.join(os.path.dirname(HERE), "install", "pipbox_health.py"))
+        h = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(h)
+        nl = chr(10)
+        d = tempfile.mkdtemp()
+        with open(d + "/stat", "w") as f:
+            f.write("cpu  0 0 0 0 0 0 0 0" + nl + "cpu0 100 0 0 900 0 0 0 0" + nl + "cpu1 100 0 0 900 0 0 0 0" + nl)
+        self.put(d, 10, 10, "sbf3_lq:src", 1000, 1)
+        self.put(d, 10, 11, "mux:src", 100, 0)
+        with mock.patch.object(h, "PROC", d), mock.patch.object(h, "_prev", [None]):
+            self.assertEqual(h.cpu_text(), "cores=? hot=?")                                        # die erste Zeile hat keinen Vergleich
+            with open(d + "/stat", "w") as f:
+                f.write("cpu  0 0 0 0 0 0 0 0" + nl + "cpu0 150 0 0 950 0 0 0 0" + nl + "cpu1 1100 0 0 900 0 0 0 0" + nl)
+            self.put(d, 10, 10, "sbf3_lq:src", 1500, 1)
+            self.put(d, 10, 11, "mux:src", 101, 0)
+            with mock.patch.object(h.time, "monotonic", return_value=h._prev[0][0] + 5.0):
+                out = h.cpu_text()
+        self.assertEqual(out, "cores=50/100 hot=sbf3_lq:src:100%@1")                           # 500 Takte in 5 s = ein ganzer Kern
+
+
 class AutoStartTests(unittest.TestCase):
     """Automatisch live gehen nach dem Start der Box: einmal pro Start, nur mit sendender Kamera, abbrechbar."""
 

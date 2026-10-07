@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.9.122 (Beta)
+- **Neu: Die Protokolle zeigen jetzt, was die Box auslastet und was die Sendekette tut** (zur Fehlersuche, zum Beispiel Issue #35). Neue Abschnitte:
+  - **Auslastung je Kern und je Dienst (Momentaufnahme über 2 s):** Last jedes Kerns in %, die Dienste nach Last (100 % = ein ganzer Kern), und die Threads mit der größten Last samt Kern, auf dem sie zuletzt liefen.
+  - **System: Druck, freier Platz, Speicherbedarf:** Druck auf CPU, Speicher und Datenträger (PSI), freier Platz, die Prozesse mit dem größten Speicherbedarf.
+  - **Netzwerk-Zähler (seit dem Start):** Pakete, Fehler und verworfene Pakete je Netzwerkkarte, dazu die Verbindungsübersicht.
+  - **Ereignisse der Sendekette (belacoder):** wann ein Kamerazweig gestartet wurde und mit welchem Zeitversatz er an die Uhr der Sendekette angelegt wurde („Aligned … offset … ms“). Der Sender legt diese festen Meldungen (ohne Adressen und Schlüssel) in `/run/pipbox-send/belacoder-events.txt` ab.
+  - **nginx: letzte Fehler** (zum Beispiel „stream not found“) und **Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)**: nur Fehler- und Warnzeilen zu Videodekoder, Speicher, Temperatur und USB, nicht das normale Startprotokoll.
+  - **Zustandsprotokoll (alle 10 s):** jede Zeile nennt jetzt die Last je Kern seit der vorigen Zeile (`cores=25/11/10/…`, in %) und die Threads mit der größten Last (`hot=sbf3_lq:src:99%@5`, Name, Last, Kern). So sieht man auch hinterher, welcher Thread zu welchem Zeitpunkt einen Kern voll gemacht hat.
+  - Tests: `tools/test_logs.py` (4 neue Tests mit einem nachgebauten `/proc`), `tools/test_ui_backend.py` (Zustandsprotokoll),, `tools/test_send_hardening.py` (Ereigniszeilen). Auf einer Box (0.9.121) einmal laufen lassen und die Ausgaben angesehen. Die englischen Texte stehen in `web/i18n/en.json`, die anderen Sprachen folgen mit der nächsten Übersetzungsrunde.
+
 ## 0.9.121 (Beta)
 - **Neu geordnet: Hauptmenü und Karte „Kameras“.** Reihenfolge nach „Status“: **Verbindungen**, **SRTLA: Server, Bitrate und Latenz**, **Kameras**, dann „Bildaufbau: Kameras, Bild-in-Bild, Positionen“ und der Rest wie bisher.
   - Die Karte „Kameras“ hat Untermenüs, standardmäßig zugeklappt: **Aktive Kameras** (vorher „RTMP-Kameras“, mit Liste und Hauptverbindung), **Neue RTMP-Kamera anlegen** (Name, Schlüssel, „Kamera hinzufügen“, QR-Code), **DJI-Kameras (Bluetooth)** und **HDMI- und USB-Kameras**. Ganz am Ende steht als eigenes Untermenü **Akku-Warnung im Twitch-Chat (nur bei DJI)** (vorher im DJI-Menü).
