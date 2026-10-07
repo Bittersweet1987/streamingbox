@@ -281,6 +281,56 @@ def rtmp_inputs(xml=None):
     return ("\n".join(rows) + "\n") if rows else "(keine Streams)\n"
 
 
+def rtmp_clients(xml=None):
+    """Verbindungen am RTMP-Eingang, auch solche, die nichts liefern: Adresse der Gegenstelle, Programm (flashver), sendet oder schaut, Dauer, abgeworfene
+    Bilder. Eine Kamera, die sich verbindet und nichts schickt (zum Beispiel eine GoPro), erscheint nur hier. Adressen und Schlüssel bereinigt der Bereiniger."""
+    if xml is None:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(RTMP_STAT, timeout=3) as r:
+                xml = r.read(2_000_000).decode("utf-8", "replace")
+        except Exception as e:
+            return "(nicht lesbar: %s)\n" % type(e).__name__
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml)
+    except Exception:
+        return "(Statistik nicht auswertbar)\n"
+    rows = []
+    for st in root.iter("stream"):
+        name = (st.findtext("name") or "?").strip()
+        for cl in st.iter("client"):
+            def f(tag):
+                return (cl.findtext(tag) or "").strip() or "?"
+            role = "sendet" if cl.find("publishing") is not None else "schaut"
+            rows.append("%-28s %-16s %-6s Programm %-24s seit %s ms  abgeworfen %s  AV-Versatz %s ms" % (name, f("address"), role, f("flashver")[:24], f("time"),
+                                                                                                     f("dropped"), f("avsync")))
+    return ("\n".join(rows) + "\n") if rows else "(keine Verbindungen)\n"
+
+
+def hotspot_report():
+    """Hotspot der Box (zum Beispiel für eine GoPro): Zustand des Zugangspunkts, angemeldete Geräte, vergebene Adressen und die Zeilen zu An- und Abmeldung
+    aus dem Journal. Ohne Passwort (der Zugangspunkt meldet es nicht; Namen und Adressen bereinigt der Bereiniger)."""
+    out = []
+    for line in run(["nmcli", "-t", "-f", "DEVICE,CONNECTION", "dev"], 8).splitlines():
+        dev, _, con = line.partition(":")
+        if not con.startswith("pipbox-hotspot-") or not re.fullmatch(r"[A-Za-z0-9._-]{1,15}", dev):
+            continue
+        out.append("%s:\n%s" % (dev, run(["wpa_cli", "-i", dev, "status"], 8)))
+        sta = [l for l in run(["wpa_cli", "-i", dev, "all_sta"], 8).splitlines()          # je Gerät nur das Wesentliche (Zustand, Empfang, Dauer)
+               if re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", l.strip()) or re.match(r"(flags|signal|connected_time|inactive_msec|rx_packets|tx_packets)=", l)]
+        out.append("Angemeldete Geräte (wpa_cli all_sta):\n" + ("\n".join(sta) or "(keine)"))
+        out.append("Nachbarn (ip neigh):\n" + (run(["ip", "neigh", "show", "dev", dev], 8).strip() or "(keine)"))
+        out.append("Vergebene Adressen:\n" + (tail_file("/var/lib/NetworkManager/dnsmasq-%s.leases" % dev, 20).strip() or "(keine)"))
+    if not out:
+        return "(kein Hotspot der Box aktiv)\n"
+    lines = [l for l in run(["journalctl", "-u", "wpa_supplicant", "-u", "NetworkManager", "--no-pager", "-o", "short-iso", "-n", "600"], 15).splitlines()
+             if re.search(r"(?i)AP-STA|\bSTA\b|deauth|disassoc|assoc|DHCP|dnsmasq-dhcp|hotspot", l)
+             and not re.search(r"Reject scan|Failed to initiate AP scan", l)]
+    out.append("Anmeldungen und Abmeldungen (Journal, letzte Zeilen):\n" + ("\n".join(lines[-60:]) or "(keine)"))
+    return "\n".join(out) + "\n"
+
+
 NL = chr(10)
 H264_PROFILES = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High", 110: "High 10", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
 
@@ -872,6 +922,8 @@ def sections():
            ("Sendewege (srtla_send)", tail_file("/run/pipbox-send/srtla-links.txt", 40)),
            ("Regler (belacoder, letzte Zeilen)", tail_file("/run/pipbox-send/belacoder-stats.txt", 40)),
            ("Kameras am Eingang (nginx-Statistik)", rtmp_inputs()),
+           ("Verbindungen am RTMP-Eingang (auch ohne Bild, zum Beispiel GoPro)", rtmp_clients()),
+           ("Hotspot der Box (angemeldete Geräte, Adressen, An- und Abmeldungen)", hotspot_report()),
            ("Bildaufbau der Sendekette (belacoder: Bilder je Sekunde und Rückstand je Zweig, Warnungen)", tail_file("/run/pipbox-send/belacoder-live.txt", 60)),
            ("Stream-Prüfung der Quellen (erste 5 Sekunden jedes Eingangs: Codec, Profil, Bildzeiten, B-Bilder, Ton)", stream_probe()),
            ("Dekoder-Ausgang je Quelle (Probe-Dekodierung, erste 4 Sekunden: Format, Größe, Bildrate, Speicherart)", decoder_probe()),
