@@ -180,8 +180,20 @@ ACTION2_NAME = "Osmo Action 2"                     # Fernsteuerung klappt laut M
 # 4250 bis 4300 im Batteriebetrieb); Bytes 5 bis 8 = Strom aus dem Akku in mA (vorzeichenbehaftet, Little Endian): etwa -650 bis -1100,
 # solange die streamende Kamera aus dem Akku läuft, 0 bis -5, sobald das Kabel steckt (positiv wäre Laden). Maßgeblich ist der Strom, nicht
 # ein einzelnes Byte (Byte 2 allein wechselt nur, wenn die Spannung eine Stufengrenze überquert).
-# Für andere Modelle ist es nicht bekannt: dort bleibt "lädt" unbekannt (None), nie geraten.
-POWER_FROM_CURRENT = {"action4": (5, -100)}      # (Byte der Stromangabe, Schwelle in mA): darüber hängt die Kamera am Strom (lädt oder wird versorgt)
+# Osmo Action 5 Pro und Osmo Action 6 (6. Okt 2026, Kabel je einmal abgezogen und angesteckt, Journal der Box): dieselbe Stelle (Bytes 5 bis 8,
+# int32 Little Endian), derselbe Verlauf: aus dem Akku etwa -600 bis -770 mA, beim Anstecken kurz um 0 (-54), am Kabel positiv (+700 bis +4400 mA; die Kamera
+# lädt dann). Dieselbe Schwelle (-100 mA) trennt beides. Je Modell nur ein Versuch; beim Abziehen wechselten außerdem Byte 28 (0x60 -> 0x20) und Byte 32
+# (2 -> 0, beim Anstecken 1, dann 2), das wird hier nicht benutzt.
+# Für andere Modelle (auch die Osmo 360, die ebenfalls "action5" heißt) ist es nicht bekannt: dort bleibt "lädt" unbekannt (None), nie geraten.
+POWER_FROM_CURRENT = {"action4": (5, -100), "action5": (5, -100), "action6": (5, -100)}      # (Byte der Stromangabe, Schwelle in mA): darüber hängt die Kamera am Strom (lädt oder wird versorgt)
+POWER_NOT_KNOWN_MODELS = ("360",)                # Namensteile von Modellen, für die die Stelle nicht gemessen wurde (teilen sich die Art mit einem bekannten)
+
+
+def power_spec(cfg):
+    """(Byte, Schwelle) für die Ladeerkennung dieser Kamera oder None (Modell, bei dem sie nicht gemessen wurde)."""
+    if any(m in str(cfg.get("model", "")) for m in POWER_NOT_KNOWN_MODELS):
+        return None
+    return POWER_FROM_CURRENT.get(cfg_kind(cfg))
 
 RESOLUTIONS = {"480p": 0x47, "720p": 0x04, "1080p": 0x0A}
 FPS = {25: 2, 30: 3}
@@ -628,7 +640,7 @@ class Camera:
             if msg.type == TY_STATUS and len(msg.payload) >= 21:
                 self.battery = msg.payload[20]
                 self.battery_at = time.time()
-                spec = POWER_FROM_CURRENT.get(cfg_kind(self.cfg))
+                spec = power_spec(self.cfg)
                 if spec and len(msg.payload) >= spec[0] + 4:
                     self.charging = struct.unpack_from("<i", bytes(msg.payload), spec[0])[0] > spec[1]
                 # Zur Klärung bei anderen Modellen: Ändert sich ein Byte der Statusnachricht (außer dem Akkustand), das nicht ständig schwankt,

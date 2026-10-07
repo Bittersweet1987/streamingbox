@@ -2,7 +2,9 @@
 
 **Webseite:** [irl4you.de](https://irl4you.de) · **Discord:** [Community beitreten](https://discord.gg/nrBCEarMup) (Fragen, Fehler, Ideen)
 
-**Version 0.9.85 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP und DJI per Bluetooth), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, Upload über mehrere Leitungen (SRTLA), Software-Update und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+**Version 0.9.115 (Beta).** Zusatzpaket für eine BELABOX mit eigener Weboberfläche: Kameras (RTMP, DJI per Bluetooth, HDMI-Eingang), Bild-in-Bild mit bis zu vier Kameras, Hauptbild wechseln, "Alle Kameras immer bereit" (Beta), Upload über mehrere Leitungen (SRTLA), Fernzugriff über Tailscale, Software-Update, 14 Sprachen, Ansicht für das Handy und mehr. Es läuft **getrennt von der Original-Oberfläche** der BELABOX.
+
+> **Beta heißt:** Es läuft im Alltag, aber noch nicht alles ist über lange Zeit und unterwegs geprüft (siehe "Was noch fehlt oder ungetestet ist"). Neue Versionen gibt es oft; zurück auf eine frühere Version geht in der Oberfläche.
 
 ## Installation auf der Box
 
@@ -49,10 +51,8 @@ Stromausfall unbrauchbar machen. Nur ohne laufende Übertragung und mit stabiler
 
 ## Stand und Test
 
-Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4,
-Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 13 Mbit/s, die Box war dabei zu rund 70 Prozent im
-Leerlauf (CPU im Mittel etwa 25 bis 30 Prozent, 35 bis 37 °C). Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
-ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN").
+Getestet auf einer Orange Pi 5 Plus (BELABOX-Image) mit vier DJI-Kameras (zwei Osmo Action 4, Action 5 Pro, Action 6) gleichzeitig: Hauptbild und drei kleine Bilder bei rund 11 bis 13 Mbit/s. Ein Dauertest über gut acht Stunden am 4. Oktober 2026 lief mit allen vier Kameras
+ohne Aussetzer und ohne Neustart der Sendekette, nachdem das Kamera-WLAN auf WPA2 und 5 GHz umgestellt war (siehe "Hinweise zum Kamera-WLAN"). Am 6. Oktober 2026 wurde eine **frisch aufgespielte Box** mit dem Installationsbefehl unten eingerichtet (Installation, Update, Tailscale, vier Kameras, Twitch-Warnung liefen). Mit der neuen Engine für "Alle Kameras immer bereit" und vier Kameras im Bild lag die Auslastung bei etwa 18 bis 21 Prozent (vorher 26 bis 30 Prozent im normalen Modus mit zwei Kameras im Bild); über drei Mobilfunkwege lag der Anteil an Neuübertragungen in einem kurzen Test (40 Sekunden) bei etwa 1,6 Prozent. Ein längerer Fahrtest unterwegs steht noch aus.
 Auf der Radxa ROCK 5B+ wurde nur ein älterer Stand getestet (0.9.10).
 
 Das Paket ändert nur eine Einstellung des RTMP-Servers der BELABOX (Leerlaufgrenze für Kameras, mit Sicherung und Rückweg; ein kleiner apt-Haken stellt sie nach einem Update des BELABOX-Pakets wieder her) und sonst keine
@@ -70,6 +70,8 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
   (Ethernet, USB-Router, Modem) mit einmal eingetragenem und gespeichertem WLAN der Kamera. Pro Kamera Auflösung, fps, Bitrate und Stabilisierung.
   Ein eigener Dienst (`pipbox-dji`, Bibliothek `bleak`) hält die Verbindungen, verbindet nach Ausfällen neu, überwacht, ob der Stream ankommt, und
   verbindet mehrere Kameras nacheinander (gleichzeitig bricht auf dem Funkchip ab).
+- **Alle Kameras immer bereit (Beta, Schalter im Bildaufbau bei "Bild in Bild", standardmäßig aus):** Jedes Bildfeld hat immer einen Eingang. Kameras können jederzeit dazukommen, ausfallen und zurückkehren, ohne dass die Sendung neu startet; ohne Kamera sendet die Box Schwarz und Stille. Fällt die Hauptkamera aus, übernimmt die nächste, kehrt die erste zurück, wird sie wieder Hauptbild. Tauschen, Größe, Ecke, Ton, Stumm und Verzögerung gehen im Betrieb. Fußleiste und Tonwahl zeigen nur Kameras mit Bild. Technik: Seit 0.9.114 die **Compositor-Engine von Bittersweet1987** (eine feste Pipeline mit vier Kamera-Zweigen, belacoder-Patch `belacoder/belacoder-live-feeds.patch`, GPL-3.0, Steuerung `pipbox_live.py`); fehlt ein belacoder mit `-sb10` oder neuer, läuft ersatzweise die frühere Zubringer-Variante (`pipbox_always.py`, braucht `gst-launch-1.0`). Fehlt beides, läuft die Sendung im normalen Modus weiter und die Karte "Live" nennt den Grund. Bekannte Grenzen (laut Bittersweet1987): beim Tauschen steht das Bild etwa 1 Sekunde, der DJI-Ton hat bei stoßweiser Ankunft 1 bis 2 Sekunden Lücken.
+- **DJI: Akku, Ladeanzeige, Verbindung:** Der Akkustand aller DJI-Kameras steht im Status; das Steckersymbol 🔌 zeigt "am Ladekabel" bei der Osmo Action 4, der Osmo Action 5 Pro und der Osmo Action 6 (bei anderen Modellen unbekannt). Beim Einrichten gibt es **Netze in der Nähe** zur Auswahl. Die gewählte Verbindung (zum Beispiel der mobile Router) merkt sich die Box über die Hardware-Adresse der Netzwerkkarte und wechselt nicht ins Heimnetz, auch wenn sich Netzwerknamen (`eth0`, `eth1`) nach einem Neustart vertauschen; ist sie nicht da, gibt es einen klaren Fehler.
 - **SRTLA-Serverliste:** mehrere Server speichern und per Auswahl umschalten (Stream-ID wird nie angezeigt).
 - **Pipeline:** eine Kamera oder Bild-in-Bild mit bis zu drei kleinen Bildern (vier Kameras), Ecke und Größe wählbar, Ton von
   jeder Kamera. Die kleinen Bilder lassen sich in einer Vorschau frei verschieben (oder als Ecke wählen). Je kleinem Bild lassen sich Skalierung (1 bis 100 %), Ein-/Ausblenden, Beschnitt (Pixel links, rechts, oben, unten, bezogen auf 1920 x 1080), Eckenrundung und ein Rahmen (Dicke, Farbe, Deckkraft) einstellen; die Vorschau zeigt es sofort. Das Hauptbild liest der Baustein dafür nur dort, wo etwas durchscheinen muss. Ein kleiner eigener GStreamer-Baustein (`gst/`) schreibt die kleinen Bilder in einem Durchgang direkt in
@@ -89,6 +91,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **Box ausschalten:** Herunterfahren und Neu starten direkt in der Oberfläche (Root-Helfer mit fester Liste, Protokoll wird vorher sauber geschlossen).
 - **Details im Status:** zugeklappt, auf Wunsch: Senden (Bitrate, RTT, Sendepuffer, Neuübertragungen, Paketverlust, Encoder-Bilder), Prozessor (je Kern, GPU, NPU), Temperaturen, Speicherplatz.
 - **Erreichbarkeit und Sicherheit:** Die Oberfläche (Port 8780) nimmt nur Anfragen aus privaten Netzen, Loopback und Tailscale an, öffentliche Adressen werden abgewiesen. Begrenzt sind Verbindungen (64 gesamt, 16 je Absender), Wartezeit (15 s) und gleichzeitige Passwortprüfungen (2); die Sperre nach 5 Fehlversuchen greift auch bei gleichzeitigen Anmeldungen. **Im Netz, über das die Box sendet (z. B. fremdes WLAN), ist die Verbindung unverschlüsselt (HTTP):** Dort die Oberfläche nur über Tailscale (HTTPS) benutzen. Wer das nicht will, schaltet in der Karte "Verbindungen" den Schalter "Über fremde WLANs sperren" ein (Schutz vor dem Aussperren eingebaut).
+- **Über fremde WLANs sperren** (Karte "Verbindungen", Bereich "Zugriff auf diese Oberfläche"): Schalter, der den Zugriff über die Netze sperrt, über die die Box sendet (zum Beispiel ein fremdes WLAN), weil die Verbindung dort unverschlüsselt ist (HTTP). Der Zugriff über Tailscale (HTTPS) und das Heimnetz bleibt.
 - **Fernzugriff (freiwillig):** Über Tailscale von unterwegs, standardmäßig nur im privaten Netz (nur Geräte in Ihrem Tailscale-Konto). Einrichten direkt in der
   Oberfläche; Anleitung: [ANLEITUNG-Fernzugriff.md](ANLEITUNG-Fernzugriff.md). Wer auch **ohne Tailscale-App** von überall zugreifen will, kann auf
   ausdrücklichen Knopfdruck **Funnel** einschalten (öffentlich im Internet, nur durch das BELABOX-Passwort geschützt, rote Warnung, bleibt bis zum Beenden an, auch nach einem Neustart).
@@ -116,7 +119,7 @@ vorhandene BELABOX-Passwort (nur ohne belaUI, etwa in der Entwicklung, gilt ein 
 - **HDMI-Kamera** (Karte "Kameras", Abschnitt "HDMI- und USB-Kameras"): Der HDMI-Eingang der Box (z. B. eine DJI Action 5 per USB-C-HDMI-Kabel) wird als Kamera "HDMI" in die Box eingespeist (Hardware-Kodierung, H.264) und ist wie jede Kamera wählbar: Hauptbild, kleines Bild, Notbetrieb. Schalter "Als Kamera senden", Bitrate, Bildrate und Ton (HDMI-Ton oder ohne) einstellbar. Eigener Dienst `pipbox-hdmi` (root), startet bei Signal und nach Ausfall von selbst. **Mit einer echten Action 5 nur als Probelauf geprüft** (Befehlskette und der Dienst aus einem Temp-Ordner: etwa 40 % eines Kerns bei 1080p60 auf 30 fps, 30 fps am Ausgang), nicht als eingerichteter Dienst und nicht über die Oberfläche; Verzögerung ungemessen. USB-Kameras fehlen noch.
 - **Akku-Warnung im Twitch-Chat** (Karte "Kameras", Bereich "DJI-Kameras"): Fällt der Akku einer per Bluetooth verbundenen DJI-Kamera unter die Schwelle (Standard 10 %), schreibt ein Bot eine Nachricht in den Chat (Twitch-IRC wie NOALBS, Token mit dem Recht "chat:edit"). Kanal und Bot-Konto sind getrennt (das Bot-Konto kann ein zweites Konto sein), die Nachricht ist einstellbar ({Kamera}, {Prozent}), mit Test-Knopf. Der Token liegt nur auf der Box (`twitch.json`, Rechte 0600) und nicht in der Einstellungssicherung. **Nicht mit echtem Twitch geprüft** (nur gegen einen lokalen Testserver). Eine Kamera nur am HDMI-Kabel meldet keinen Akku.
 - **Nur Akkustand lesen** (DJI-Kamera, Schalter in ihrer Karte): Für eine Kamera, die per HDMI sendet, liest die Box nur per Bluetooth den Akkustand (Status, Twitch-Warnung). Mit einer echten Action 5 (HDMI) geprüft: Der Akkustand kommt per Bluetooth.
-- **Sprachen** (beim ersten Öffnen, im Kopf und in der Karte "Language"): Englisch (Standard), Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Texte, Datum und Uhrzeit folgen der Sprache. **Außer Deutsch maschinell übersetzt, nicht von Muttersprachlern geprüft.** Verbessern oder neue Sprache: `web/i18n/README.md`.
+- **Sprachen** (beim ersten Öffnen und im Kopf der Seite; Hell und Dunkel mit Sonne/Mond im Kopf): Englisch (Standard), Deutsch, Französisch, Spanisch, Portugiesisch (Brasilien), Italienisch, Niederländisch, Polnisch, Türkisch, Russisch, Chinesisch (vereinfacht), Japanisch, Koreanisch, Thai. Texte, Datum und Uhrzeit folgen der Sprache. **Außer Deutsch maschinell übersetzt, nicht von Muttersprachlern geprüft.** Verbessern oder neue Sprache: `web/i18n/README.md`.
 - **Protokolle herunterladen** (Karte "Protokolle", Knopf "Protokolle herunterladen"): eine Textdatei mit den Meldungen der Box für die Fehlersuche
   oder ein GitHub-Issue. Passwörter, Stream-ID, Servername, WLAN-Namen sowie IP- und MAC-Adressen werden vorher durch Platzhalter ersetzt (vor dem Weitergeben
   trotzdem kurz durchsehen).
@@ -137,6 +140,7 @@ DJI-Kameras setzen im WLAN gelegentlich für einige Sekunden mit den Daten aus. 
 - **RTMP-Leerlaufgrenze:** Der RTMP-Server der BELABOX wirft eine Kamera, die 4 Sekunden lang nichts schickt, aus dem Bild (`drop_idle_publisher 4s`); jedes Mal startet der Encoder dann neu. Dieses Paket setzt
   die Grenze auf 15 Sekunden (mit Sicherung `99-belabox-rtmp.conf.vor-pipbox`) und stellt sie nach einem Update des BELABOX-Pakets per apt-Haken wieder her. Die Aussetzer der Kamera selbst beseitigt das nicht, sie
   laufen nur durch, ohne dass etwas neu startet.
+- **Sendewege nicht im Kamerafunk:** Beobachtung vom 6. Oktober 2026 (nicht bewiesen): Lag der Hotspot eines Handys als Sendeweg auf demselben 5-GHz-Kanal wie das Kamera-WLAN, stiegen Laufzeitspitzen und Neuübertragungen; mit einem zusätzlichen Weg über ein anderes Band (2,4 GHz) sanken sie wieder. Besser sind Sendewege **per Kabel** (USB-Tethering, Router per Ethernet) oder auf einem anderen Band.
 - **Ampeln:** In der Karte "Status" zeigt die Ampel der Kameras, ob eine Kamera im Bild ist (grün), gerade wieder aufgenommen wird (gelb) oder fehlt (rot). Die Ampel der Sendewege zeigt, welcher Weg trägt (grün),
   in Reserve steht (gelb) oder fehlt (rot).
 
@@ -165,12 +169,12 @@ Die eingebauten Bluetooth-Module der Boxen empfangen schlecht, darum ist ein USB
 - Langzeitstabilität über mehr als acht Stunden und mit mehreren Kameras im Dauerbetrieb im Freien. Es gab unerklärte Totalausfälle der Box (zuletzt zwei in der Nacht zum 2. Oktober 2026, ohne
   Fehlermeldung im Protokoll); Verdacht: Stromversorgung, wenn ein USB-Router am USB-C-Port der Box hängt, nicht bewiesen. Auf der Orange Pi 5 Plus lief der aktuelle Stand zuletzt über Stunden ohne Ausfall.
 - Ungetestet: Pocket 3 und weitere DJI-Modelle (Protokoll vorhanden, nie mit echter Kamera). Eine neue oder zurückgesetzte Kamera muss im Kopplungsmodus sein und die Kopplungsabfrage bestätigen.
-- Sprachen: nur im Browser mit Demo-Werten geprüft (Vollständigkeit, Zeilenumbrüche), nicht von Muttersprachlern und nicht auf echten Handys in jeder Sprache. Zusammengesetzte Texte können in einzelnen Fällen noch deutsch oder englisch bleiben.
-- Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") wurde bisher nur zu Hause getestet, wo einer der drei Wege das Heimnetz zum Empfänger ist (1 ms) und kaum über DSL läuft. Ein
-  schwächerer Weg neben einem guten, etwa Starlink neben 5G, ist nicht geprüft. Gleiches gilt für unterwegs über Stunden.
+- Sprachen: nur im Browser mit Demo-Werten geprüft (Vollständigkeit, Zeilenumbrüche), nicht von Muttersprachlern und nicht auf echten Handys in jeder Sprache. Zusammengesetzte Texte können in einzelnen Fällen noch deutsch oder englisch bleiben. Die Sprachdateien werden einmal am Ende einer Reihe von Versionen nachgezogen.
+- Mehrere Sendewege: Der Mindestanteil je Weg (10 Prozent bei "alle") und die Umordnungstoleranz 47 am Empfänger sind für **einen klar besseren Weg plus schwächere Zusatzwege** abgestimmt. Zu Hause (schneller DSL-Weg plus Mobilfunk) war das lange erprobt, über **drei Mobilfunkwege** gab es bisher nur einen kurzen Test (siehe "Stand und Test"). Starlink neben 5G ist nicht geprüft. Sind alle Wege gleich unruhig, steigen die Neuübertragungen.
+- **Alle Kameras immer bereit** (Compositor-Engine) ist neu (0.9.114): bisher einige Stunden Betrieb mit vier Kameras, aber noch kein langer Lauf und keine Fahrt. Frühere Berichte über Abstürze einer Box mit der Zubringer-Variante (0.9.112) sind nicht geklärt; ob die neue Engine sie behebt, ist eine begründete Vermutung, nicht bewiesen. Der Schalter bleibt deshalb standardmäßig aus.
+- **HDMI-Kamera, Akku:** "Nur Akkustand lesen" ist nur mit der Osmo Action 5 (Pro) getestet, **nicht mit der Action 6**. Die Ladeanzeige 🔌 ist je Modell mit einem Versuch gemessen (Action 4, 5 Pro, 6); die Osmo 360 ist ausgenommen.
 - Die Action 5 Pro und die Action 6 fallen im WLAN öfter aus als die beiden Action 4 (Ursache offen: Kamera, Firmware oder Funkumgebung).
-- Geplant, nicht gebaut: Überblendung beim Wechsel zwischen Hauptbild und kleinem Bild (heute ein harter Schnitt, ohne den Tausch ohne Unterbrechung kostet er etwa 5 Sekunden Bild), eigene
-  Empfangsprozesse je Kamera, damit ein Kameraausfall den Encoder nicht anhält, und USB-Kameras als Quelle.
+- Geplant, nicht gebaut: Überblendung beim Wechsel zwischen Hauptbild und kleinem Bild (heute ein harter Schnitt) und USB-Kameras als Quelle. Eigene Empfangsprozesse je Kamera sind mit der Engine für "Alle Kameras immer bereit" erledigt. Für **GoPro**-Kameras gibt es nur eine Notiz (`NOTIZ-GoPro-Integration.md`), keinen Code.
 
 Siehe [KONZEPT.md](KONZEPT.md) und [CHANGELOG.md](CHANGELOG.md).
 
@@ -199,5 +203,5 @@ alles erneut.
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE) und [NOTICE.md](NOTICE.md) (enthält die Lizenzen von Moblin, dessen DJI-Protokoll hier
-nachgebaut wurde, und vom DJI-Dienst, dessen Ablauf übernommen wurde). **Ausnahme:** Der Ordner `srtla/` (Patch auf BELABOX/srtla und der damit gebaute Sender) steht unter
-AGPL-3.0, wie das Original.
+nachgebaut wurde, und vom DJI-Dienst, dessen Ablauf übernommen wurde). **Ausnahmen:** Der Ordner `srtla/` (Patch auf BELABOX/srtla und der damit gebaute Sender) steht unter
+AGPL-3.0, wie das Original. Der Ordner `belacoder/` (Patches auf BELABOX/belacoder, darunter der Patch von Bittersweet1987 für die Kamera-Zweige) und das damit gebaute Programm stehen unter GPL-3.0, wie das Original; die Kernel-Quellen in `bluetooth-src/` unter GPL-2.0. Einzelheiten in [NOTICE.md](NOTICE.md).
