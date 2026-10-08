@@ -81,9 +81,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .chatbox .cn[style*="--nc"]{color:color-mix(in srgb,var(--nc) 72%,var(--text))}        /* dunkle Namensfarben (z. B. Blau) bleiben auf dem dunklen Hintergrund lesbar */
 .chatform input{font-size:16px}                                                         /* iOS zoomt sonst beim Antippen in die Seite */
 .camdots .dot{flex:none}
-#c_chat>summary{gap:6px}                                              /* ⚙ bleibt immer in der ersten Zeile */
+#c_chat>summary{flex-wrap:nowrap;gap:6px}                                              /* ⚙ bleibt immer in der ersten Zeile */
 #c_chat>summary .sumh{white-space:nowrap}
-#c_chat>summary{flex-wrap:wrap;row-gap:4px}                                              /* die Pfeile dürfen in die zweite Zeile umbrechen, das ⚙ bleibt in der ersten */
 .sig.stale,.sig.stale.ok,.sig.stale.warn,.sig.stale.crit{color:var(--muted)}
 .chattoast{margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
 .chatoptbtn{margin-left:auto;padding:2px 9px;line-height:1.3}
@@ -395,10 +394,8 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 .autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
 [data-pbhide]{display:none!important}
 .optlist{margin:8px 0}.optgrp{margin:0 0 2px}
+.ordrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0}.ordrow.off{color:var(--muted)}.ordrow .mvs{display:inline-flex;gap:4px;flex:none}
 .optrow{display:flex;align-items:center;gap:8px;padding:5px 0;line-height:1.35;cursor:pointer}.optrow.sub{padding-left:26px}.optrow input{flex:none}
-details.card>summary .sumr{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex:none}
-#c_chat>summary .sumr{margin-left:0}
-.sumr .mvs{display:inline-flex;gap:4px}
 #pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
@@ -690,10 +687,14 @@ details.card>summary .sumr{display:inline-flex;align-items:center;gap:8px;margin
   </details>
 
   <details class="card wide" id="c_layout"><summary><span class="sumh">Optionen</span></summary>
-    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Hauptmenüs lassen sich mit ▲ ▼ oben rechts verschieben. Auswahl und Reihenfolge werden in diesem Browser gemerkt.</div>
+    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Reihenfolge der Hauptmenüs legen Sie darunter fest. Auswahl und Reihenfolge werden in diesem Browser gemerkt.</div>
     <details class="subsec" id="opt_menus"><summary>Menüpunkte anzeigen</summary>
       <div id="lay_list" class="optlist"></div>
-      <div class="actions"><button type="button" id="lay_showall" class="sec">Alle einblenden</button> <button type="button" id="lay_reset" class="sec">Reihenfolge der Hauptmenüs zurücksetzen</button></div>
+      <div class="actions"><button type="button" id="lay_showall" class="sec">Alle einblenden</button></div>
+    </details>
+    <details class="subsec" id="opt_order"><summary>Reihenfolge der Hauptmenüs</summary>
+      <div id="ord_list" class="optlist"></div>
+      <div class="actions"><button type="button" id="lay_reset" class="sec">Reihenfolge zurücksetzen</button></div>
     </details>
   </details>
 
@@ -2706,7 +2707,7 @@ $("chat_form").addEventListener("submit",async e=>{
   document.addEventListener("click",()=>{ if(on&&!lock&&!vid) acquire(); },{once:false});                // ein Fingertipp genügt, falls der Browser den Start ohne Geste verweigert hat
 })();
 
-// ---- Hauptmenüs verschieben (▲ ▼) und Menüpunkte ausblenden (Optionen); je Browser gemerkt, Standard unverändert ----
+// ---- Hauptmenüs: Reihenfolge (▲ ▼) und Menüpunkte ausblenden, beides unter Optionen; je Browser gemerkt, Standard unverändert ----
 (function(){
   const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]};
   try{ const v=JSON.parse(localStorage.getItem(KEY)||"{}")||{};
@@ -2726,7 +2727,7 @@ $("chat_form").addEventListener("submit",async e=>{
   function applyHidden(){
     document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
     st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&hideable(id)) e.setAttribute("data-pbhide",""); });
-    arrows();
+    buildOrder();
   }
   function buildList(){
     const box=$("lay_list"); box.textContent="";
@@ -2735,34 +2736,33 @@ $("chat_form").addEventListener("submit",async e=>{
     movables().filter(el=>hideable(el.id)).forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);       // je Karte eine Gruppe mit ihren Bereichen darunter
                              el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true)); box.appendChild(g); });
   }
-  function arrows(){
-    const vis=movables().filter(e=>!e.hasAttribute("data-pbhide"));
-    movables().forEach(el=>{ const i=vis.indexOf(el), m=el.querySelector(":scope>summary>.sumr>.mvs"); if(!m) return;
-                             m.children[0].disabled=i<=0; m.children[1].disabled=i<0||i>=vis.length-1; });
+  function buildOrder(focus){
+    const box=$("ord_list"), all=movables(); box.textContent="";
+    all.forEach((el,i)=>{ const r=document.createElement("div"); r.className="ordrow"+(el.hasAttribute("data-pbhide")?" off":"");
+      const t=document.createElement("span"); t.textContent=label(el); r.appendChild(t);
+      const m=document.createElement("span"); m.className="mvs";
+      for(const [dir,txt,tip] of [[-1,"▲","Menü nach oben schieben"],[1,"▼","Menü nach unten schieben"]]){
+        const b=document.createElement("button"); b.type="button"; b.className="mv"; b.dataset.id=el.id; b.dataset.dir=dir; b.textContent=txt; b.title=tip; b.setAttribute("aria-label",tip);
+        b.disabled=dir<0?i===0:i===all.length-1; m.appendChild(b); }
+      r.appendChild(m); box.appendChild(r); });
+    if(focus){ const mine=[...box.querySelectorAll("button.mv")].filter(x=>x.dataset.id===focus.id&&!x.disabled);                   // Fokus bleibt am verschobenen Menü (für die Tastatur)
+               const b=mine.find(x=>+x.dataset.dir===focus.dir)||mine[0]; if(b) b.focus(); }
   }
   function move(el,dir){
-    const vis=movables().filter(e=>!e.hasAttribute("data-pbhide")), i=vis.indexOf(el), o=vis[i+dir]; if(!o) return;
+    const all=movables(), o=all[all.indexOf(el)+dir]; if(!o) return;
     if(dir<0) main.insertBefore(el,o); else main.insertBefore(o,el);
-    st.order=movables().map(e=>e.id); save(); arrows(); try{ el.scrollIntoView({block:"nearest",behavior:"smooth"}); }catch(x){}
+    st.order=movables().map(e=>e.id); save(); buildOrder({id:el.id,dir});
   }
-  movables().forEach(el=>{                                                 // ▲ ▼ in der Titelzeile jedes Hauptmenüs
-    const s=el.querySelector(":scope>summary"); if(!s) return;
-    const w=document.createElement("span"); w.className="sumr";
-    s.querySelectorAll(":scope>.badge").forEach(b=>w.appendChild(b));      // Kennzeichen (Badge) bleibt rechts, die Pfeile daneben
-    w.insertAdjacentHTML("beforeend",'<span class="mvs"><button type="button" class="mv" data-mv="-1" title="Menü nach oben schieben" aria-label="Menü nach oben schieben">▲</button><button type="button" class="mv" data-mv="1" title="Menü nach unten schieben" aria-label="Menü nach unten schieben">▼</button></span>');
-    s.appendChild(w);
-  });
-  main.addEventListener("click",ev=>{
-    const b=ev.target.closest(".mv[data-mv]"); if(!b||b.disabled) return;
-    const el=b.closest("details.card[id]"); if(!el||el.parentNode!==main) return;
-    ev.preventDefault(); ev.stopPropagation(); move(el,+b.dataset.mv);
+  $("ord_list").addEventListener("click",ev=>{
+    const b=ev.target.closest("button.mv[data-id]"); if(!b||b.disabled) return;
+    const el=$(b.dataset.id); if(el) move(el,+b.dataset.dir);
   });
   $("lay_list").addEventListener("change",e=>{
     const c=e.target.closest("input[data-id]"); if(!c) return; const id=c.dataset.id, i=st.hidden.indexOf(id);
     if(c.checked&&i>=0) st.hidden.splice(i,1); if(!c.checked&&i<0) st.hidden.push(id); save(); applyHidden();
   });
   $("lay_showall").addEventListener("click",()=>{ st.hidden=[]; save(); applyHidden(); buildList(); });
-  $("lay_reset").addEventListener("click",()=>{ st.order=[]; save(); applyOrder(); arrows(); });
+  $("lay_reset").addEventListener("click",()=>{ st.order=[]; save(); applyOrder(); buildOrder(); });
   applyOrder(); applyHidden(); buildList();
 })();
 
