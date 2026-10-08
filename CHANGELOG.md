@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.134 (Beta)
+- **Neu: Moderation lässt sich ausschalten.** Hinter dem ⚙ in der Chat-Karte steht jetzt „Moderation ausschalten“, wenn sie an ist. Dann verschwinden sofort alle ⋯ und die Box nutzt die Rechte nicht mehr (auch die Befehle `/ban`, `/timeout` und `/unban` im Eingabefeld sind gesperrt). „Moderation einschalten“ schaltet sie ohne neue Anmeldung bei Twitch wieder ein; nur wenn der Zugang die Rechte nicht hat, ist wie bisher einmal die Bestätigung bei Twitch nötig. Der Schalter bleibt nach einem Neustart und nach der Erneuerung des Zugangs erhalten. **Wichtig:** Twitch lässt nicht zu, die Rechte eines Zugangs nachträglich zu verkleinern; sie fallen erst weg, wenn man sich abmeldet und neu ohne Moderation anmeldet.
+- **Amplitude am Rechner höher** (28 statt 20 Pixel, Zahlen 8 Pixel): Die „0“ war unten abgeschnitten, jetzt sind alle drei Zahlen ganz sichtbar. Die Regeln für schmale Handys (Skala aus, schmalerer Verlauf) wurden von einer Grundregel überschrieben und greifen jetzt wirklich.
+- Keine neue Anmeldung nötig; neue Texte in allen 14 Sprachen.
+
 ## 0.9.133 (Beta)
 - **Behoben: Die Zahlen links vom Verlauf der Amplitude waren am Rechner zu groß, die „0“ ragte unten aus dem Verlauf heraus.** Die Schrift ist kleiner (7 statt 9 Pixel), alle drei Zahlen stehen jetzt innerhalb der Höhe des Verlaufs.
 - **Chat, hinter dem ⚙: „Angemeldet als … · Moderation an“.** Man sieht jetzt, dass die Moderation schon eingeschaltet ist (der Knopf „Moderation einschalten“ verschwindet dann). Die Knöpfe ⋯ erscheinen an den Nachrichten **anderer** Zuschauer; an den eigenen Nachrichten des Streamers gibt es keine, weil Twitch das Löschen eigener Streamer-Nachrichten nicht zulässt.
