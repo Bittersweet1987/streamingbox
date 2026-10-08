@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.9.140 (Beta)
+- **Neu: kurze Hinweise bei Ausfällen, jeweils mit einem „i“ dahinter** (Issues #43 und #44: Der USB-WLAN-Adapter war der einzige Sendeweg und fiel aus, „disabled by hub (EMI?)“). Unter „Status“ steht eine Zeile mit Art und Uhrzeit (Ortszeit des Geräts, gestern: „gestern um 23:04“); ein Tipp auf das „i“ zeigt ein bis zwei Sätze, was man tun kann. Das „i“ gehört zu den Hilfe-Knöpfen und verschwindet mit ihnen (Optionen > Hilfe-Knöpfe).
+  - **„USB-WLAN-Adapter getrennt · um 23:04“** (auch Bluetooth-Adapter, Router, Kamera, sonstiges Gerät, je nach Produktname). Wurde der Anschluss durch Störung oder Spannungseinbruch abgeschaltet („EMI?“) oder meldet der Kernel Überstrom, steht dahinter **„Bitte Stromversorgung prüfen“**. Quelle ist das Kernel-Protokoll (ohne Rechte lesbar); die Ereignisse werden gemerkt (24 Stunden, höchstens zwei Meldungen) und überstehen einen Neustart des Dienstes. Fällt die ganze Box aus, sieht der Kernel das nicht (dafür gibt es den Abschnitt „Vorheriger Start“ in den Protokollen).
+  - **„DJI-Kamera ausgefallen“ / „Kamera ausgefallen“ mit Name und Uhrzeit:** eine Kamera, die seit dem Start des Dienstes gesendet hat und seit mehr als 20 Sekunden nicht mehr sendet (sechs Stunden lang; die Meldung verschwindet, sobald sie wieder sendet).
+  - **„HDMI: kein Signal“:** der HDMI-Eingang meldet einen Fehler oder (eingeschaltet) kein Signal seit mehr als 20 Sekunden.
+  - **Unterspannung** kann diese Platine nicht messen (kein Fühler für die Eingangsspannung); der indirekte Hinweis ist „Bitte Stromversorgung prüfen“ bei einem abgeschalteten USB-Anschluss.
+- **Protokolle: neuer Abschnitt „USB-Ereignisse“** mit den Kernelzeilen der letzten 3 Tage (Trennung, abgeschalteter Anschluss, Überstrom, Fehler beim Erkennen) und den gemerkten Ereignissen.
+- Tests: `tools/test_usb.py` (9 Tests; am echten Kernel-Protokoll einer Box ohne Ausfälle keine falschen Meldungen). Neue Texte in allen 14 Sprachen (maschinell).
+
 ## 0.9.139 (Beta)
 - **Neu: Designs** (Optionen > Design). Das bisherige Aussehen bleibt als „Standard“ und ist die Vorgabe; dazu zwei neue, auf Lesbarkeit und Bedienung am Handy wie am Rechner ausgelegt, jeweils hell und dunkel (der Knopf in der Kopfleiste gilt weiter):
   - **Klar:** ruhig und großzügig, größere Schrift, Überschriften in normaler Schreibweise, weiche Karten, runde Knöpfe (mindestens 44 Pixel hoch).
