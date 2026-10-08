@@ -4508,7 +4508,7 @@ class TwitchLogin:
             if isinstance(saved, dict) and isinstance(saved.get("access"), str) and isinstance(saved.get("refresh"), str):
                 self.tokens = {"access": saved["access"], "refresh": saved["refresh"], "expires_at": float(saved.get("expires_at", 0)),
                                "login": str(saved.get("login", ""))[:25], "user_id": str(saved.get("user_id", ""))[:20],
-                               "scopes": [str(x)[:60] for x in saved.get("scopes", [])][:30]}
+                               "scopes": [str(x)[:60] for x in saved.get("scopes", [])][:30], "mod_off": saved.get("mod_off") is True}
                 self.state = "angemeldet"
         except (OSError, ValueError, TypeError):
             pass
@@ -4561,8 +4561,10 @@ class TwitchLogin:
                 self._demo_step()
         t, p, state = self.tokens, self.pending, self.state                # nur lesen: nie hinter einer laufenden Anfrage an Twitch warten
         scopes = list((t or {}).get("scopes", []))
+        has = "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes
         out = {"state": state, "login": (t or {}).get("login", ""), "scopes": scopes, "error": self.error,
-               "mod": "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes}
+               "mod": has and not (t or {}).get("mod_off"),           # Moderation ist an: Rechte vorhanden und nicht von Hand ausgeschaltet
+               "mod_scope": has}                                      # die Rechte hat der Zugang (Einschalten geht dann ohne neue Anmeldung bei Twitch)
         if p and state == "wartet":
             out.update(code=p["user_code"], uri=p["uri"], expires_in=max(0, int(p["expires_at"] - self.clock())))
         return out
@@ -4678,7 +4680,7 @@ class TwitchLogin:
             expires = 14400.0
         old = self.tokens or {}
         t = {"access": d["access_token"], "refresh": d["refresh_token"], "expires_at": self.clock() + expires, "scopes": scopes,
-             "login": old.get("login", ""), "user_id": old.get("user_id", "")}
+             "login": old.get("login", ""), "user_id": old.get("user_id", ""), "mod_off": old.get("mod_off") is True}
         werr = False
         try:
             self._write(t)                                           # sofort: der alte Erneuerungsschlüssel ist ab jetzt ungültig, der neue darf nie verloren gehen
@@ -4739,6 +4741,23 @@ class TwitchLogin:
             except Exception:
                 pass                                                  # nie den Hintergrunddienst verlieren
             self.sleep(self.KEEP_EVERY)
+
+    def set_mod(self, on):
+        """Moderation von Hand aus- oder einschalten. Aus: Die Box nutzt die Rechte nicht mehr (Twitch erlaubt nicht, die Rechte eines Zugangs zu verkleinern;
+        sie fallen erst bei Abmelden oder neuer Anmeldung ohne Moderation weg). Ein: nur, wenn der Zugang die Rechte hat, sonst ist eine neue Anmeldung nötig."""
+        with self.lock:
+            t = self.tokens
+            if not t:
+                raise ValueError("Zuerst mit Twitch anmelden")
+            has = "moderator:manage:banned_users" in t.get("scopes", []) and "moderator:manage:chat_messages" in t.get("scopes", [])
+            if on and not has:
+                raise ValueError("Moderation braucht eine neue Anmeldung bei Twitch")
+            t["mod_off"] = not on
+            try:
+                self._write()
+            except OSError:
+                pass
+            return self.status()
 
     def refresh_now(self):
         """Sofort erneuern (auch gegen den Wartebetrieb nach Fehlschlägen), zum Beispiel nach einem 401 von Twitch. True, wenn es geklappt hat."""
@@ -6790,6 +6809,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200, self.twitchlogin.start(mod=d.get("mod") is True))
                 if act == "cancel":
                     return self.reply(200, self.twitchlogin.cancel())
+                if act == "mod" and isinstance(d.get("on"), bool):
+                    return self.reply(200, self.twitchlogin.set_mod(d["on"]))
                 return self.reply(400, {"error": "Ungültige Anfrage"})
             if path == "/api/twitch/logout":
                 return self.reply(200, self.twitchlogin.logout())
