@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.132 (Beta)
+- **Behoben: In der Kopfzeile der Chat-Karte rutschte das ⚙ am Handy in eine zweite Zeile** (die Prüfung für 0.9.131 hatte das Umbrechen erlaubt). Die Kopfzeile bleibt jetzt einzeilig, das ⚙ steht immer rechts oben; bei Breiten bis 460 Pixel entfällt die kleine Skala links vom Verlauf, der Verlauf ist etwas schmaler. Geprüft bei 320, 360, 390, 430 und 500 Pixel, auch mit vier Kamerapunkten, ohne seitliches Scrollen. Nur beim Anordnen der Karten darf die Zeile umbrechen.
+- Keine neuen Texte.
+
 ## 0.9.131 (Beta)
 - **Neu im Chat: Emotes von 7TV, BetterTTV und FrankerFaceZ** erscheinen als Bild (global und je Kanal; die Box lädt die Listen selbst über die Sendewege und hält sie 30 Minuten). Die Bildadressen baut die Box nur aus geprüften Kennungen, die Oberfläche lädt nur von diesen drei Hosts; ohne Verbindung oder bei einem Fehler bleibt das Wort als Text stehen.
 - **Neu: „Alle löschen“** im Moderationsmenü (⋯): räumt alle Nachrichten einer Person ab (ein Timeout von 1 Sekunde, ohne Strafe). „Löschen“ entfernt wie bisher genau diese eine Nachricht.
