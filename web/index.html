@@ -129,7 +129,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .sig.warn .sigdot{animation-duration:1.1s}.sig.crit .sigdot{animation-duration:.7s}
 .sig svg{display:block;width:80px;height:20px;overflow:visible}
 .sig .sgv{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;min-width:3ch;color:currentColor}
-.sig .sgs{display:flex;flex-direction:column;justify-content:space-between;height:20px;min-width:20px;margin-right:-2px;font-size:9px;font-weight:700;line-height:1;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.sig .sgs{display:flex;flex-direction:column;justify-content:space-between;height:20px;min-width:20px;margin-right:-2px;font-size:7px;font-weight:700;line-height:6px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;overflow:hidden}
 .sig .sg{fill:none;stroke:color-mix(in srgb,var(--text) 20%,transparent);stroke-width:1;vector-effect:non-scaling-stroke}
 .sig polyline{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 2px currentColor)}
 .camdots{display:inline-flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
@@ -2503,7 +2503,7 @@ function twAccRender(a){
   const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(on&&!a.mod);
   code.hidden=!wait; go.hidden=wait||on;
   $("tw_accrow").hidden=on;                                              // angemeldet: die Zeile verschwindet, Konto und Abmelden liegen hinter dem ⚙ in der Kopfzeile
-  $("tw_accpanel").hidden=!on; $("tw_acc_t2").textContent=on?"Angemeldet als "+a.login:"";
+  $("tw_accpanel").hidden=!on; $("tw_acc_t2").textContent=on?(a.mod?`Angemeldet als ${a.login} · Moderation an`:`Angemeldet als ${a.login}`):"";
   if(on) t.textContent="Angemeldet als "+a.login;
   else if(wait) t.textContent="Warte auf die Bestätigung bei Twitch …";
   else if(a.state==="abgelaufen") t.textContent="Anmeldung abgelaufen";
