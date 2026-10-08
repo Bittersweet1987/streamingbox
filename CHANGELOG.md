@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.138 (Beta)
+- **Übersetzungen:** Die 6 Texte des Abschnitts „Vorheriger Start“ (0.9.136) fehlten noch in allen Sprachen (Englisch: `test_english_is_complete` war rot). Jetzt in allen 14 Sprachen (maschinell übersetzt, nicht von Muttersprachlern geprüft). Alle Sprachdateien geprüft: nichts fehlt, alle Platzhalter stimmen.
+
 ## 0.9.137 (Beta)
 - **Reihenfolge der Hauptmenüs jetzt unter „Optionen“** (Unterpunkt „Reihenfolge der Hauptmenüs“, ein- und ausklappbar): je Menü eine Zeile mit ▲ ▼, ausgeblendete Menüs stehen grau darin. Die ▲ ▼ in den Titelzeilen der Hauptmenüs entfallen, am Handy wie am Rechner. Gespeicherte Auswahl und Reihenfolge bleiben gültig.
 - „Reihenfolge zurücksetzen“ steht jetzt in diesem Unterpunkt; „Alle einblenden“ bei „Menüpunkte anzeigen“. Neue Texte in allen 14 Sprachen (maschinell übersetzt).
