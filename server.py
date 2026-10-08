@@ -604,18 +604,7 @@ class SrtlaStore:
     spätere Sende-Dienst läuft mit Root-Rechten und liest dieselbe Datei.
     """
     DEFAULT_SETTINGS = {"min_kbps": 300, "max_kbps": 12000, "latency_ms": 4000, "uplinks": ["eth0", "eth1"],
-                        "spread": "best", "pulse_green_kbps": 6000, "pulse_yellow_kbps": 1000}
-
-    @staticmethod
-    def check_pulse(green, yellow):
-        """Pulsanzeige (Herzschlag im Kopf am Handy): Grün ab "green" kbit/s, Gelb ab "yellow" kbit/s, darunter Rot (Rot ist immer ab 0 und wird nicht eingestellt)."""
-        try:
-            g, y = int(green), int(yellow)
-        except (TypeError, ValueError):
-            raise ValueError("Pulsanzeige: Grün ab und Gelb ab müssen Zahlen sein")
-        if isinstance(green, bool) or isinstance(yellow, bool) or not 1 <= y < g <= 100000:
-            raise ValueError("Pulsanzeige: Gelb ab muss kleiner sein als Grün ab (1 bis 100000 kbit/s)")
-        return g, y
+                        "spread": "best"}
 
     def __init__(self, path):
         self.path = path
@@ -730,10 +719,9 @@ class SrtlaStore:
         spread = req.get("spread", cur.get("spread", "best"))
         if spread not in ("best", "all"):
             raise ValueError("Verteilung: beste Leitung bevorzugen oder alle gleichzeitig")
-        pg, py = self.check_pulse(req.get("pulse_green_kbps", cur.get("pulse_green_kbps", 6000)), req.get("pulse_yellow_kbps", cur.get("pulse_yellow_kbps", 1000)))
         with self.lock:
             self.data["settings"] = {"min_kbps": mn, "max_kbps": mx, "latency_ms": lat, "uplinks": sorted(set(ups)),
-                                     "spread": spread, "pulse_green_kbps": pg, "pulse_yellow_kbps": py}
+                                     "spread": spread}
             self.save()
 
 
@@ -6153,9 +6141,8 @@ class SettingsTransfer:
         ups = st.get("uplinks", [])
         if not isinstance(ups, list) or len(ups) > 20 or any(not isinstance(u, str) or not IFACE_NAME_RE.match(u) for u in ups):
             raise ValueError("Die Netze zum Senden sind ungültig")
-        pg, py = SrtlaStore.check_pulse(st.get("pulse_green_kbps", cur["pulse_green_kbps"]), st.get("pulse_yellow_kbps", cur["pulse_yellow_kbps"]))
         return {"servers": servers, "selected": sel, "settings": {"min_kbps": mn, "max_kbps": mx, "latency_ms": lat, "spread": spread,
-                                                                  "uplinks": sorted(set(ups)), "pulse_green_kbps": pg, "pulse_yellow_kbps": py}}, notes
+                                                                  "uplinks": sorted(set(ups))}}, notes
 
     def _clean_autostart(self, raw):
         if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):

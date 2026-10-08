@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.141 (Beta)
+- **Kopfleiste am Handy während der Sendung zeigt jetzt die vorhandene Pulsanzeige und die Kamerapunkte aus dem Chat** (dieselben Elemente, sie ziehen vom Chat in den Kopf und danach wieder zurück; Farbe und Verlauf wie dort). Die in 0.9.139 eigens gebaute EKG-Linie samt Untermenü „Pulsanzeige“ (Grün/Gelb/Rot-Grenzen unter SRTLA) entfällt. Der Pfeil ganz rechts klappt wie bisher die Knöpfe auf (dann sind Pulsanzeige und Punkte im Kopf weg, er sieht aus wie ohne sie).
+- Die Karte „SRTLA“ behält die Untermenüs „SRTLA-Server“, „Leitungssteuerung“ (Verteilung der Netze) und „Bitrate und Latenz“.
+- Die Chat-Gestaltung aus 0.9.131 bis 0.9.134 (Kopfzeile einzeilig, Zahnrad oben, Amplitude, Ereigniskarten, Moderation) wurde geprüft: nichts davon wurde überschrieben. Entfallen ist nur der Anordnen-Modus (ersetzt durch „Optionen“ in 0.9.135).
+
 ## 0.9.140 (Beta)
 - **Neu: kurze Hinweise bei Ausfällen, jeweils mit einem „i“ dahinter** (Issues #43 und #44: Der USB-WLAN-Adapter war der einzige Sendeweg und fiel aus, „disabled by hub (EMI?)“). Unter „Status“ steht eine Zeile mit Art und Uhrzeit (Ortszeit des Geräts, gestern: „gestern um 23:04“); ein Tipp auf das „i“ zeigt ein bis zwei Sätze, was man tun kann. Das „i“ gehört zu den Hilfe-Knöpfen und verschwindet mit ihnen (Optionen > Hilfe-Knöpfe).
   - **„USB-WLAN-Adapter getrennt · um 23:04“** (auch Bluetooth-Adapter, Router, Kamera, sonstiges Gerät, je nach Produktname). Wurde der Anschluss durch Störung oder Spannungseinbruch abgeschaltet („EMI?“) oder meldet der Kernel Überstrom, steht dahinter **„Bitte Stromversorgung prüfen“**. Quelle ist das Kernel-Protokoll (ohne Rechte lesbar); die Ereignisse werden gemerkt (24 Stunden, höchstens zwei Meldungen) und überstehen einen Neustart des Dienstes. Fällt die ganze Box aus, sieht der Kernel das nicht (dafür gibt es den Abschnitt „Vorheriger Start“ in den Protokollen).
