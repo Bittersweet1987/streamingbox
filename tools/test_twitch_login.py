@@ -38,6 +38,8 @@ class FakeTwitch(http.server.BaseHTTPRequestHandler):
         f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode()).items()}
         st.setdefault("seen", []).append((self.path, f))
         if self.path == "/oauth2/device":
+            if st.get("device_status"):
+                return self._send(st["device_status"], {"status": st["device_status"], "message": "kaputt"})
             if f.get("client_id") != st["client_id"]:
                 return self._send(400, {"status": 400, "message": "invalid client"})
             return self._send(200, {"device_code": "DC1", "expires_in": 1800, "interval": 2, "user_code": "ABCDEFGH",
@@ -124,6 +126,39 @@ class Login(Base):
         self.now[0] += 14000
         self.assertTrue(tl.refresh())
         self.assertEqual(tl.token(), "AT3")
+
+    def test_new_refresh_token_is_saved_before_the_account_check_and_login_appears_only_complete(self):
+        tl = self.make()
+        tl.start()
+        self.wait(tl, "angemeldet")
+        self.now[0] += 14400 - 30
+        seen = {}
+        orig = tl._call
+        def spy(url, fields=None, headers=None, once=False):
+            if url.endswith("/validate"):
+                seen["on_disk"] = json.load(open(self.path))["refresh"]              # beim Prüfen des Kontos steht der neue Schlüssel schon auf der Platte
+                seen["login"], seen["uid"] = tl.login(), tl.user_id()                  # und Name und Kennung sind nie leer
+            return orig(url, fields, headers, once=once)
+        tl._call = spy
+        self.assertEqual(tl.token(), "AT2")
+        self.assertEqual(seen["on_disk"], "RT2")
+        self.assertEqual(seen["login"], "streamer")
+        self.assertTrue(seen["uid"])
+
+    def test_a_failed_new_login_does_not_lock_out_the_logged_in_account(self):
+        tl = self.make()
+        tl.start()
+        self.wait(tl, "angemeldet")
+        FakeTwitch.state["device_status"] = 500
+        try:
+            with self.assertRaises(ValueError):
+                tl.start(mod=True)
+        finally:
+            FakeTwitch.state.pop("device_status", None)
+        self.assertEqual(tl.state, "angemeldet")
+        self.assertTrue(tl.ready())
+        self.assertEqual(tl.login(), "streamer")
+        self.assertEqual(tl.token(), "AT1")
 
     def test_keep_refreshes_before_expiry_and_leaves_fresh_tokens_alone(self):
         tl = self.make()

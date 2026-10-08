@@ -198,6 +198,127 @@ class Live(unittest.TestCase):
         self.assertEqual(r.state, "aus")
 
 
+class ThirdParty(unittest.TestCase):
+    BTTV, STV, FFZ = "54fa8f1401e468494b85b537", "01FGH8NE3800064MEQW00DNBNG", "9"
+
+    def fake(self, url):
+        if "betterttv.net/3/cached/emotes/global" in url:
+            return [{"id": self.BTTV, "code": "OMEGALUL"}, {"id": "../../x", "code": "Boese"}, {"id": self.BTTV, "code": "kaputt name"}]
+        if "betterttv.net/3/cached/users/twitch/55" in url:
+            return {"channelEmotes": [{"id": self.BTTV, "code": "KanalEmote"}], "sharedEmotes": []}
+        if "frankerfacez.com/v1/set/global" in url:
+            return {"sets": {"3": {"emoticons": [{"id": 9, "name": "ZreknarF"}]}}}
+        if "7tv.io/v3/emote-sets/global" in url:
+            return {"emotes": [{"id": self.STV, "name": "Sevenhead"}]}
+        if "7tv.io/v3/users/twitch/55" in url:
+            return {"emote_set": {"emotes": [{"id": self.STV, "name": "Kanal7"}]}}
+        return None
+
+    def loaded(self, room="55"):
+        tp = server.ThirdPartyEmotes(fetch=self.fake)
+        tp.ensure(room)
+        tp.thread.join(5)
+        return tp
+
+    def test_names_become_urls_built_only_from_checked_ids(self):
+        m = self.loaded().snapshot()
+        self.assertEqual(m["OMEGALUL"], "https://cdn.betterttv.net/emote/%s/2x.webp" % self.BTTV)
+        self.assertEqual(m["Kanal7"], "https://cdn.7tv.app/emote/%s/2x.webp" % self.STV)
+        self.assertEqual(m["ZreknarF"], "https://cdn.frankerfacez.com/emote/9/2")
+        self.assertNotIn("Boese", m)                                                          # ungültige Kennung
+        self.assertNotIn("kaputt name", m)                                                    # ungültiger Name
+        for u in m.values():
+            self.assertRegex(u, server.ThirdPartyEmotes.HOSTS)
+
+    def test_words_in_a_message_get_marked_and_native_emotes_win(self):
+        tp = self.loaded()
+        item = {"text": "hi OMEGALUL und Kanal7 Kappa", "emotes": [["25", 25, 29]]}
+        tp.mark(item)
+        words = [(e[1], e[2]) for e in item["emotes"]]
+        self.assertEqual(words, [(3, 10), (16, 21), (25, 29)])
+        item2 = {"text": "OMEGALUL", "emotes": [["999", 0, 7]]}
+        tp.mark(item2)
+        self.assertEqual(item2["emotes"], [["999", 0, 7]])                                    # Twitch-eigenes Emote an derselben Stelle bleibt
+        plain = {"text": "nichts dabei", "emotes": []}
+        tp.mark(plain)
+        self.assertEqual(plain["emotes"], [])
+
+    def test_reader_uses_room_id_from_the_message_tags(self):
+        r = reader()
+        r.third = server.ThirdPartyEmotes(fetch=self.fake)
+        first = r.parse("@room-id=55;display-name=A :a!a@a.tmi.twitch.tv PRIVMSG #kanal :Kanal7 hallo")
+        self.assertEqual(first["emotes"], [])                                                 # Liste wird erst geladen (Hintergrund)
+        r.third.thread.join(5)
+        second = r.parse("@room-id=55;display-name=A :a!a@a.tmi.twitch.tv PRIVMSG #kanal :Kanal7 hallo")
+        self.assertEqual(len(second["emotes"]), 1)
+        self.assertTrue(second["emotes"][0][0].startswith("https://cdn.7tv.app/"))
+
+    def test_failed_download_keeps_words_as_text(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        tp.ensure("55")
+        tp.thread.join(5)
+        item = {"text": "OMEGALUL", "emotes": []}
+        tp.mark(item)
+        self.assertEqual(item["emotes"], [])
+
+
+class Review(unittest.TestCase):
+    """Befunde der Gegenlese-Prüfung vom 8. Okt 2026."""
+
+    def test_emote_positions_follow_the_text_cleaning(self):
+        r = reader()
+        item = r.parse("@emotes=25:6-10 :a!a@a.tmi.twitch.tv PRIVMSG #kanal :a  b  Kappa")
+        self.assertEqual(item["text"], "a b Kappa")
+        self.assertEqual(item["emotes"], [["25", 4, 8]])                       # Stelle im bereinigten Text, nicht im ursprünglichen
+        again = r.parse("@emotes=25:0-4,7-11 :a!a@a.tmi.twitch.tv PRIVMSG #kanal :Kappa  Kappa")
+        self.assertEqual([e[1:] for e in again["emotes"]], [[0, 4], [6, 10]])
+
+    def test_a_viewer_named_reconnect_does_not_drop_the_connection(self):
+        line = "@display-name=RECONNECT;color=#FF0000 :x!x@x.tmi.twitch.tv PRIVMSG #kanal :hallo"
+        self.assertNotEqual(server.TwitchChat._parse(line)[0], "RECONNECT")
+        self.assertEqual(server.TwitchChat._parse(":tmi.twitch.tv RECONNECT")[0], "RECONNECT")
+
+    def test_odd_digit_characters_never_raise(self):
+        r = reader()
+        item = r.parse("@bits=²;user-id=²;emotes=25:²-4;tmi-sent-ts=²;display-name=A :a!a@a.tmi.twitch.tv PRIVMSG #kanal :hallo")
+        self.assertEqual(item["text"], "hallo")
+        self.assertNotIn("bits", item)
+        self.assertEqual(item["emotes"], [])
+
+    def test_new_channel_gets_a_new_generation_and_the_old_thread_stops(self):
+        r = reader()
+        starts = []
+        r._run = lambda ch, gen: starts.append((ch, gen))
+        r._ensure("a"); r.thread.join(2)
+        r._ensure("b"); r.thread.join(2)
+        r._ensure("a"); r.thread.join(2)
+        self.assertEqual([s[1] for s in starts], [1, 2, 3])
+        self.assertTrue(r._mine("a", 3))
+        self.assertFalse(r._mine("a", 1))                                      # der erste Faden für "a" ist veraltet, auch wenn der Kanal wieder "a" heißt
+        r.items.clear()
+        r._add({"type": "msg", "text": "alt", "emotes": []}, 1)
+        self.assertEqual(len(r.items), 0)                                      # Nachzügler eines alten Fadens werden verworfen
+
+    def test_partial_emote_download_keeps_the_good_list(self):
+        full = {"https://api.betterttv.net/3/cached/emotes/global": [{"id": "54fa8f1401e468494b85b537", "code": "Gut"}]}
+        tp = server.ThirdPartyEmotes(fetch=lambda u: full.get(u, False))      # False = nicht gefunden: in Ordnung
+        tp.ensure("55"); tp.thread.join(5)
+        self.assertIn("Gut", tp.snapshot())
+        tp.until = 0.0
+        tp.fetch = lambda u: None                                              # jetzt scheitert alles
+        tp.ensure("55"); tp.thread.join(5)
+        self.assertIn("Gut", tp.snapshot())                                    # die gute Liste bleibt
+        self.assertLess(tp.until - tp.clock(), tp.RETRY + 1)                   # und es wird bald neu versucht
+
+    def test_message_text_allows_emoji_sequences_and_nbsp_but_not_controls(self):
+        c = server.TwitchChat.clean_text
+        self.assertEqual(c("hallo\u00a0welt"), "hallo welt")
+        self.assertIsNotNone(c("👨\u200d👩\u200d👧 Familie"))
+        self.assertIsNone(c("zeile\nzwei"))
+        self.assertIsNone(c("rück\u202ewärts"))
+        self.assertIsNone(c("/ban jemand"))
+
+
 class SilentHandler(socketserver.StreamRequestHandler):
     def handle(self):
         self.server.seen = []
@@ -245,7 +366,7 @@ class Paths(unittest.TestCase):
         p = server.ChatPaths(lambda: ["10.0.0.2", "172.16.0.2", "192.168.1.2"], clock=lambda: now[0], links_file=f.name)
         self.assertEqual(p.order(), ["192.168.1.2", "10.0.0.2", "172.16.0.2", None])        # beste Güte zuerst, Reserve nach den genutzten
         p.fail("192.168.1.2", 100)
-        self.assertEqual(p.order(), ["10.0.0.2", "172.16.0.2", "192.168.1.2", None])        # versagt: ans Ende
+        self.assertEqual(p.order(), ["10.0.0.2", "172.16.0.2", None, "192.168.1.2"])        # versagt: hinter die normale Route
         now[0] += 101
         self.assertEqual(p.order()[0], "192.168.1.2")                                       # nach der Sperrzeit wieder vorn
         os.unlink(f.name)
@@ -260,7 +381,7 @@ class Paths(unittest.TestCase):
             sock, src = p.connect("127.0.0.1", srv.server_address[1], timeout=2)
             sock.close()
             self.assertIsNone(src)                                                           # ging über die normale Route
-            self.assertEqual(p.order()[-2:], ["203.0.113.77", None])                         # der kaputte Weg steht jetzt hinten
+            self.assertEqual(p.order()[-2:], [None, "203.0.113.77"])                         # der kaputte Weg steht jetzt hinter der normalen Route
         finally:
             srv.shutdown()
             srv.server_close()
