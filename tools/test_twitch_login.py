@@ -160,6 +160,33 @@ class Login(Base):
         self.assertEqual(tl.login(), "streamer")
         self.assertEqual(tl.token(), "AT1")
 
+    def test_moderation_can_be_switched_off_and_on_without_a_new_twitch_login(self):
+        tl = self.make()
+        tl.start(mod=True)
+        self.wait(tl, "angemeldet")
+        st = tl.status()
+        self.assertTrue(st["mod"] and st["mod_scope"])
+        off = tl.set_mod(False)
+        self.assertFalse(off["mod"])
+        self.assertTrue(off["mod_scope"])                                          # die Rechte hat der Zugang weiterhin
+        self.assertTrue(json.load(open(self.path))["mod_off"])                      # und der Schalter überlebt einen Neustart
+        again = self.make()
+        self.assertFalse(again.status()["mod"])
+        self.now[0] += 14400 - 30
+        tl.token()                                                                  # eine Erneuerung ändert den Schalter nicht
+        self.assertFalse(tl.status()["mod"])
+        self.assertTrue(tl.set_mod(True)["mod"])
+        self.assertFalse(json.load(open(self.path))["mod_off"])
+
+    def test_moderation_cannot_be_switched_on_without_the_rights(self):
+        tl = self.make()
+        tl.start()                                                                  # nur Lesen und Schreiben
+        self.wait(tl, "angemeldet")
+        self.assertFalse(tl.status()["mod_scope"])
+        with self.assertRaises(ValueError):
+            tl.set_mod(True)
+        self.assertFalse(tl.status()["mod"])
+
     def test_keep_refreshes_before_expiry_and_leaves_fresh_tokens_alone(self):
         tl = self.make()
         tl.start()
