@@ -81,9 +81,9 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .chatbox .cn[style*="--nc"]{color:color-mix(in srgb,var(--nc) 72%,var(--text))}        /* dunkle Namensfarben (z. B. Blau) bleiben auf dem dunklen Hintergrund lesbar */
 .chatform input{font-size:16px}                                                         /* iOS zoomt sonst beim Antippen in die Seite */
 .camdots .dot{flex:none}
-#c_chat>summary{flex-wrap:nowrap;gap:6px}                                              /* ⚙ bleibt immer in der ersten Zeile */
+#c_chat>summary{gap:6px}                                              /* ⚙ bleibt immer in der ersten Zeile */
 #c_chat>summary .sumh{white-space:nowrap}
-.pb-arr #c_chat>summary{flex-wrap:wrap;row-gap:4px}                                     /* nur beim Anordnen (zusätzliche Pfeile) darf umbrochen werden */
+#c_chat>summary{flex-wrap:wrap;row-gap:4px}                                              /* die Pfeile dürfen in die zweite Zeile umbrechen, das ⚙ bleibt in der ersten */
 .sig.stale,.sig.stale.ok,.sig.stale.warn,.sig.stale.crit{color:var(--muted)}
 .chattoast{margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
 .chatoptbtn{margin-left:auto;padding:2px 9px;line-height:1.3}
@@ -394,16 +394,11 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
 .autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
 [data-pbhide]{display:none!important}
-.laylist{display:grid;gap:8px 16px;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));align-items:start}.laygrp{display:grid;gap:0}
-.layrow{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:14px;cursor:pointer}.layrow.sub{padding-left:26px;color:var(--muted);font-size:13px}
-.layrow input{width:18px;height:18px;flex:none}
-#pb_bar{position:sticky;top:calc(var(--hdrh,64px) + 8px);z-index:20;grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;
-  padding:8px 12px;border:1px solid var(--accent);border-radius:12px;background:var(--card);box-shadow:0 4px 14px rgba(0,0,0,.35);font-size:14px}
-.pb-arr details.card[id]:not([data-fixed]){outline:2px dashed var(--accent);outline-offset:3px}
-.pb-arr details.card[id]:not([data-fixed])>:not(summary){display:none}      /* beim Anordnen nur die Titel zeigen (der Auf-/Zu-Zustand der Karten bleibt unberührt) */
-.pbmv{display:inline-flex;gap:6px;flex:none}
-.pbmv button{width:38px;height:38px;padding:0;font-size:16px;line-height:1;border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:10px;cursor:pointer}
-.pbmv button:disabled{opacity:.3;cursor:default}
+.optlist{margin:8px 0}.optgrp{margin:0 0 2px}
+.optrow{display:flex;align-items:center;gap:8px;padding:5px 0;line-height:1.35;cursor:pointer}.optrow.sub{padding-left:26px}.optrow input{flex:none}
+details.card>summary .sumr{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex:none}
+#c_chat>summary .sumr{margin-left:0}
+.sumr .mvs{display:inline-flex;gap:4px}
 #pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
@@ -411,8 +406,8 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 </head>
 <body>
 <header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
-  <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button><button type="button" class="sec small" id="pb_arr">Anordnen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button><button type="button" class="sec small foldm" id="pb_arr_m" title="Karten anordnen" aria-label="Karten anordnen">⠿</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
+  <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
@@ -694,6 +689,14 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <div class="ph"><a href="https://github.com/IRL4YOU/irl4you-pip/blob/main/ANLEITUNG-Fernzugriff.md" target="_blank" rel="noopener noreferrer">Ausführliche Anleitung (mit Fehlerhilfe)</a></div></details>
   </details>
 
+  <details class="card wide" id="c_layout"><summary><span class="sumh">Optionen</span></summary>
+    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Hauptmenüs lassen sich mit ▲ ▼ oben rechts verschieben. Auswahl und Reihenfolge werden in diesem Browser gemerkt.</div>
+    <details class="subsec" id="opt_menus"><summary>Menüpunkte anzeigen</summary>
+      <div id="lay_list" class="optlist"></div>
+      <div class="actions"><button type="button" id="lay_showall" class="sec">Alle einblenden</button> <button type="button" id="lay_reset" class="sec">Reihenfolge der Hauptmenüs zurücksetzen</button></div>
+    </details>
+  </details>
+
   <details class="card wide" id="swcard">
     <summary><span class="sumh">Software-Update (IRL4YOU BOX)</span><span id="sw_badge" class="badge ok">…</span></summary>
     <div class="ph" style="margin-top:0">Holt neue Versionen dieser Software aus dem Repository auf GitHub. Kameras, Server und Einstellungen bleiben erhalten. Nicht während einer Übertragung.</div>
@@ -764,12 +767,6 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="ph" style="margin-top:0">Fährt die Box sauber herunter oder startet sie neu. Wenn die Box ausgeschaltet ist, kann sie über die Oberfläche nicht wieder eingeschaltet werden: dafür den Strom kurz trennen oder die Ein-Taste nutzen. „Abmelden“ beendet die Anmeldung auf diesem Gerät, auch eine mit „Angemeldet bleiben“ gemerkte.</div>
     <div class="actions"><button id="pw_off" type="button" class="warnbtn">Herunterfahren</button> <button id="pw_reboot" type="button" class="sec">Neu starten</button> <button id="logout" type="button" class="sec" title="Von dieser Box abmelden (auch eine gemerkte Anmeldung)">Abmelden</button></div>
     <div id="pwmsg" class="ph"></div>
-  </details>
-
-  <details class="card wide" id="c_layout" data-fixed><summary><span class="sumh">Anpassen</span></summary>
-    <div class="ph" style="margin-top:0">Haken weg = ausgeblendet.</div>
-    <div id="lay_list" class="laylist"></div>
-    <div class="actions"><button type="button" id="lay_arr" class="sec">Anordnen</button><button type="button" id="lay_reset" class="sec">Zurücksetzen</button></div>
   </details>
 </main>
 <nav id="mfoot" aria-label="Schnellzugriff"><div id="mf_msg" class="mf-msg" role="status" hidden></div><button type="button" id="mf_live" class="mf-live" disabled aria-label="Sendung starten oder beenden">Live</button><div id="mf_tools" role="group" aria-label="Kameras und Ton" hidden></div><button type="button" id="mf_info" class="mf-info" aria-label="Bedienung der Kamera-Knöpfe" title="Bedienung der Kamera-Knöpfe" hidden>ⓘ</button></nav>
@@ -2709,70 +2706,63 @@ $("chat_form").addEventListener("submit",async e=>{
   document.addEventListener("click",()=>{ if(on&&!lock&&!vid) acquire(); },{once:false});                // ein Fingertipp genügt, falls der Browser den Start ohne Geste verweigert hat
 })();
 
-// ---- Anordnen und Ausblenden der Karten (je Browser gemerkt, Standard unverändert) ----
+// ---- Hauptmenüs verschieben (▲ ▼) und Menüpunkte ausblenden (Optionen); je Browser gemerkt, Standard unverändert ----
 (function(){
-  const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]}, arranging=false;
+  const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]};
   try{ const v=JSON.parse(localStorage.getItem(KEY)||"{}")||{};
        st.order=(Array.isArray(v.order)?v.order:[]).filter(x=>typeof x==="string"); st.hidden=(Array.isArray(v.hidden)?v.hidden:[]).filter(x=>typeof x==="string"); }catch(e){}
   const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} };
-  const movables=()=>[...main.children].filter(el=>el.matches("details.card[id]")&&!el.hasAttribute("data-fixed"));
+  const movables=()=>[...main.children].filter(el=>el.matches("details.card[id]"));
   const DEFAULT=movables().map(e=>e.id);                                   // Standardreihenfolge
+  const hideable=id=>id!=="c_layout"&&id!=="livecard";                      // "Optionen" selbst bleibt immer sichtbar
   const label=el=>{ const s=el.querySelector(":scope>summary"); if(!s) return el.id; const h=s.querySelector(".sumh"); if(h) return h.textContent.trim();
                     let t=""; s.childNodes.forEach(n=>{ if(n.nodeType===3) t+=n.textContent; }); return t.trim()||el.id; };
   function applyOrder(){
     const res=st.order.filter(id=>DEFAULT.includes(id));
     DEFAULT.forEach((id,i)=>{ if(res.includes(id)) return; let k=i-1; while(k>=0&&!res.includes(DEFAULT[k])) k--;      // neue Karte hinter ihren Standard-Vorgänger
                               res.splice(k<0?0:res.indexOf(DEFAULT[k])+1,0,id); });
-    const anchor=$("c_layout"); res.forEach(id=>main.insertBefore($(id),anchor));
+    res.forEach(id=>main.appendChild($(id)));
   }
   function applyHidden(){
     document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
-    st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&!e.hasAttribute("data-fixed")&&id!=="livecard") e.setAttribute("data-pbhide",""); });
-    if(arranging) arrows();
+    st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&hideable(id)) e.setAttribute("data-pbhide",""); });
+    arrows();
   }
   function buildList(){
     const box=$("lay_list"); box.textContent="";
-    const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="layrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
-                                c.checked=!st.hidden.includes(id); l.appendChild(c); l.appendChild(document.createTextNode(txt)); g.appendChild(l); };
-    movables().forEach(el=>{ const g=document.createElement("div"); g.className="laygrp"; row(g,el.id,label(el),false);                       // je Karte eine Gruppe mit ihren Bereichen darunter
-                             el.querySelectorAll("details.subsec[id]").forEach(sub=>row(g,sub.id,label(sub),true)); box.appendChild(g); });
+    const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="optrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
+                                c.checked=!st.hidden.includes(id); l.appendChild(c); const s=document.createElement("span"); s.textContent=txt; l.appendChild(s); g.appendChild(l); };
+    movables().filter(el=>hideable(el.id)).forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);       // je Karte eine Gruppe mit ihren Bereichen darunter
+                             el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true)); box.appendChild(g); });
   }
   function arrows(){
     const vis=movables().filter(e=>!e.hasAttribute("data-pbhide"));
-    vis.forEach((el,i)=>{ const m=el.querySelector(":scope>summary>.pbmv"); if(!m) return;
-                          m.querySelector(".pbup").disabled=i===0; m.querySelector(".pbdn").disabled=i===vis.length-1; });
+    movables().forEach(el=>{ const i=vis.indexOf(el), m=el.querySelector(":scope>summary>.sumr>.mvs"); if(!m) return;
+                             m.children[0].disabled=i<=0; m.children[1].disabled=i<0||i>=vis.length-1; });
   }
   function move(el,dir){
     const vis=movables().filter(e=>!e.hasAttribute("data-pbhide")), i=vis.indexOf(el), o=vis[i+dir]; if(!o) return;
     if(dir<0) main.insertBefore(el,o); else main.insertBefore(o,el);
-    st.order=movables().map(e=>e.id); save(); arrows(); el.scrollIntoView({block:"nearest",behavior:"smooth"});
+    st.order=movables().map(e=>e.id); save(); arrows(); try{ el.scrollIntoView({block:"nearest",behavior:"smooth"}); }catch(x){}
   }
-  function setArrange(on){
-    if(on===arranging) return; arranging=on; document.body.classList.toggle("pb-arr",on);
-    const bar=$("pb_bar");
-    if(on){
-      movables().forEach(el=>{ const s=el.querySelector(":scope>summary"); if(!s||s.querySelector(".pbmv")) return;
-        const m=document.createElement("span"); m.className="pbmv";
-        for(const [cls,txt,lab,dir] of [["pbup","▲","Nach oben",-1],["pbdn","▼","Nach unten",1]]){
-          const b=document.createElement("button"); b.type="button"; b.className=cls; b.textContent=txt; b.setAttribute("aria-label",lab); b.title=lab;
-          b.addEventListener("click",ev=>{ ev.preventDefault(); ev.stopPropagation(); move(el,dir); }); m.appendChild(b); }
-        s.appendChild(m); });
-      const d=document.createElement("div"); d.id="pb_bar";
-      const t=document.createElement("span"); t.textContent="Karten mit ▲ ▼ verschieben"; const f=document.createElement("button"); f.type="button"; f.textContent="Fertig";
-      f.addEventListener("click",()=>setArrange(false)); d.appendChild(t); d.appendChild(f); main.insertBefore(d,main.firstChild);
-      arrows();
-    }else{
-      document.querySelectorAll(".pbmv").forEach(m=>m.remove()); if(bar) bar.remove();
-      buildList();
-    }
-  }
+  movables().forEach(el=>{                                                 // ▲ ▼ in der Titelzeile jedes Hauptmenüs
+    const s=el.querySelector(":scope>summary"); if(!s) return;
+    const w=document.createElement("span"); w.className="sumr";
+    s.querySelectorAll(":scope>.badge").forEach(b=>w.appendChild(b));      // Kennzeichen (Badge) bleibt rechts, die Pfeile daneben
+    w.insertAdjacentHTML("beforeend",'<span class="mvs"><button type="button" class="mv" data-mv="-1" title="Menü nach oben schieben" aria-label="Menü nach oben schieben">▲</button><button type="button" class="mv" data-mv="1" title="Menü nach unten schieben" aria-label="Menü nach unten schieben">▼</button></span>');
+    s.appendChild(w);
+  });
+  main.addEventListener("click",ev=>{
+    const b=ev.target.closest(".mv[data-mv]"); if(!b||b.disabled) return;
+    const el=b.closest("details.card[id]"); if(!el||el.parentNode!==main) return;
+    ev.preventDefault(); ev.stopPropagation(); move(el,+b.dataset.mv);
+  });
   $("lay_list").addEventListener("change",e=>{
     const c=e.target.closest("input[data-id]"); if(!c) return; const id=c.dataset.id, i=st.hidden.indexOf(id);
     if(c.checked&&i>=0) st.hidden.splice(i,1); if(!c.checked&&i<0) st.hidden.push(id); save(); applyHidden();
   });
-  for(const id of ["pb_arr","pb_arr_m","lay_arr"]) $(id).addEventListener("click",()=>{ if(!arranging){ setArrange(true); window.scrollTo({top:0,behavior:"smooth"}); } else setArrange(false); });
-  $("lay_reset").addEventListener("click",()=>{ st={order:[],hidden:[]}; save(); applyOrder(); applyHidden(); buildList(); });
-  $("c_layout").addEventListener("toggle",()=>{ if($("c_layout").open) buildList(); });
+  $("lay_showall").addEventListener("click",()=>{ st.hidden=[]; save(); applyHidden(); buildList(); });
+  $("lay_reset").addEventListener("click",()=>{ st.order=[]; save(); applyOrder(); arrows(); });
   applyOrder(); applyHidden(); buildList();
 })();
 

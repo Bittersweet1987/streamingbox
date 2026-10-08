@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.135 (Beta)
+- **Neu: Menü „Optionen“** (zwischen Fernzugriff und Software-Update, ersetzt die Karte „Anpassen“ ganz unten). Darin „Menüpunkte anzeigen“ (ein- und ausklappbar): Haken weg = Menü oder Bereich ausgeblendet; „Alle einblenden“ und „Reihenfolge der Hauptmenüs zurücksetzen“. Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts.
+- **Hauptmenüs verschieben:** jedes Hauptmenü hat oben rechts dauerhaft ▲ ▼ (wie bei den aktiven Kameras); ausgeblendete Menüs werden dabei übersprungen. Der Knopf „Anordnen“ in der Kopfzeile und der Anordnen-Modus entfallen. Die gemerkte Auswahl und Reihenfolge (je Browser) bleiben gültig.
+- Auch „Details“ im Status lässt sich einzeln ausblenden. Neue Texte in allen 14 Sprachen (maschinell übersetzt, nicht von Muttersprachlern geprüft).
+
 ## 0.9.134 (Beta)
 - **Neu: Moderation lässt sich ausschalten.** Hinter dem ⚙ in der Chat-Karte steht jetzt „Moderation ausschalten“, wenn sie an ist. Dann verschwinden sofort alle ⋯ und die Box nutzt die Rechte nicht mehr (auch die Befehle `/ban`, `/timeout` und `/unban` im Eingabefeld sind gesperrt). „Moderation einschalten“ schaltet sie ohne neue Anmeldung bei Twitch wieder ein; nur wenn der Zugang die Rechte nicht hat, ist wie bisher einmal die Bestätigung bei Twitch nötig. Der Schalter bleibt nach einem Neustart und nach der Erneuerung des Zugangs erhalten. **Wichtig:** Twitch lässt nicht zu, die Rechte eines Zugangs nachträglich zu verkleinern; sie fallen erst weg, wenn man sich abmeldet und neu ohne Moderation anmeldet.
 - **Amplitude am Rechner höher** (28 statt 20 Pixel, Zahlen 8 Pixel): Die „0“ war unten abgeschnitten, jetzt sind alle drei Zahlen ganz sichtbar. Die Regeln für schmale Handys (Skala aus, schmalerer Verlauf) wurden von einer Grundregel überschrieben und greifen jetzt wirklich.
