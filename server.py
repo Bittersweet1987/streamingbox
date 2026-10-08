@@ -111,6 +111,174 @@ def send_stats():
     return out
 
 
+class UsbWatch:
+    """Merkt sich, wenn ein USB-Gerät ausfällt oder abgezogen wird (zum Beispiel der USB-WLAN-Adapter als Sendeweg, ein Router, ein Bluetooth-Stick).
+    Quelle ist das Kernel-Protokoll (dmesg, ohne Rechte lesbar): "usb 2-1: USB disconnect", "usb usb2-port1: disabled by hub (EMI?)" und "over-current".
+    Die Ereignisse stehen mit Zeit in <state>/usb-events.json (überstehen einen Neustart des Dienstes; ein Ausfall, bei dem die ganze Box stehen bleibt, ist
+    für den Kernel nicht zu sehen). Die Oberfläche zeigt sie 24 Stunden lang als Meldung: Art des Geräts (aus dem Produktnamen) und Uhrzeit."""
+    WINDOW = 24 * 3600.0
+    EVERY = 20.0
+    KEEP = 20
+    RE_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.,]+[+-]\d\d:\d\d) (.*)$")
+    RE_PROD = re.compile(r"^usb (\d+-[\d.]+): Product: (.{1,80})$")
+    RE_GONE = re.compile(r"^usb (\d+-[\d.]+): USB disconnect, device number \d+$")
+    RE_HUB = re.compile(r"^usb usb(\d+)-port(\d+): (disabled by hub|over-current condition)")
+    CATS = (("wlan", re.compile(r"(?i)802\.11|wlan|wireless|wi-?fi|\bnic\b|rtl88|rtl81|ralink|mediatek.*wlan")),
+            ("bt", re.compile(r"(?i)bluetooth|\bbt\d|usb-bt")),
+            ("net", re.compile(r"(?i)rndis|ethernet|\bcdc\b|router|modem|lte|\b4g\b|\b5g\b|mudi|gl-?inet|tether|android|hotspot|gadget")),
+            ("cam", re.compile(r"(?i)camera|uvc|capture|hdmi|video|osmo|action|dji|webcam")))
+
+    def __init__(self, path, runner=None, clock=time.time, demo=False):
+        self.path, self.runner, self.clock, self.demo = path, runner or self._dmesg, clock, demo
+        self.lock = threading.Lock()
+        self.events, self.last = [], 0.0
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+            if isinstance(saved, list):
+                self.events = [e for e in saved if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and isinstance(e.get("cat"), str)][-self.KEEP:]
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _dmesg():
+        try:
+            return subprocess.run(["dmesg", "--time-format", "iso"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    @classmethod
+    def category(cls, name):
+        for cat, rx in cls.CATS:
+            if rx.search(name or ""):
+                return cat
+        return "other"
+
+    def _parse(self, text):
+        import datetime
+        prod, out = {}, []
+        for raw in text.splitlines()[-6000:]:
+            m = self.RE_LINE.match(raw)
+            if not m:
+                continue
+            try:
+                t = datetime.datetime.fromisoformat(m.group(1).replace(",", ".")).timestamp()
+            except ValueError:
+                continue
+            msg = m.group(2)
+            a = self.RE_PROD.match(msg)
+            if a:
+                prod[a.group(1)] = a.group(2).strip()
+                continue
+            g = self.RE_GONE.match(msg)
+            if g:
+                out.append({"t": round(t, 1), "port": g.group(1), "cat": self.category(prod.get(g.group(1), "")), "why": "gone"})
+                continue
+            h = self.RE_HUB.match(msg)
+            if h:
+                port = "%s-%s" % (h.group(1), h.group(2))
+                out.append({"t": round(t, 1), "port": port, "cat": self.category(prod.get(port, "")), "why": "emi" if h.group(3).startswith("disabled") else "over"})
+        merged = []
+        for e in sorted(out, key=lambda x: x["t"]):                       # Trennung und abgeschalteter Anschluss kurz hintereinander am selben Anschluss: ein Ereignis
+            if merged and merged[-1]["port"] == e["port"] and e["t"] - merged[-1]["t"] < 5:
+                if e["why"] != "gone":
+                    merged[-1]["why"] = e["why"]
+                continue
+            merged.append(e)
+        return merged
+
+    def scan(self):
+        """Kernel-Protokoll lesen und neue Ereignisse aufnehmen (höchstens alle EVERY Sekunden)."""
+        with self.lock:
+            now = self.clock()
+            if now - self.last < self.EVERY:
+                return
+            self.last = now
+        try:
+            found = self._parse(self.runner())
+        except Exception:
+            return
+        with self.lock:
+            have = {(round(e["t"]), e.get("port")) for e in self.events}
+            new = [e for e in found if (round(e["t"]), e["port"]) not in have]
+            if not new:
+                return
+            self.events = (self.events + new)[-self.KEEP:]
+            data = list(self.events)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+    def alerts(self):
+        """Meldungen für die Oberfläche: die jüngsten Ereignisse der letzten 24 Stunden (höchstens zwei), je ein Eintrag mit Art und Zeit."""
+        if self.demo:
+            return [{"level": "warn", "kind": "usb", "cat": "wlan", "why": "emi", "t": int(self.clock() - 2100)}]
+        self.scan()
+        with self.lock:
+            fresh = [e for e in self.events if self.clock() - e["t"] <= self.WINDOW]
+        return [{"level": "warn", "kind": "usb", "cat": e["cat"], "why": e.get("why", "gone"), "t": int(e["t"])} for e in sorted(fresh, key=lambda x: -x["t"])[:2]]
+
+
+class OutageWatch:
+    """Merkt sich, wenn eine Kamera ausfällt (sie hat gesendet und sendet nicht mehr) oder der HDMI-Eingang kein Signal hat, und liefert kurze Meldungen für die
+    Oberfläche: {"kind": "cam"|"hdmi", ...}. Eine Kamera gilt als ausgefallen, wenn sie seit dem Start des Dienstes einmal gesendet hat und jetzt länger als DOWN
+    Sekunden nicht mehr; die Meldung verschwindet, sobald sie wieder sendet (oder nach MAX Stunden). Ohne Zustand auf der Platte: nach einem Neustart des Dienstes
+    beginnt die Beobachtung neu."""
+    DOWN = 20.0
+    MAX = 6 * 3600.0
+
+    def __init__(self, clock=time.time):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.seen = {}                 # Kamera-Schlüssel -> hat gesendet
+        self.since = {}                # Kamera-Schlüssel -> seit wann nicht mehr (Zeit) oder fehlt
+        self.hdmi_since = None
+
+    def alerts(self, cameras, hdmi=None):
+        now = self.clock()
+        out = []
+        with self.lock:
+            keys = set()
+            for c in cameras or []:
+                key = c.get("key")
+                if not isinstance(key, str):
+                    continue
+                keys.add(key)
+                state = c.get("state")
+                if state == "live":
+                    self.seen[key] = True
+                    self.since.pop(key, None)
+                elif state == "offline" and self.seen.get(key):
+                    self.since.setdefault(key, now)
+                    t = self.since[key]
+                    if key != HDMI_KEY and now - t >= self.DOWN and now - t <= self.MAX:
+                        kind = "dji" if str(key).startswith("dji-") else "cam"
+                        out.append({"level": "warn", "kind": "cam", "cam": kind, "name": str(c.get("name") or "")[:40], "t": int(t)})
+            for k in list(self.seen):
+                if k not in keys:
+                    self.seen.pop(k, None)
+                    self.since.pop(k, None)
+            # HDMI-Eingang: Dienst meldet einen Fehler oder (eingeschaltet) kein Signal
+            bad = False
+            if isinstance(hdmi, dict) and hdmi.get("service") is not False and hdmi.get("available") is not False:
+                en = bool((hdmi.get("settings") or {}).get("enabled"))
+                sig = hdmi.get("signal") or {}
+                bad = hdmi.get("state") == "error" or (en and hdmi.get("signal_known") and sig.get("plugged") is False)
+            if bad:
+                if self.hdmi_since is None:
+                    self.hdmi_since = now
+                if self.DOWN <= now - self.hdmi_since <= self.MAX:
+                    out.append({"level": "warn", "kind": "hdmi", "t": int(self.hdmi_since)})
+            else:
+                self.hdmi_since = None
+        return out
+
+
 class Sampler:
     """Berechnet Raten aus Zählerdifferenzen zwischen zwei Abfragen."""
 
@@ -6731,7 +6899,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(401, {"error": "nicht angemeldet"})
         if path == "/api/metrics":
             m = self.sampler.sample()
+            try:
+                m["alerts"] = list(m.get("alerts") or []) + self.usbwatch.alerts()
+            except Exception:
+                pass
             m["cameras"] = self.cams.listing(self.host(), self.djisvc.host_for_key)
+            try:
+                hs = self.hdmi.status() if self.hdmi else None
+                m["alerts"] = list(m.get("alerts") or []) + self.outages.alerts(m["cameras"], hs)
+            except Exception:
+                pass
             extras = self.djisvc.camera_extras()
             for c in m["cameras"]:
                 c.update(extras.get(c["key"], {}))             # Akkustand der DJI-Kameras (Status, Kameras)
@@ -7068,6 +7245,8 @@ def main():
     Handler.auth = Auth(args.state, args.bela_config or None,
                         demo=args.demo and args.host in ("127.0.0.1", "::1", "localhost"))   # Demo-Passwort nur auf dem eigenen Rechner
     Handler.cams = CameraStore(os.path.join(args.state, "cameras.json"), args.rtmp_app, args.rtmp_stat_url, args.demo)
+    Handler.outages = OutageWatch()
+    Handler.usbwatch = UsbWatch(os.path.join(args.state, "usb-events.json"), demo=args.demo)
     Handler.sampler = Sampler(args.demo)
     Handler.sampler.sample()  # Startwerte für Ratenberechnung
     Handler.srtla = SrtlaStore(os.path.join(args.state, "srtla.json"))
