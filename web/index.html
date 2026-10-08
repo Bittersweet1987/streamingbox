@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <script src="/i18n.js"></script>
-<script>try{var t=localStorage.getItem("pb_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<script>try{var t=localStorage.getItem("pb_theme"),d=localStorage.getItem("pb_design"),e=document.documentElement;if(d==="klar"||d==="kompakt")e.setAttribute("data-design",d);else d="";if(t==="light"||t==="dark")e.setAttribute("data-theme",t);else if(d==="klar")e.setAttribute("data-theme","light")}catch(e){}</script>
 <title>IRL4YOU BOX</title>
 <style>
 :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--muted:#a8b4c7;--line:#50647f;--accent:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--crit:#ef4444;--bar:#06b6d4;--blue:#3b82f6;--shade:rgba(2,6,23,.45)}
@@ -170,6 +170,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
 .ibrow{display:block;margin:0 0 4px}.ibrow .ibtn{margin-left:0}
 .hlp:not(.open){display:none}
+html.nohelp :is(.ibtn,.ibrow,.helpbtn,.hlp){display:none!important}      /* Optionen: die Hilfe-Knöpfe "i" samt ihren Texten ausblenden */
 .helpbtn{width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
 .helpbtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
 @media(max-width:620px){.wform{grid-template-columns:1fr}}
@@ -274,10 +275,19 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 /* Handy: Kopfleiste in einer Zeile, "Live"/"Stop" steht in der festen Fußleiste (Issue #19) */
 #mfoot{display:none}
 .mf-live{flex:1 1 76px;min-width:68px;min-height:54px;padding:0 4px;white-space:nowrap;border-radius:12px;border:1px solid var(--ok);background:var(--ok);color:#06210f;font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
+#mfoot:has(#mf_tools[hidden]) .mf-live{flex:0 0 auto;min-width:112px;padding:0 22px}      /* allein in der Leiste nicht über die ganze Breite */
+#hdr_pulse,#hdr_more{display:none}
+.pdot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:baseline;background:var(--muted)}.pdot.ok{background:var(--ok)}.pdot.warn{background:var(--warn)}.pdot.crit{background:var(--crit)}
+.hpulse{align-items:center;gap:6px;font-variant-numeric:tabular-nums;color:var(--ok);transition:color .9s ease}.hpulse.warn{color:var(--warn)}.hpulse.crit{color:var(--crit)}
+.hpulse .ecg{width:58px;height:22px;flex:none;overflow:hidden}.hpulse .ecg path{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hpulse b{font-size:15px;display:inline-block;min-width:5ch;text-align:right}     /* Platz für 000.0: ein-, zwei- und dreistellige Werte verschieben die Linie nicht */.hpulse small{font-size:11px;color:var(--muted)}
+#hdr_more{padding:0;width:26px;min-width:0;align-items:center;justify-content:center}#hdr_more svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s}
+#hdr_more[aria-expanded=true] svg{transform:rotate(180deg)}
+@media(prefers-reduced-motion:reduce){.hpulse{transition:none}#hdr_more svg{transition:none}}
 .mf-live.on{background:var(--crit);border-color:var(--crit);color:#fff}
 .mf-live.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
 .mf-live:disabled{opacity:.55;cursor:not-allowed}
-/* Kamera- und Ton-Knöpfe in der Fußleiste (Issue #19): kurz = kleines Bild aus-/einblenden bzw. nächste Tonspur, lang = Hauptbild tauschen bzw. stumm */
+/* Kamera- und Ton-Knöpfe in der Fußleiste (Issue #19): Kamera: kurz = zum Hauptbild machen, doppelt = kleines Bild aus-/einblenden, lang = deaktivieren/aktivieren; Ton: kurz = nächste Tonspur, lang = stumm */
 #mf_tools{display:flex;gap:6px;min-width:0;flex:0 1 auto}      /* neben "Live"/"Stop" in einer Reihe (wie in der BELABOX-Oberfläche von Bittersweet); die Knöpfe werden bei vielen Kameras schmaler */
 .mf-t{flex:0 1 60px;min-width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:54px;padding:2px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--text);font-family:inherit;font-size:10px;font-weight:700;line-height:1.1;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .mf-t svg{width:22px;height:22px;flex:none}
@@ -290,7 +300,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .mf-cam.off{opacity:.55;border-style:dashed}.mf-cam.off.live{color:var(--text)}      /* deaktiviert: blass, gestrichelt, nie grün */
 .mf-aud{color:var(--text)}
 .mf-info{flex:0 0 34px;min-height:54px;padding:0;border:0;background:transparent;color:var(--muted,var(--text));font-size:22px;line-height:1;cursor:pointer}
-.mf-msg{white-space:pre-line}
+.mf-msg{white-space:pre-line}.mf-msg[data-info="1"]{white-space:pre;overflow:hidden}       /* die Bedienhilfe (i): jede Zeile bleibt in einer Zeile */
 .mf-aud.muted{color:var(--crit);border-color:var(--crit)}
 .mf-msg{position:absolute;left:0;right:0;bottom:calc(100% + 10px);padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font-size:14px;box-shadow:0 8px 24px rgba(2,6,23,.6)}
 @media(max-width:620px){
@@ -302,6 +312,9 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
   header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
   header .hdr .updbtn{font-size:0;padding:3px 9px}header .hdr .updbtn .dot{margin:0;font-size:13px}    /* nur der gelbe Punkt, Text steht im Tooltip */
   #hdr_live{display:none!important}
+  body.streaming:not(.hdr-open) #hdr_pulse{display:inline-flex}body.streaming #hdr_more{display:inline-flex}      /* während der Sendung: zugeklappt zeigt der Kopf die Pulsanzeige, aufgeklappt alle Knöpfe wie sonst */
+  body.streaming:not(.hdr-open) header .hdr>*:not(#hdr_pulse):not(#hdr_more){display:none!important}
+  body.streaming header h1{font-size:13px}                                                                          /* Platz für den Knopf zum Zuklappen */
   /* der Block "Nicht live" entfällt: alles steht in Kopf und Fußleiste; nur Hinweise, Fehler und "Noch nicht übernommen" bleiben, wenn es welche gibt */
   #livecard{padding:0;border:0;background:transparent;box-shadow:none;margin:0}
   #livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}
@@ -393,18 +406,144 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
 .autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
 [data-pbhide]{display:none!important}
+.designs{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));margin:8px 0}
+.dchoice{display:flex;gap:12px;align-items:flex-start;padding:12px;border:2px solid var(--line);border-radius:12px;cursor:pointer;background:var(--bg)}
+.dchoice:hover{border-color:var(--accent)}.dchoice:has(input:checked){border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--bg))}
+.dchoice input{margin:3px 0 0;flex:none;width:20px;height:20px;accent-color:var(--accent)}
+.dchoice .dtx{display:grid;gap:3px;min-width:0}.dchoice .dtx b{font-size:16px}.dchoice .dtx span{font-size:13px;color:var(--muted);line-height:1.45}
+.dsw{display:flex;flex:none;margin-top:2px;border:1px solid var(--line);border-radius:8px;overflow:hidden}.dsw i{display:block;width:14px;height:34px}
 .optlist{margin:8px 0}.optgrp{margin:0 0 2px}
 .ordrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0}.ordrow.off{color:var(--muted)}.ordrow .mvs{display:inline-flex;gap:4px;flex:none}
 .optrow{display:flex;align-items:center;gap:8px;padding:5px 0;line-height:1.35;cursor:pointer}.optrow.sub{padding-left:26px}.optrow input{flex:none}
+.optrow.fixed{opacity:.6;cursor:default}
 #pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
+/* ---- Designs (Optionen > Design): "Standard" ist das bisherige Aussehen ohne Zusatz; Klar und Kompakt setzen html[data-design] und überschreiben Farben, Schrift, Abstände und Formen.
+   Die Regeln stehen in :where(), haben also genau die Gewichtung der ursprünglichen Regel und kommen danach: Zustände wie "ausgewählt", "Hauptbild", "stumm" oder "Fehler" behalten ihre Farben. ---- */
+html[data-design]{-webkit-text-size-adjust:100%}
+html[data-design] :is(button,input,select,summary,a):focus-visible{outline:3px solid var(--focus,var(--accent));outline-offset:2px}
+:where(html[data-design]) :is(button,select,input){transition:background-color .15s,border-color .15s,box-shadow .15s}
+@media(prefers-reduced-motion:reduce){:where(html[data-design]) *{transition:none!important}}
+
+/* ===== Klar: hell, ruhig, viel Luft, große gut lesbare Schrift ===== */
+html[data-design="klar"][data-theme="light"],html[data-design="klar"]:not([data-theme]){--bg:#f4f6fb;--card:#ffffff;--text:#172033;--muted:#566177;--line:#dde3ee;--ctl:#7a849a;--accent:#2457d6;--bar:#2457d6;--blue:#2457d6;--ok:#12803d;--warn:#b45309;--crit:#c62828;--onbar:#ffffff;--onwarn:#ffffff;--onok:#ffffff;--oncrit:#ffffff;--shade:rgba(23,32,51,.10);--focus:#2457d6;--r:18px;color-scheme:light}
+html[data-design="klar"][data-theme="dark"]{--bg:#0e1420;--card:#171f2e;--text:#eef2fa;--muted:#aab5c9;--line:#2b364b;--ctl:#6a7992;--accent:#7aa2ff;--bar:#7aa2ff;--blue:#7aa2ff;--ok:#4cd07d;--warn:#f5b04c;--crit:#ff7b72;--onbar:#0b1220;--onwarn:#1a1203;--onok:#06210f;--oncrit:#2a0a08;--shade:rgba(0,0,0,.35);--focus:#9db9ff;--r:18px;color-scheme:dark}
+:where(html[data-design="klar"]) body{font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;letter-spacing:.005em}
+:where(html[data-design="klar"]) header{border:0;border-radius:var(--r);box-shadow:0 1px 2px var(--shade),0 8px 24px var(--shade);background:color-mix(in srgb,var(--card) 88%,transparent);-webkit-backdrop-filter:saturate(1.4) blur(12px);backdrop-filter:saturate(1.4) blur(12px)}
+:where(html[data-design="klar"]) h1{font-size:18px;font-weight:700;letter-spacing:-.01em}
+:where(html[data-design="klar"]) main{gap:16px;padding:20px 16px}
+:where(html[data-design="klar"]) .card{border:0;border-radius:var(--r);padding:20px;box-shadow:0 1px 2px var(--shade),0 6px 20px var(--shade)}
+:where(html[data-design="klar"]) details.card>summary{min-height:44px}
+:where(html[data-design="klar"]) details.card>summary .sumh,:where(html[data-design="klar"]) .sech,:where(html[data-design="klar"]) .subsec>summary,:where(html[data-design="klar"]) .card h2{font-size:17px;font-weight:650;text-transform:none;letter-spacing:-.005em;color:var(--text)}
+:where(html[data-design="klar"]) .sech{margin:22px 0 8px}
+:where(html[data-design="klar"]) details.card>summary .sumh::before,:where(html[data-design="klar"]) .subsec>summary::before{content:"";display:inline-block;flex:none;width:.5em;height:.5em;margin:0 .7em .12em 0;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+:where(html[data-design="klar"]) details.card[open]>summary .sumh::before,:where(html[data-design="klar"]) .subsec[open]>summary::before,:where(html[data-design="klar"]) #swcard[open]>summary .sumh::before,:where(html[data-design="klar"]) #updcard[open]>summary .sumh::before{content:"";transform:rotate(45deg)}
+:where(html[data-design="klar"]) .subsec>summary{margin:18px 0 8px;min-height:40px;display:flex;align-items:center;font-size:16px;padding:12px 2px 0;border-top:1px solid var(--line)}
+:where(html[data-design="klar"]) .ph{font-size:14px;line-height:1.55;max-width:68ch}
+:where(html[data-design="klar"]) .big{font-size:30px;font-weight:650;letter-spacing:-.02em}
+:where(html[data-design="klar"]) .unit{font-size:14px}
+/* Eingabefelder und Knöpfe: mindestens 44 Pixel hoch, Ränder deutlich genug (3:1) */
+:where(html[data-design="klar"]) :is(input,select,button){min-height:44px;font-size:16px;border-radius:12px}
+:where(html[data-design="klar"]) :is(input,select){background:var(--bg);border:1.5px solid var(--ctl);padding:10px 14px}
+:where(html[data-design="klar"]) input:focus,:where(html[data-design="klar"]) select:focus{outline:3px solid color-mix(in srgb,var(--accent) 35%,transparent);border-color:var(--accent)}
+:where(html[data-design="klar"]) button{background:var(--bar);color:var(--onbar);font-weight:600;border-radius:999px;padding:10px 20px}
+:where(html[data-design="klar"]) button:hover:not(:disabled){filter:brightness(1.07)}
+:where(html[data-design="klar"]) button:active:not(:disabled){transform:translateY(1px)}
+:where(html[data-design="klar"]) button:disabled{opacity:.5}
+html[data-design] .seg button.on:disabled{opacity:1}                                          /* die gewählte Kamera ist gesperrt, bleibt aber voll lesbar */
+:where(html[data-design="klar"]) button.sec{border:1.5px solid var(--ctl);font-weight:550}
+:where(html[data-design="klar"]) button.sec:hover:not(:disabled){border-color:var(--accent);filter:none}
+:where(html[data-design="klar"]) button.warnbtn{color:var(--onwarn)}
+:where(html[data-design="klar"]) .dangerbtn{color:var(--oncrit)}
+:where(html[data-design="klar"]) button.small,:where(html[data-design="klar"]) header .hdr button,:where(html[data-design="klar"]) #lang_sel{min-height:36px;font-size:14px;padding:6px 14px;border-radius:10px}
+:where(html[data-design="klar"]) header .hdr button.sec{border-color:var(--ctl)}
+:where(html[data-design="klar"]) button.mv,:where(html[data-design="klar"]) button.del{min-height:36px;min-width:40px;padding:6px 12px;font-size:14px;border-color:var(--ctl)}
+:where(html[data-design="klar"]) .livebtn:not(.on):not(.busy){background:var(--ok);border-color:var(--ok);color:var(--onok)}
+:where(html[data-design="klar"]) .livebtn.busy,:where(html[data-design="klar"]) .badge.attn,:where(html[data-design="klar"]) .badge.demo,:where(html[data-design="klar"]) header .hdr>.badge.demo{color:var(--onwarn)}
+:where(html[data-design="klar"]) .seg button{min-height:40px;border-radius:999px;padding:8px 16px;font-size:15px;border-color:var(--ctl)}
+:where(html[data-design="klar"]) .seg button.on{color:var(--onbar);border-color:var(--bar)}
+:where(html[data-design="klar"]) :is(.ibtn,.helpbtn)[aria-expanded=true],:where(html[data-design="klar"]) #pb_awake[aria-pressed=true],:where(html[data-design="klar"]) #rcard #r_loginlink.btnlink,:where(html[data-design="klar"]) .evchip{color:var(--onbar)}
+:where(html[data-design="klar"]) #r_apps a.btnlink{border-color:var(--ctl)}
+:where(html[data-design="klar"]) .hsw.on{color:var(--onok)}
+:where(html[data-design="klar"]) .statbox,:where(html[data-design="klar"]) .camcol,:where(html[data-design="klar"]) .wstat,:where(html[data-design="klar"]) .wrow,:where(html[data-design="klar"]) .chatopts,:where(html[data-design="klar"]) #sw_notes{border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--bg) 60%,var(--card))}
+:where(html[data-design="klar"]) .statbox{padding:14px 16px 16px}
+:where(html[data-design="klar"]) .bar{height:10px;border-radius:99px;background:color-mix(in srgb,var(--line) 70%,transparent)}
+:where(html[data-design="klar"]) .bar>i{border-radius:99px}
+:where(html[data-design="klar"]) .badge{font-size:13px;padding:4px 10px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:600}
+:where(html[data-design="klar"]) .badge.attn,:where(html[data-design="klar"]) .badge.demo{background:var(--warn)}
+:where(html[data-design="klar"]) .alert{padding:12px 14px;border-radius:12px;font-size:15px;background:color-mix(in srgb,var(--warn) 10%,var(--card))}
+:where(html[data-design="klar"]) .alert.ok{background:color-mix(in srgb,var(--ok) 9%,var(--card))}
+:where(html[data-design="klar"]) .alert.crit{background:color-mix(in srgb,var(--crit) 9%,var(--card))}
+:where(html[data-design="klar"]) #mfoot{border:0;border-radius:22px;box-shadow:0 -1px 0 var(--shade),0 10px 30px var(--shade),0 0 0 8px var(--bg)}
+:where(html[data-design="klar"]) .mf-live{border-radius:16px;min-height:56px;font-size:18px;color:var(--onok)}
+:where(html[data-design="klar"]) .mf-live.busy{color:var(--onwarn)}
+:where(html[data-design="klar"]) .mf-t{border-radius:16px;border-width:1.5px;border-color:var(--ctl);min-height:56px;background:var(--card)}
+:where(html[data-design="klar"]) .optrow,:where(html[data-design="klar"]) .ordrow{min-height:44px;padding:6px 2px}
+:where(html[data-design="klar"]) :is(.autolbl,.camnet,.batt,.wsec,.wuse,.progline){font-size:15px}
+@media(max-width:620px){:where(html[data-design="klar"]) .card{padding:16px}:where(html[data-design="klar"]) main{padding:8px 8px 16px;gap:12px}:where(html[data-design="klar"]) header .hdr :is(button,select){padding:6px 9px;min-height:34px}}
+
+/* ===== Kompakt: dichte Leitstand-Ansicht, viel Information auf einen Blick, eckig und nüchtern ===== */
+html[data-design="kompakt"][data-theme="dark"],html[data-design="kompakt"]:not([data-theme]){--bg:#0b0f14;--card:#121821;--text:#e6ebf2;--muted:#9aa7b8;--line:#263142;--ctl:#5b6b82;--accent:#37c8e0;--bar:#37c8e0;--blue:#5aa2ff;--ok:#3ddc84;--warn:#f2b134;--crit:#ff6159;--onbar:#06151a;--onwarn:#1a1203;--onok:#06210f;--oncrit:#2a0a08;--shade:rgba(0,0,0,.4);--focus:#ffd24a;--r:6px;color-scheme:dark}
+html[data-design="kompakt"][data-theme="light"]{--bg:#e9edf2;--card:#ffffff;--text:#111827;--muted:#4b5668;--line:#c9d1dc;--ctl:#7b8798;--accent:#0a6a85;--bar:#0a7f9d;--blue:#1d4ed8;--ok:#127a3c;--warn:#a86100;--crit:#c0281f;--onbar:#ffffff;--onwarn:#ffffff;--onok:#ffffff;--oncrit:#ffffff;--shade:rgba(17,24,39,.12);--focus:#b45309;--r:6px;color-scheme:light}
+:where(html[data-design="kompakt"]) body{font:14px/1.38 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
+:where(html[data-design="kompakt"]) header{border-radius:var(--r);padding:6px 12px;max-width:min(1280px,calc(100% - 24px));width:calc(100% - 24px)}
+:where(html[data-design="kompakt"]) h1{font-size:15px;letter-spacing:.04em}
+:where(html[data-design="kompakt"]) main{max-width:1280px;gap:10px;padding:10px 12px 20px}
+:where(html[data-design="kompakt"]) .card{border-radius:var(--r);padding:10px 12px}
+:where(html[data-design="kompakt"]) details.card[open]>summary{margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+:where(html[data-design="kompakt"]) details.card>summary .sumh,:where(html[data-design="kompakt"]) .sech,:where(html[data-design="kompakt"]) .subsec>summary,:where(html[data-design="kompakt"]) .card h2{font-size:12px;font-weight:700;letter-spacing:.07em}
+:where(html[data-design="kompakt"]) .sech{margin:12px 0 4px}
+:where(html[data-design="kompakt"]) .subsec>summary{margin:10px 0 4px;padding:4px 0}
+:where(html[data-design="kompakt"]) .ph{font-size:12.5px;line-height:1.45;max-width:90ch}
+:where(html[data-design="kompakt"]) .big{font-size:24px;font-weight:600}
+:where(html[data-design="kompakt"]) .row{padding:2px 0}
+:where(html[data-design="kompakt"]) :is(input,select,button){min-height:34px;padding:6px 9px;border-radius:var(--r)}
+:where(html[data-design="kompakt"]) :is(input,select){border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) button{background:var(--bar);color:var(--onbar);font-weight:600}
+:where(html[data-design="kompakt"]) button.sec,:where(html[data-design="kompakt"]) header .hdr button{border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) button.warnbtn{color:var(--onwarn)}
+:where(html[data-design="kompakt"]) .dangerbtn{color:var(--oncrit)}
+:where(html[data-design="kompakt"]) button.mv,:where(html[data-design="kompakt"]) button.del{min-height:30px;min-width:32px;padding:3px 8px;border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) .livebtn:not(.on):not(.busy){background:var(--ok);border-color:var(--ok);color:var(--onok)}
+:where(html[data-design="kompakt"]) .livebtn.busy,:where(html[data-design="kompakt"]) .badge.attn,:where(html[data-design="kompakt"]) .badge.demo,:where(html[data-design="kompakt"]) header .hdr>.badge.demo{color:var(--onwarn)}
+:where(html[data-design="kompakt"]) .seg button{min-height:32px;border-radius:var(--r);padding:4px 10px;font-size:13px;border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) .seg button.on{color:var(--onbar);border-color:var(--bar)}
+:where(html[data-design="kompakt"]) :is(.ibtn,.helpbtn)[aria-expanded=true],:where(html[data-design="kompakt"]) #pb_awake[aria-pressed=true],:where(html[data-design="kompakt"]) #rcard #r_loginlink.btnlink,:where(html[data-design="kompakt"]) .evchip{color:var(--onbar)}
+:where(html[data-design="kompakt"]) #r_apps a.btnlink{border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) .hsw.on{color:var(--onok)}
+:where(html[data-design="kompakt"]) .statbox,:where(html[data-design="kompakt"]) .camcol,:where(html[data-design="kompakt"]) .wstat,:where(html[data-design="kompakt"]) .wrow,:where(html[data-design="kompakt"]) .chatopts,:where(html[data-design="kompakt"]) #sw_notes{border-radius:var(--r);padding:8px 10px}
+:where(html[data-design="kompakt"]) .statgrid{gap:8px}
+:where(html[data-design="kompakt"]) .badge{border-radius:4px;font-size:11.5px;padding:2px 7px;font-weight:600}
+:where(html[data-design="kompakt"]) .badge.attn,:where(html[data-design="kompakt"]) .badge.demo{background:var(--warn)}
+:where(html[data-design="kompakt"]) .bar{height:6px;border-radius:2px}
+:where(html[data-design="kompakt"]) .bar>i{border-radius:2px}
+:where(html[data-design="kompakt"]) .alert{border-radius:4px;padding:6px 10px;font-size:13px}
+:where(html[data-design="kompakt"]) #mfoot{border-radius:10px}
+:where(html[data-design="kompakt"]) .mf-live{border-radius:8px;color:var(--onok)}
+:where(html[data-design="kompakt"]) .mf-live.busy{color:var(--onwarn)}
+:where(html[data-design="kompakt"]) .mf-t{border-radius:8px;border-color:var(--ctl)}
+:where(html[data-design="kompakt"]) .optrow,:where(html[data-design="kompakt"]) .ordrow{padding:2px 0}
+@media(min-width:1100px){html[data-design="kompakt"] main>details.card:is(#rcard,#swcard,#updcard,#c_logs,#c_bk,#c_dev,#c_power,#c_layout){grid-column:auto}html[data-design="kompakt"] main{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){:where(html[data-design="kompakt"]) main{padding:6px 6px 14px;gap:8px}:where(html[data-design="kompakt"]) .card{padding:9px 10px}:where(html[data-design="kompakt"]) :is(button,input,select){min-height:40px}}
+
+/* die runden Hilfeknöpfe "i" behalten ihre Form (die Mindesthöhe der Knöpfe gilt für sie nicht) */
+html[data-design] :is(.ibtn,.helpbtn){min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}
+html[data-design="kompakt"] :is(.ibtn,.helpbtn){width:22px;height:22px;font-size:13px;line-height:20px}
+/* Kästchen und Auswahlkreise: groß genug zum Antippen */
+html[data-design="klar"] :is(input[type=checkbox],input[type=radio]){width:22px;height:22px;min-height:0;padding:0;accent-color:var(--accent)}
+html[data-design="kompakt"] :is(input[type=checkbox],input[type=radio]){width:16px;height:16px;min-height:0;padding:0;accent-color:var(--accent)}
+html[data-design] header h1{white-space:nowrap}
+html[data-design] header .hdr{gap:6px}
+/* Sprachauswahl (web/i18n.js): behält ihre eigenen Farben, die Knöpfe der Designs gelten dort nicht */
+html[data-design] :is(.pbpick,.langbtns) button{background:var(--bg);color:var(--text);border:1px solid var(--ctl,var(--line));font-weight:500;border-radius:10px;min-height:44px;padding:10px 12px;font-size:16px;filter:none}
+html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-color:var(--bar);color:var(--onbar,var(--card));font-weight:700}
 </style>
 </head>
 <body>
-<header><h1>IRL4YOU BOX</h1><span class="hdr"><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
+<header><h1>IRL4YOU BOX</h1><span class="hdr"><span id="hdr_pulse" class="hpulse ok" role="img" aria-label="Verbindung: keine Messung"><svg class="ecg" viewBox="0 0 64 24" aria-hidden="true"><defs><linearGradient id="ecgf" x1="0" x2="1"><stop offset="0" stop-color="#000"/><stop offset=".22" stop-color="#fff"/><stop offset=".78" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><mask id="ecgm"><rect width="64" height="24" fill="url(#ecgf)"/></mask></defs><g mask="url(#ecgm)"><g class="ecgg"><path d="M0 12 H8 L10 9 L12 12 H14 L16 3 L18 20 L20 12 H23 L26 8 L29 12 H32 H40 L42 9 L44 12 H46 L48 3 L50 20 L52 12 H55 L58 8 L61 12 H64 H72 L74 9 L76 12 H78 L80 3 L82 20 L84 12 H87 L90 8 L93 12 H96 H104 L106 9 L108 12 H110 L112 3 L114 20 L116 12 H119 L122 8 L125 12 H128"/></g></g></svg><b id="hp_val">–</b><small>Mbit/s</small></span><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
-  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button></span></header>
+  <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button><button type="button" id="hdr_more" class="sec small" aria-expanded="false" aria-label="Weitere Knöpfe ein- oder ausklappen" title="Weitere Knöpfe ein- oder ausklappen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></span></header>
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
@@ -505,7 +644,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
     <div class="autolbl"><label><input type="checkbox" id="auto_on"> Beim Start der Box automatisch live gehen</label> <button type="button" class="helpbtn" id="auto_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">i</button></div>
     <div id="auto_help" class="ph" hidden>Gilt nur nach dem Hochfahren der Box, einmal pro Start: Sobald eine Kamera sendet (die Box wartet bis zu 10 Minuten darauf), geht sie von selbst live. „Live beenden“ bricht die Automatik für diesen Start ab. Verbraucht Mobilfunkdaten.</div>
     <div id="autostatus" class="ph" hidden></div>
-        <div class="sech" style="margin-top:0">SRTLA-Server</div>
+    <details class="subsec" id="srt_srv" open><summary>SRTLA-Server</summary>
     <div class="ph" style="margin-top:0">SRTLA-Server speichern und per Auswahl umschalten. Die Stream-ID ist ein Zugangsschlüssel: sie wird auf der Box gespeichert und hier nie wieder angezeigt.</div>
     <div class="srvrow"><select id="srv_sel"></select><button id="srv_edit" type="button" class="sec">Bearbeiten</button><button id="srv_del" type="button" class="sec">Löschen</button></div>
     <form id="srvform" class="add" style="margin-top:10px">
@@ -516,15 +655,31 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
       <button type="submit" id="srv_save">Server hinzufügen</button>
       <button type="button" id="srv_cancel" class="sec" hidden>Abbrechen</button>
     </form>
-    <label class="muted" style="display:block;margin-top:10px">Verteilung auf die Netze
-      <select id="b_spread" style="width:100%;max-width:560px;margin-top:4px"><option value="best">Beste Leitung bevorzugen, andere als Reserve (empfohlen, stabiler)</option><option value="all">Alle Leitungen gleichzeitig nutzen (auch langsamere)</option></select></label>
-    <div class="sech">Bitrate und Latenz</div>
-    <div class="add" style="margin-top:6px">
-      <label class="muted">Mindestbitrate (kbit/s)<input id="b_min" type="number" min="100" max="19999" step="50" style="width:100%"></label>
-      <label class="muted">Höchstbitrate (kbit/s)<input id="b_max" type="number" min="200" max="20000" step="100" style="width:100%"></label>
-      <label class="muted">Latenz (ms)<input id="b_lat" type="number" min="100" max="10000" step="100" style="width:100%"></label>
-    </div>
-    <div class="actions"><button id="b_save" type="button">Bitrate, Latenz und Verteilung speichern</button></div>
+    </details>
+    <details class="subsec" id="srt_lines"><summary>Leitungssteuerung</summary>
+      <div class="sech" style="margin-top:6px">Verteilung der Netze</div>
+      <label class="muted" style="display:block">Verteilung auf die Netze
+        <select id="b_spread" style="width:100%;max-width:560px;margin-top:4px"><option value="best">Beste Leitung bevorzugen, andere als Reserve (empfohlen, stabiler)</option><option value="all">Alle Leitungen gleichzeitig nutzen (auch langsamere)</option></select></label>
+      <div class="actions"><button id="b_save_spread" type="button">Verteilung speichern</button></div>
+    </details>
+    <details class="subsec" id="srt_rate"><summary>Bitrate und Latenz</summary>
+      <div class="add" style="margin-top:6px">
+        <label class="muted">Mindestbitrate (kbit/s)<input id="b_min" type="number" min="100" max="19999" step="50" style="width:100%"></label>
+        <label class="muted">Höchstbitrate (kbit/s)<input id="b_max" type="number" min="200" max="20000" step="100" style="width:100%"></label>
+        <label class="muted">Latenz (ms)<input id="b_lat" type="number" min="100" max="10000" step="100" style="width:100%"></label>
+      </div>
+      <div class="actions"><button id="b_save" type="button">Bitrate und Latenz speichern</button></div>
+    </details>
+    <details class="subsec" id="srt_pulse"><summary>Pulsanzeige</summary>
+      <div class="ph" style="margin-top:0">Die Pulsanzeige in der Kopfleiste (am Handy, während gesendet wird) zeigt die Gesamtbitrate aller Sendewege. Hier legen Sie fest, ab wann welche Farbe gilt.</div>
+      <div class="add" style="margin-top:6px">
+        <label class="muted"><span class="pdot crit"></span> Rot ab (kbit/s)<input id="b_pred" type="number" value="0" disabled style="width:100%;opacity:.7"></label>
+        <label class="muted"><span class="pdot warn"></span> Gelb ab (kbit/s)<input id="b_pyellow" type="number" min="1" max="99999" step="100" style="width:100%"></label>
+        <label class="muted"><span class="pdot ok"></span> Grün ab (kbit/s)<input id="b_pgreen" type="number" min="2" max="100000" step="100" style="width:100%"></label>
+      </div>
+      <div class="ph">Rot gilt immer ab 0 kbit/s bis zum Wert für Gelb und lässt sich nicht ändern. Die Pulsanzeige wirkt sofort, ohne Neustart der Sendung.</div>
+      <div class="actions"><button id="b_save_pulse" type="button">Pulsanzeige speichern</button></div>
+    </details>
 <div id="srtlaerr" class="err"></div>
     <div id="srtlainfo" class="ph"></div>
   </details>
@@ -687,7 +842,11 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   </details>
 
   <details class="card wide" id="c_layout"><summary><span class="sumh">Optionen</span></summary>
-    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Reihenfolge der Hauptmenüs legen Sie darunter fest. Auswahl und Reihenfolge werden in diesem Browser gemerkt.</div>
+    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Reihenfolge der Hauptmenüs legen Sie darunter fest. Auswahl und Reihenfolge gelten für alle Geräte an dieser Box.</div>
+    <details class="subsec" id="opt_design"><summary>Design</summary>
+      <div class="ph" style="margin-top:0">Wählen Sie das Aussehen der Oberfläche. Die Auswahl gilt für diesen Browser. Hell oder dunkel stellen Sie wie bisher oben in der Kopfleiste ein.</div>
+      <div id="design_list" class="designs" role="radiogroup" aria-label="Design"></div>
+    </details>
     <details class="subsec" id="opt_menus"><summary>Menüpunkte anzeigen</summary>
       <div id="lay_list" class="optlist"></div>
       <div class="actions"><button type="button" id="lay_showall" class="sec">Alle einblenden</button></div>
@@ -1513,6 +1672,8 @@ async function srtlaLoad(){
   if(document.activeElement.id!=="b_max") $("b_max").value=st.max_kbps;
   if(document.activeElement.id!=="b_lat") $("b_lat").value=st.latency_ms;
   if(document.activeElement.id!=="b_spread") $("b_spread").value=st.spread||"best";
+  if(document.activeElement.id!=="b_pgreen") $("b_pgreen").value=st.pulse_green_kbps||6000;
+  if(document.activeElement.id!=="b_pyellow") $("b_pyellow").value=st.pulse_yellow_kbps||1000;
   connNames=d.conn_names||{};
   $("b_ups").innerHTML=(d.interfaces||[]).map(o=>`<div class="wstat${o.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(o.label)}</b>${connNames[o.iface]?" ("+esc(connNames[o.iface])+")":""} ${connRen(o.iface)} · ${esc(o.ip)}</span><span class="muted"><b data-rate="${esc(o.iface)}">–</b> Mbit/s ↑</span><label><input type="checkbox" data-up="${esc(o.iface)}"${st.uplinks.includes(o.iface)?" checked":""}> Zum Senden verwenden</label></div>`).join("")+(st.uplinks||[]).filter(u=>!(d.interfaces||[]).some(o=>o.iface===u)).map(u=>`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(ifd(u))}</b> ${connRen(u)} · gerade nicht verbunden</span><label><input type="checkbox" data-up="${esc(u)}" checked> Zum Senden verwenden</label></div>`).join("");
   if(!$("b_ups").innerHTML) $("b_ups").innerHTML='<span class="muted">keine Netzwerke gefunden</span>';
@@ -1540,12 +1701,18 @@ $("srvform").addEventListener("submit",async e=>{
   try{ if(srtlaEdit) await srtlaCall("POST","/api/srtla/"+srtlaEdit,body); else await srtlaCall("POST","/api/srtla",body); srtlaFormReset(); }
   catch(x){ $("srtlaerr").textContent=x.message; } srtlaLoad(); askRestart();
 });
-$("b_save").addEventListener("click",async()=>{
+async function saveSrtlaSettings(note){
   $("srtlaerr").textContent="";
   const ups=[...document.querySelectorAll("#b_ups [data-up]")].filter(c=>c.checked).map(c=>c.dataset.up);   // Häkchen sind schon gespeichert
-  try{ await srtlaCall("POST","/api/srtla/settings",{min_kbps:+$("b_min").value,max_kbps:+$("b_max").value,latency_ms:+$("b_lat").value,uplinks:ups,spread:$("b_spread").value}); $("srtlainfo").textContent=(sendData&&sendData.active)?"Gespeichert. Gilt erst nach einem Neustart der Sendung (Knopf oben bei Live).":"Einstellungen gespeichert. Gilt ab dem nächsten Start der Sendekette."; srtlaLoad(); askRestart(); }
+  try{ await srtlaCall("POST","/api/srtla/settings",{min_kbps:+$("b_min").value,max_kbps:+$("b_max").value,latency_ms:+$("b_lat").value,uplinks:ups,spread:$("b_spread").value,
+                                                      pulse_green_kbps:+$("b_pgreen").value,pulse_yellow_kbps:+$("b_pyellow").value});
+    await srtlaLoad();                                                           // erst neu laden, sonst überschreibt es die Meldung
+    $("srtlainfo").textContent=note||((sendData&&sendData.active)?"Gespeichert. Gilt erst nach einem Neustart der Sendung (Knopf oben bei Live).":"Einstellungen gespeichert. Gilt ab dem nächsten Start der Sendekette."); askRestart(); }
   catch(x){ $("srtlaerr").textContent=x.message; }
-});
+}
+$("b_save").addEventListener("click",()=>saveSrtlaSettings());
+$("b_save_spread").addEventListener("click",()=>saveSrtlaSettings());
+$("b_save_pulse").addEventListener("click",()=>saveSrtlaSettings("Gespeichert. Die Pulsanzeige gilt sofort."));
 srtlaLoad();
 
 // ---- WLAN ----
@@ -1912,7 +2079,8 @@ async function pipeLoad(){
     const order=(pipCams||[]).map(x=>x.key).filter(k=>inPic.includes(k)), byKey=Object.fromEntries((pipCams||[]).map(x=>[x.key,x]));
     bar.hidden=!(c.type==="pip"&&c.main&&inPic.length>1);
     setHtml($("swapbtns"),order.map(k=>{ const cam=byKey[k]||{}, on=k===c.main;
-      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':`data-key="${esc(k)}"`} title="${on?"Ist gerade das Hauptbild":(seamlessTo(c.main,k)?"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild, ohne Unterbrechung der Sendung)":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)")}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
+      const gone=!on&&cam.state==="offline";                                                                    // nicht verbunden: nie zum Hauptbild machen
+      return `<button type="button" class="${on?"on":"swapto"}" ${on?'aria-pressed="true" disabled':(gone?`data-key="${esc(k)}" disabled`:`data-key="${esc(k)}"`)} title="${on?"Ist gerade das Hauptbild":gone?"Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.":(seamlessTo(c.main,k)?"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild, ohne Unterbrechung der Sendung)":"Als Hauptbild verwenden (tauscht mit dem aktuellen Hauptbild; läuft die Sendung, startet der Encoder dafür neu, etwa 5 Sekunden ohne Bild)")}"><span class="dot${cam.state==="live"?"":" off"}"></span>${esc(cam.name||k)}</button>`; }).join("")); }
   document.querySelectorAll(".piponly").forEach(e=>e.hidden=$("p_type").value!=="pip");
   $("pipeprev").textContent=d.preview||"(noch keine Hauptkamera gewählt)";
   let info=!c.main?"Noch keine Pipeline gespeichert.":c.type==="pip"?`Gespeichert: Bild-in-Bild, Hauptbild ${c.main}, kleines Bild ${[c.pip,c.pip2,c.pip3].filter(Boolean).join(", ")}.`:`Gespeichert: eine Kamera, Hauptbild ${c.main}.`;
@@ -2058,7 +2226,34 @@ async function doLiveStop(){
   setTimeout(sendLoad,800);
 }
 // Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (ohne Rückfrage)
+// Herzschlag in der Kopfleiste (Handy, während der Sendung): Farbe nach der Gesamtbitrate; die Grenzen stellt man unter "SRTLA" > "Pulsanzeige" ein (Rot gilt darunter)
+function pulseLevel(kbps){
+  const st=(srtlaData&&srtlaData.settings)||{}, g=+st.pulse_green_kbps||6000, y=+st.pulse_yellow_kbps||1000;
+  return kbps>=g?"ok":(kbps>=y?"warn":"crit");
+}
+// EKG-Linie: eine Periode ist 32 Einheiten breit; ihre Geschwindigkeit gleitet zum Wert der neuen Stufe (grün ruhig, gelb schneller, rot am schnellsten), ohne Sprung
+const ECG={off:0,speed:14.5,target:14.5,last:0,raf:0,g:null,still:!!(window.matchMedia&&matchMedia("(prefers-"+"reduced-motion:reduce)").matches)};
+function ecgFrame(t){
+  ECG.raf=0; const el=$("hdr_pulse");
+  if(!el||el.offsetParent===null||document.hidden){ ECG.last=0; return; }                  // nicht sichtbar: anhalten, das nächste Messen startet sie wieder
+  const dt=ECG.last?Math.min(.1,(t-ECG.last)/1000):0; ECG.last=t;
+  ECG.speed+=(ECG.target-ECG.speed)*(1-Math.exp(-dt/.7));
+  ECG.off=(ECG.off+ECG.speed*dt)%32; ECG.g.setAttribute("transform","translate("+(-ECG.off).toFixed(2)+" 0)");
+  ECG.raf=requestAnimationFrame(ecgFrame);
+}
+function paintPulse(mbit){
+  const el=$("hdr_pulse"); if(!el) return;
+  const lv=pulseLevel((+mbit||0)*1000);
+  ECG.target=lv==="ok"?14.5:(lv==="warn"?21.3:35.5);
+  if(!ECG.g) ECG.g=el.querySelector(".ecgg");
+  if(ECG.g&&!ECG.raf&&!ECG.still) ECG.raf=requestAnimationFrame(ecgFrame);
+  el.className="hpulse "+lv; $("hp_val").textContent=fmt(mbit);
+  const t=lv==="ok"?`Gesamtbitrate ${fmt(mbit)} Mbit/s: gut`:(lv==="warn"?`Gesamtbitrate ${fmt(mbit)} Mbit/s: mittel`:`Gesamtbitrate ${fmt(mbit)} Mbit/s: schlecht`);
+  el.setAttribute("aria-label",t); el.title=t;
+}
+$("hdr_more").addEventListener("click",()=>{ const o=document.body.classList.toggle("hdr-open"); $("hdr_more").setAttribute("aria-expanded",o?"true":"false"); });
 function updHdrLive(d){
+  { const on=!!d.active&&d.state!=="stopping"; if(on!==document.body.classList.contains("streaming")){ document.body.classList.toggle("streaming",on); document.body.classList.remove("hdr-open"); $("hdr_more").setAttribute("aria-expanded","false"); } }
   const b=$("hdr_live"), live=!!d.active, busy=d.state==="restarting"||d.state==="starting"||d.state==="stopping";
   b.hidden=false; b.className="livebtn"+(live&&!busy?" on":"")+(busy?" busy":"");
   b.textContent=busy?(LIVE_LABEL[d.state]==="Wird beendet…"?"Wird beendet…":"Verbinde …"):(live?"● LIVE":"Live gehen");
@@ -2089,53 +2284,63 @@ function camLabels(cams){                                                // erst
   return Object.fromEntries(cams.map((c,i)=>[c.key,lab(i)]));
 }
 let footBusy=false, footMsgT=null;
-function footMsg(t,ms){ const m=$("mf_msg"); clearTimeout(footMsgT); m.textContent=t||""; m.hidden=!t; m.dataset.info=""; if(t) footMsgT=setTimeout(()=>{ m.hidden=true; },ms||6000); }
-$("mf_info").addEventListener("click",()=>{ const m=$("mf_msg"); if(!m.hidden&&m.dataset.info==="1"){ footMsg(""); return; } footMsg("Einmal klicken = ausblenden, Ton noch da\nDoppelklick = deaktivieren, Ton nicht nutzbar\nLanges klicken = Zum Hauptbild machen",15000); m.dataset.info="1"; });
+function footMsg(t,ms){ const m=$("mf_msg"); clearTimeout(footMsgT); m.textContent=t||""; m.hidden=!t; m.dataset.info=""; m.style.fontSize=""; if(t) footMsgT=setTimeout(()=>{ m.hidden=true; },ms||6000); }
+$("mf_info").addEventListener("click",()=>{ const m=$("mf_msg"); if(!m.hidden&&m.dataset.info==="1"){ footMsg(""); return; }
+  const lines=$("mf_tools").dataset.cams==="1"?["Kurzer Klick = zum Hauptbild machen","Doppelklick = aus-/einblenden, Ton bleibt","Langer Klick = deaktivieren / aktivieren","Ton: kurzer Klick = nächste Spur","Ton: langer Klick = stumm / wieder laut"]
+    :["Ton: langer Klick = stumm / wieder laut"];
+  footMsg(lines.join("\n"),15000); m.dataset.info="1"; fitMsg(m); });
+function fitMsg(m){                                                         // Info-Zeilen ohne Umbruch: bei Bedarf die Schrift verkleinern, bis die breiteste Zeile passt (jedes Design, jede Sprache)
+  m.style.fontSize=""; let fs=parseFloat(getComputedStyle(m).fontSize)||14;
+  while(m.scrollWidth>m.clientWidth+1&&fs>9){ fs-=.5; m.style.fontSize=fs+"px"; }
+}
 function sizeFoot(){ const h=$("mfoot").offsetHeight; if(h) document.documentElement.style.setProperty("--mfh",h+"px"); else document.documentElement.style.removeProperty("--mfh"); }
 window.addEventListener("resize",sizeFoot);
 if(window.ResizeObserver) new ResizeObserver(sizeFoot).observe($("mfoot"));          // auch wenn eine Übersetzung den Text breiter oder höher macht
 function renderFoot(d){
   if(footBusy) return;                                                    // mitten im Drücken nichts austauschen
   const f=d.footer, box=$("mf_tools");
-  if(!f||!f.cams||f.cams.length<2){ box.hidden=true; $("mf_info").hidden=true; setHtml(box,""); sizeFoot(); return; }
-  const L=camLabels(f.cams);
-  const cams=f.cams.map(c=>{
+  if(!f||!f.cams||!f.cams.length){ box.hidden=true; $("mf_info").hidden=true; setHtml(box,""); sizeFoot(); return; }
+  const L=camLabels(f.cams), multi=f.cams.length>=2;                          // mit nur einer Kamera gibt es nichts zu wechseln oder auszublenden: nur der Ton-Knopf (stumm) bleibt
+  const cams=!multi?"":f.cams.map(c=>{
     const full=c.name||c.key;
-    const tip=(c.main?[`${full} ist das Hauptbild (lässt sich nicht ausblenden).`]:[c.hidden?`${full} ist ausgeblendet.`:`${full} ist als kleines Bild zu sehen.`,
-      c.inactive?"Kurz drücken aktiviert die Kamera, das Bild bleibt ausgeblendet (Ton nutzbar).":(c.hidden?"Kurz drücken blendet das kleine Bild ein.":"Kurz drücken blendet es aus."),"Lang drücken macht es zum Hauptbild.",
-      c.inactive?"Doppelt tippen: wieder aktivieren.":"Doppelt tippen: deaktivieren (nicht im Stream, Ton nicht nutzbar)."]).join(" ");
-    return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.inactive?" off":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" data-inactive="${c.inactive?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
-  const a=f.audio||{}, an=a.name||a.key||"", atip=(a.mute?`Ton von ${an} (stumm).`:`Ton von ${an}.`)+" "+(a.mute?"Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":"Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm.");
-  const aud=`<button type="button" class="mf-t mf-aud${a.mute?" muted":""}" data-kind="aud" data-mute="${a.mute?1:0}" data-next="${esc(a.next||"main")}" title="${esc(atip)}" aria-label="${esc(atip)}">${a.mute?FIC.micoff:FIC.spk}<span>Ton: ${esc(L[a.key]||an)}</span></button>`;
-  box.hidden=false; $("mf_info").hidden=false; setHtml(box,cams+aud); sizeFoot();
+    const tip=(c.main?[`${full} ist das Hauptbild (lässt sich nicht ausblenden oder deaktivieren).`,"Kurz auf eine andere Kamera drücken macht diese zum Hauptbild."]
+      :[c.inactive?`${full} ist deaktiviert.`:(c.hidden?`${full} ist ausgeblendet.`:`${full} ist als kleines Bild zu sehen.`),
+        c.inactive?"Kurz drücken aktiviert die Kamera, das Bild bleibt ausgeblendet (Ton nutzbar).":"Kurz drücken macht es zum Hauptbild.",
+        c.inactive?"Doppelt tippen: aktivieren, das Bild bleibt ausgeblendet.":(c.hidden?"Doppelt tippen: das kleine Bild einblenden.":"Doppelt tippen: das kleine Bild ausblenden (Ton noch da)."),
+        c.inactive?"Lang drücken: aktivieren.":"Lang drücken: deaktivieren (nicht im Stream, Ton nicht nutzbar)."]).join(" ");
+    return `<button type="button" class="mf-t mf-cam${c.main?" ismain":""}${c.hidden?" hid":""}${c.inactive?" off":""}${c.state==="live"?" live":""}" data-kind="cam" data-key="${esc(c.key)}" data-label="${esc(L[c.key])}" data-slot="${c.slot}" data-main="${c.main?1:0}" data-hidden="${c.hidden?1:0}" data-inactive="${c.inactive?1:0}" data-gone="${c.state==="offline"?1:0}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.main?FIC.cam:(c.hidden?FIC.pipoff:FIC.pip)}<span>${esc(L[c.key])}</span></button>`; }).join("");
+  const a=f.audio||{}, an=a.name||a.key||"", one=!multi||(a.next||"")===(a.src||"");              // one: es gibt nur eine Tonquelle, kurz drücken wechselt nichts
+  const atip=(a.mute?`Ton von ${an} (stumm).`:`Ton von ${an}.`)+" "+(one?(a.mute?"Lang drücken schaltet wieder laut.":"Lang drücken schaltet stumm."):
+    (a.mute?"Kurz drücken wechselt die Tonspur, lang drücken schaltet wieder laut.":"Kurz drücken wechselt die Tonspur, lang drücken schaltet stumm."));
+  const aud=`<button type="button" class="mf-t mf-aud${a.mute?" muted":""}" data-kind="aud" data-single="${one?1:0}" data-mute="${a.mute?1:0}" data-next="${esc(a.next||"main")}" title="${esc(atip)}" aria-label="${esc(atip)}">${a.mute?FIC.micoff:FIC.spk}<span>Ton: ${esc(L[a.key]||an)}</span></button>`;
+  box.hidden=false; box.dataset.cams=multi?"1":"0"; $("mf_info").hidden=false; setHtml(box,cams+aud); sizeFoot();
 }
 async function footAct(b,long,dbl){
   const d=sendData||{}, f=d.footer||{cams:[]}, mainKey=(f.cams.find(c=>c.main)||{}).key;
   try{
     let r;
     if(b.dataset.kind==="cam"){
-      if(dbl){
-        if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht deaktivieren.");
-        const on=b.dataset.inactive==="1";
+      const isMain=b.dataset.main==="1", on=b.dataset.inactive==="1";          // on: die Kamera ist deaktiviert (dann schaltet jede Geste sie wieder ein)
+      if(long){                                                                // lang: deaktivieren (nicht im Stream, Ton nicht nutzbar) oder wieder aktivieren
+        if(isMain) return footMsg("Das Hauptbild lässt sich nicht deaktivieren.");
         r=await srtlaCall("POST","/api/pipeline/active",{key:b.dataset.key,active:on});
         return footMsg(on?"Aktiviert.":"Deaktiviert: nicht mehr im Stream, Ton nicht nutzbar.");
       }
-      if(long){
-        if(b.dataset.main==="1") return footMsg("Das ist schon das Hauptbild.");
-        r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key});
-      }else if(b.dataset.inactive==="1"){
+      if(isMain) return footMsg(dbl?"Das Hauptbild lässt sich nicht ausblenden. Zum Tauschen kurz auf eine andere Kamera drücken.":"Das ist schon das Hauptbild.");
+      if(!dbl&&!on&&b.dataset.gone==="1") return footMsg("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.");                 // zu einer nicht verbundenen Kamera wird nie gewechselt
+      if(on){
         // deaktiviert -> ausgeblendet: Kamera aktivieren (Ton nutzbar), das Bild bleibt aus
         await srtlaCall("POST","/api/pipeline/active",{key:b.dataset.key,active:true});
         r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:false}});
         return footMsg("Aktiviert, Bild ausgeblendet: Ton nutzbar.");
-      }else{
-        if(b.dataset.main==="1") return footMsg("Das Hauptbild lässt sich nicht ausblenden. Zum Tauschen lange auf eine andere Kamera drücken.");
-        r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}});
       }
+      if(dbl) r=await srtlaCall("POST","/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}});      // doppelt: kleines Bild aus-/einblenden
+      else r=await srtlaCall("POST","/api/pipeline/swap",{with:b.dataset.key});                                          // kurz: zum Hauptbild machen
     }else if(long){
       if(!d.active) return footMsg("Stumm schalten geht nur während der Sendung.");
       r=await srtlaCall("POST","/api/pipeline/view",{mute:b.dataset.mute!=="1"});
     }else{
+      if(b.dataset.single==="1") return footMsg("Es gibt nur eine Tonquelle. Lang drücken schaltet stumm oder wieder laut.");
       r=await srtlaCall("POST","/api/pipeline/view",{audio:b.dataset.next});
     }
     footMsg((r&&r.note)||"");
@@ -2155,7 +2360,7 @@ async function footAct(b,long,dbl){
   box.addEventListener("click",e=>{ const b=e.target.closest(".mf-t"); if(!b) return;
     if(fired){ fired=false; e.preventDefault(); return; }                  // dem langen Druck folgt ein Klick: ignorieren
     if(b.dataset.kind!=="cam"){ footAct(b,false); return; }
-    if(tapT&&tapKey===b.dataset.key){ clearTimeout(tapT); tapT=null; footAct(b,false,true); return; }      // zweiter Tipp: deaktivieren oder aktivieren
+    if(tapT&&tapKey===b.dataset.key){ clearTimeout(tapT); tapT=null; footAct(b,false,true); return; }      // zweiter Tipp: kleines Bild ausblenden oder einblenden
     clearTimeout(tapT); tapKey=b.dataset.key; footBusy=true;               // kurz warten, ob ein zweiter Tipp folgt
     tapT=setTimeout(()=>{ tapT=null; footAct(b,false); },300); });
   box.addEventListener("contextmenu",e=>e.preventDefault());              // kein Auswahl- oder Kontextmenü beim langen Druck
@@ -2476,6 +2681,7 @@ async function tick(){
       el.hidden=!(sendData&&sendData.active);
       el.innerHTML=`${fmt(tot)} <small>Mbit/s ↑</small>`;
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
+      paintPulse(tot);
     }
     const upRow=(nm,tx,rx,cls)=>`<div class="row${cls||""}"><span class="nm">${nm}</span><span class="num"><b>${fmt(tx)}</b></span><span class="unit u">Mbit/s ↑</span><span class="sep">·</span><span class="num">${fmt(rx)}</span><span class="unit u">↓</span></div>`;
     let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(ifd(n)),r.tx_mbit,r.rx_mbit)).join("");
@@ -2712,7 +2918,9 @@ $("chat_form").addEventListener("submit",async e=>{
   const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]};
   try{ const v=JSON.parse(localStorage.getItem(KEY)||"{}")||{};
        st.order=(Array.isArray(v.order)?v.order:[]).filter(x=>typeof x==="string"); st.hidden=(Array.isArray(v.hidden)?v.hidden:[]).filter(x=>typeof x==="string"); }catch(e){}
-  const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} };
+  let pushT=0;
+  function push(){ clearTimeout(pushT); pushT=setTimeout(()=>{ srtlaCall("POST","/api/layout",{order:st.order,hidden:st.hidden}).catch(()=>{}); },400); }       // auf der Box ablegen: gilt für alle Geräte
+  const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} push(); };
   const movables=()=>[...main.children].filter(el=>el.matches("details.card[id]"));
   const DEFAULT=movables().map(e=>e.id);                                   // Standardreihenfolge
   const hideable=id=>id!=="c_layout"&&id!=="livecard";                      // "Optionen" selbst bleibt immer sichtbar
@@ -2727,14 +2935,21 @@ $("chat_form").addEventListener("submit",async e=>{
   function applyHidden(){
     document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
     st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&hideable(id)) e.setAttribute("data-pbhide",""); });
+    document.documentElement.classList.toggle("nohelp",st.hidden.includes("hlp_btn"));                  // "hlp_btn": alle Hilfe-Knöpfe "i" (kein eigenes Element)
     buildOrder();
   }
   function buildList(){
     const box=$("lay_list"); box.textContent="";
     const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="optrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
                                 c.checked=!st.hidden.includes(id); l.appendChild(c); const s=document.createElement("span"); s.textContent=txt; l.appendChild(s); g.appendChild(l); };
-    movables().filter(el=>hideable(el.id)).forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);       // je Karte eine Gruppe mit ihren Bereichen darunter
-                             el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true)); box.appendChild(g); });
+    movables().forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);                  // je Karte eine Gruppe mit ihren Bereichen darunter
+      if(el.id==="c_layout"){                                                                                                                 // "Optionen" selbst bleibt sichtbar (sonst käme man nicht zurück), "Design" und "Reihenfolge" lassen sich ausblenden
+        const c=g.querySelector("input"); c.checked=true; c.disabled=true; g.firstChild.classList.add("fixed");
+        ["opt_design","opt_order"].forEach(id=>{ const sub=$(id); if(sub) row(g,id,label(sub),true); }); }
+      else if(hideable(el.id)) el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true));
+      box.appendChild(g); });
+    { const g=document.createElement("div"); g.className="optgrp"; row(g,"sm_btn","Streammodus",false); box.appendChild(g); }                        // Knopf in der Kopfleiste
+    { const g=document.createElement("div"); g.className="optgrp"; row(g,"hlp_btn","Hilfe-Knöpfe (i)",false); box.appendChild(g); }                  // alle "i"
   }
   function buildOrder(focus){
     const box=$("ord_list"), all=movables(); box.textContent="";
@@ -2763,7 +2978,15 @@ $("chat_form").addEventListener("submit",async e=>{
   });
   $("lay_showall").addEventListener("click",()=>{ st.hidden=[]; save(); applyHidden(); buildList(); });
   $("lay_reset").addEventListener("click",()=>{ st.order=[]; save(); applyOrder(); buildOrder(); });
-  applyOrder(); applyHidden(); buildList();
+  const ids=a=>(Array.isArray(a)?a:[]).filter(x=>typeof x==="string");
+  async function pull(){                                                   // Stand der Box übernehmen; hat die Box noch keinen, liefert dieses Gerät seinen
+    let d; try{ d=await srtlaCall("GET","/api/layout"); }catch(e){ return; }
+    if(d&&d.set){ st.order=ids(d.order); st.hidden=ids(d.hidden); try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){}
+                  applyOrder(); applyHidden(); buildList(); }
+    else if(st.order.length||st.hidden.length) push();
+  }
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) pull(); });
+  applyOrder(); applyHidden(); buildList(); pull();
 })();
 
 // ---- Karten zuklappen: Zustand wird im Browser gemerkt ----
@@ -2835,6 +3058,32 @@ function setTheme(t,save){
 }
 $("theme_btn").addEventListener("click",()=>setTheme(curTheme()==="dark"?"light":"dark",true));
 setTheme(curTheme(),false);
+
+// ---- Designs (Optionen): die Auswahl bleibt im Browser; "Standard" ist das bisherige Aussehen ----
+(function(){
+  const KEY="pb_design";
+  const DES=[{id:"",name:"Standard",text:"Das bisherige Aussehen der Oberfläche.",sw:["#0f172a","#1e293b","#06b6d4"]},
+    {id:"klar",name:"Klar",text:"Hell, ruhig und großzügig: große Schrift, weiche Karten, viel Platz zum Antippen.",sw:["#f4f6fb","#ffffff","#2457d6"]},
+    {id:"kompakt",name:"Kompakt",text:"Dicht und nüchtern: viele Werte auf einen Blick, wenig Abstand, besonders am Rechner praktisch.",sw:["#0b0f14","#121821","#37c8e0"]}];
+  let cur=""; try{ cur=localStorage.getItem(KEY)||""; }catch(e){}
+  if(!DES.some(d=>d.id===cur)) cur="";
+  function apply(id,save){
+    cur=id; const r=document.documentElement;
+    if(id) r.setAttribute("data-design",id); else r.removeAttribute("data-design");
+    if(save){ try{ if(id) localStorage.setItem(KEY,id); else localStorage.removeItem(KEY); }catch(e){} }
+    let stored=""; try{ stored=localStorage.getItem("pb_theme")||""; }catch(e){}
+    if(save&&stored!=="light"&&stored!=="dark") setTheme(id==="klar"?"light":"dark",false);        // ohne eigene Wahl: Klar beginnt hell, die anderen dunkel
+    else setTheme(curTheme(),false);                                                               // meta theme-color an die neuen Farben anpassen
+  }
+  const box=$("design_list");
+  DES.forEach(d=>{ const l=document.createElement("label"); l.className="dchoice";
+    const i=document.createElement("input"); i.type="radio"; i.name="design"; i.value=d.id; i.checked=d.id===cur; l.appendChild(i);
+    const sw=document.createElement("span"); sw.className="dsw"; sw.setAttribute("aria-hidden","true"); d.sw.forEach(c=>{ const e=document.createElement("i"); e.style.background=c; sw.appendChild(e); }); l.appendChild(sw);
+    const t=document.createElement("span"); t.className="dtx"; const b=document.createElement("b"); b.textContent=d.name; const x=document.createElement("span"); x.textContent=d.text; t.appendChild(b); t.appendChild(x); l.appendChild(t);
+    box.appendChild(l); });
+  box.addEventListener("change",e=>{ const i=e.target.closest("input[name=design]"); if(i&&i.checked) apply(i.value,true); });
+  setTheme(curTheme(),false);
+})();
 
 // Hilfstexte: auf dem Handy hinter einem "i" (Issue #21). Gemeint sind die festen Beschreibungen direkt unter einer Überschrift oder unter dem Kartenkopf.
 const HLP_SEL=".card .ph:not([id]):not([role])";
