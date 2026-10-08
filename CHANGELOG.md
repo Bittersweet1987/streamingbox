@@ -1,5 +1,10 @@
 # Änderungen
 
+## 0.9.140 (Beta)
+- **Kopfleiste am Handy während der Sendung zeigt jetzt die vorhandene Pulsanzeige und die Kamerapunkte aus dem Chat** (dieselben Elemente, sie ziehen vom Chat in den Kopf und danach wieder zurück; Farbe und Verlauf wie dort). Die in 0.9.139 eigens gebaute EKG-Linie samt Untermenü „Pulsanzeige“ (Grün/Gelb/Rot-Grenzen unter SRTLA) entfällt. Der Pfeil ganz rechts klappt wie bisher die Knöpfe auf (dann sind Pulsanzeige und Punkte im Kopf weg, er sieht aus wie ohne sie).
+- Die Karte „SRTLA“ behält die Untermenüs „SRTLA-Server“, „Leitungssteuerung“ (Verteilung der Netze) und „Bitrate und Latenz“.
+- Die Chat-Gestaltung aus 0.9.131 bis 0.9.134 (Kopfzeile einzeilig, Zahnrad oben, Amplitude, Ereigniskarten, Moderation) wurde geprüft: nichts davon wurde überschrieben. Entfallen ist nur der Anordnen-Modus (ersetzt durch „Optionen“ in 0.9.135).
+
 ## 0.9.139 (Beta)
 - **Neu: Designs** (Optionen > Design). Das bisherige Aussehen bleibt als „Standard“ und ist die Vorgabe; dazu zwei neue, auf Lesbarkeit und Bedienung am Handy wie am Rechner ausgelegt, jeweils hell und dunkel (der Knopf in der Kopfleiste gilt weiter):
   - **Klar:** ruhig und großzügig, größere Schrift, Überschriften in normaler Schreibweise, weiche Karten, runde Knöpfe (mindestens 44 Pixel hoch).

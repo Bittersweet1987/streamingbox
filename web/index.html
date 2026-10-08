@@ -276,14 +276,11 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 #mfoot{display:none}
 .mf-live{flex:1 1 76px;min-width:68px;min-height:54px;padding:0 4px;white-space:nowrap;border-radius:12px;border:1px solid var(--ok);background:var(--ok);color:#06210f;font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
 #mfoot:has(#mf_tools[hidden]) .mf-live{flex:0 0 auto;min-width:112px;padding:0 22px}      /* allein in der Leiste nicht über die ganze Breite */
-#hdr_pulse,#hdr_more{display:none}
-.pdot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:baseline;background:var(--muted)}.pdot.ok{background:var(--ok)}.pdot.warn{background:var(--warn)}.pdot.crit{background:var(--crit)}
-.hpulse{align-items:center;gap:6px;font-variant-numeric:tabular-nums;color:var(--ok);transition:color .9s ease}.hpulse.warn{color:var(--warn)}.hpulse.crit{color:var(--crit)}
-.hpulse .ecg{width:58px;height:22px;flex:none;overflow:hidden}.hpulse .ecg path{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.hpulse b{font-size:15px;display:inline-block;min-width:5ch;text-align:right}     /* Platz für 000.0: ein-, zwei- und dreistellige Werte verschieben die Linie nicht */.hpulse small{font-size:11px;color:var(--muted)}
+#hdr_sig,#hdr_more{display:none}
+#hdr_sig .sig{margin-left:0}#hdr_sig .camdots{margin-left:8px}                    /* Pulsanzeige und Kamerapunkte des Chats, während der Sendung im Kopf (Handy) */
 #hdr_more{padding:0;width:26px;min-width:0;align-items:center;justify-content:center}#hdr_more svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s}
 #hdr_more[aria-expanded=true] svg{transform:rotate(180deg)}
-@media(prefers-reduced-motion:reduce){.hpulse{transition:none}#hdr_more svg{transition:none}}
+@media(prefers-reduced-motion:reduce){#hdr_more svg{transition:none}}
 .mf-live.on{background:var(--crit);border-color:var(--crit);color:#fff}
 .mf-live.busy{background:var(--warn);border-color:var(--warn);color:#0f172a}
 .mf-live:disabled{opacity:.55;cursor:not-allowed}
@@ -312,8 +309,11 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
   header .hdr button,header .hdr>.badge{min-height:30px;padding:3px 9px;white-space:nowrap}
   header .hdr .updbtn{font-size:0;padding:3px 9px}header .hdr .updbtn .dot{margin:0;font-size:13px}    /* nur der gelbe Punkt, Text steht im Tooltip */
   #hdr_live{display:none!important}
-  body.streaming:not(.hdr-open) #hdr_pulse{display:inline-flex}body.streaming #hdr_more{display:inline-flex}      /* während der Sendung: zugeklappt zeigt der Kopf die Pulsanzeige, aufgeklappt alle Knöpfe wie sonst */
-  body.streaming:not(.hdr-open) header .hdr>*:not(#hdr_pulse):not(#hdr_more){display:none!important}
+  body.streaming:not(.hdr-open) #hdr_sig{display:inline-flex;align-items:center;min-width:0}body.streaming #hdr_more{display:inline-flex}      /* während der Sendung: zugeklappt zeigt der Kopf die Pulsanzeige, aufgeklappt alle Knöpfe wie sonst */
+  body.streaming:not(.hdr-open) header .hdr>*:not(#hdr_sig):not(#hdr_more){display:none!important}
+  body.streaming #hdr_sig .sig .sgs{display:flex}                                                                    /* die Skala (Zahlen links vom Verlauf) bleibt im Kopf immer sichtbar, auch auf schmalen Handys */
+  body.streaming #hdr_sig .sig{gap:5px;height:28px}body.streaming #hdr_sig .sig svg{height:28px}                       /* der Kopf wird etwas höher: so sind die Zahlen der Skala lesbar (wie am Rechner im Chat) */
+  body.streaming #hdr_sig .sig .sgs{height:28px;font-size:8px;line-height:9px;min-width:22px;overflow:visible}
   body.streaming header h1{font-size:13px}                                                                          /* Platz für den Knopf zum Zuklappen */
   /* der Block "Nicht live" entfällt: alles steht in Kopf und Fußleiste; nur Hinweise, Fehler und "Noch nicht übernommen" bleiben, wenn es welche gibt */
   #livecard{padding:0;border:0;background:transparent;box-shadow:none;margin:0}
@@ -327,6 +327,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 }
 @media(max-width:374px){.mf-live{min-width:60px}.mf-t{min-width:38px}}                /* schmale Handys: die fünf Knöpfe müssen noch in die Leiste passen */
 @media(max-width:339px){
+  body.streaming #hdr_sig .sig svg{width:44px}body.streaming #hdr_sig .camdots{margin-left:5px;gap:3px}
   #mfoot{gap:4px;padding:5px}#mf_tools{gap:4px}.mf-live{min-width:52px;font-size:15px}.mf-t{min-width:34px}
   header{padding:5px 8px;gap:4px}header h1{font-size:13px}header .hdr{gap:4px}header .hdr button{padding:3px 7px}
 }
@@ -541,7 +542,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
 </style>
 </head>
 <body>
-<header><h1>IRL4YOU BOX</h1><span class="hdr"><span id="hdr_pulse" class="hpulse ok" role="img" aria-label="Verbindung: keine Messung"><svg class="ecg" viewBox="0 0 64 24" aria-hidden="true"><defs><linearGradient id="ecgf" x1="0" x2="1"><stop offset="0" stop-color="#000"/><stop offset=".22" stop-color="#fff"/><stop offset=".78" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><mask id="ecgm"><rect width="64" height="24" fill="url(#ecgf)"/></mask></defs><g mask="url(#ecgm)"><g class="ecgg"><path d="M0 12 H8 L10 9 L12 12 H14 L16 3 L18 20 L20 12 H23 L26 8 L29 12 H32 H40 L42 9 L44 12 H46 L48 3 L50 20 L52 12 H55 L58 8 L61 12 H64 H72 L74 9 L76 12 H78 L80 3 L82 20 L84 12 H87 L90 8 L93 12 H96 H104 L106 9 L108 12 H110 L112 3 L114 20 L116 12 H119 L122 8 L125 12 H128"/></g></g></svg><b id="hp_val">–</b><small>Mbit/s</small></span><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
+<header><h1>IRL4YOU BOX</h1><span class="hdr"><span id="hdr_sig"></span><button type="button" id="hdr_upd" class="updbtn" hidden aria-label="Neue Version verfügbar, zum Software-Update" title="Neue Version verfügbar"><span class="dot wait"></span><span class="u1">Update </span>Oberfläche</button><button type="button" id="hdr_sys" class="updbtn" hidden aria-label="Systemupdates verfügbar, zu den Systemupdates" title="Systemupdates verfügbar"><span class="dot wait"></span><span class="u1">Update </span>System</button>
   <span class="foldd"><button type="button" class="sec small" id="fold_all">Alle zuklappen</button><button type="button" class="sec small" id="unfold_all">Alle aufklappen</button></span>
   <button type="button" class="sec small foldm" id="fold_toggle" title="Alle Karten zu- oder aufklappen" aria-label="Alle Karten zu- oder aufklappen">⇕</button> <select id="lang_sel" data-lang translate="no" class="sec small" aria-label="Language" title="Language"></select> <button type="button" class="sec small" id="pb_awake" aria-pressed="false" title="Bildschirm anlassen" aria-label="Bildschirm anlassen">💡</button> <button type="button" class="sec small" id="theme_btn" aria-label="Hell oder dunkel" title="Hell oder dunkel"></button> <button type="button" class="sec small" id="sm_btn" title="Streammodus: blendet Adressen, Namen und Protokolle aus, z. B. wenn der Bildschirm gefilmt wird" aria-label="Streammodus"><span class="smic">👁</span><span class="smtx">Streammodus: aus</span></button> <button type="button" id="hdr_live" class="livebtn" hidden aria-label="Sendung starten oder beenden">Live</button><button type="button" id="hdr_more" class="sec small" aria-expanded="false" aria-label="Weitere Knöpfe ein- oder ausklappen" title="Weitere Knöpfe ein- oder ausklappen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></span></header>
 <main>
@@ -669,16 +670,6 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
         <label class="muted">Latenz (ms)<input id="b_lat" type="number" min="100" max="10000" step="100" style="width:100%"></label>
       </div>
       <div class="actions"><button id="b_save" type="button">Bitrate und Latenz speichern</button></div>
-    </details>
-    <details class="subsec" id="srt_pulse"><summary>Pulsanzeige</summary>
-      <div class="ph" style="margin-top:0">Die Pulsanzeige in der Kopfleiste (am Handy, während gesendet wird) zeigt die Gesamtbitrate aller Sendewege. Hier legen Sie fest, ab wann welche Farbe gilt.</div>
-      <div class="add" style="margin-top:6px">
-        <label class="muted"><span class="pdot crit"></span> Rot ab (kbit/s)<input id="b_pred" type="number" value="0" disabled style="width:100%;opacity:.7"></label>
-        <label class="muted"><span class="pdot warn"></span> Gelb ab (kbit/s)<input id="b_pyellow" type="number" min="1" max="99999" step="100" style="width:100%"></label>
-        <label class="muted"><span class="pdot ok"></span> Grün ab (kbit/s)<input id="b_pgreen" type="number" min="2" max="100000" step="100" style="width:100%"></label>
-      </div>
-      <div class="ph">Rot gilt immer ab 0 kbit/s bis zum Wert für Gelb und lässt sich nicht ändern. Die Pulsanzeige wirkt sofort, ohne Neustart der Sendung.</div>
-      <div class="actions"><button id="b_save_pulse" type="button">Pulsanzeige speichern</button></div>
     </details>
 <div id="srtlaerr" class="err"></div>
     <div id="srtlainfo" class="ph"></div>
@@ -1672,8 +1663,6 @@ async function srtlaLoad(){
   if(document.activeElement.id!=="b_max") $("b_max").value=st.max_kbps;
   if(document.activeElement.id!=="b_lat") $("b_lat").value=st.latency_ms;
   if(document.activeElement.id!=="b_spread") $("b_spread").value=st.spread||"best";
-  if(document.activeElement.id!=="b_pgreen") $("b_pgreen").value=st.pulse_green_kbps||6000;
-  if(document.activeElement.id!=="b_pyellow") $("b_pyellow").value=st.pulse_yellow_kbps||1000;
   connNames=d.conn_names||{};
   $("b_ups").innerHTML=(d.interfaces||[]).map(o=>`<div class="wstat${o.ip?" ok":""}"><span class="wdot"></span><span class="wgrow"><b>${esc(o.label)}</b>${connNames[o.iface]?" ("+esc(connNames[o.iface])+")":""} ${connRen(o.iface)} · ${esc(o.ip)}</span><span class="muted"><b data-rate="${esc(o.iface)}">–</b> Mbit/s ↑</span><label><input type="checkbox" data-up="${esc(o.iface)}"${st.uplinks.includes(o.iface)?" checked":""}> Zum Senden verwenden</label></div>`).join("")+(st.uplinks||[]).filter(u=>!(d.interfaces||[]).some(o=>o.iface===u)).map(u=>`<div class="wstat"><span class="wdot"></span><span class="wgrow"><b>${esc(ifd(u))}</b> ${connRen(u)} · gerade nicht verbunden</span><label><input type="checkbox" data-up="${esc(u)}" checked> Zum Senden verwenden</label></div>`).join("");
   if(!$("b_ups").innerHTML) $("b_ups").innerHTML='<span class="muted">keine Netzwerke gefunden</span>';
@@ -1704,15 +1693,13 @@ $("srvform").addEventListener("submit",async e=>{
 async function saveSrtlaSettings(note){
   $("srtlaerr").textContent="";
   const ups=[...document.querySelectorAll("#b_ups [data-up]")].filter(c=>c.checked).map(c=>c.dataset.up);   // Häkchen sind schon gespeichert
-  try{ await srtlaCall("POST","/api/srtla/settings",{min_kbps:+$("b_min").value,max_kbps:+$("b_max").value,latency_ms:+$("b_lat").value,uplinks:ups,spread:$("b_spread").value,
-                                                      pulse_green_kbps:+$("b_pgreen").value,pulse_yellow_kbps:+$("b_pyellow").value});
+  try{ await srtlaCall("POST","/api/srtla/settings",{min_kbps:+$("b_min").value,max_kbps:+$("b_max").value,latency_ms:+$("b_lat").value,uplinks:ups,spread:$("b_spread").value});
     await srtlaLoad();                                                           // erst neu laden, sonst überschreibt es die Meldung
     $("srtlainfo").textContent=note||((sendData&&sendData.active)?"Gespeichert. Gilt erst nach einem Neustart der Sendung (Knopf oben bei Live).":"Einstellungen gespeichert. Gilt ab dem nächsten Start der Sendekette."); askRestart(); }
   catch(x){ $("srtlaerr").textContent=x.message; }
 }
 $("b_save").addEventListener("click",()=>saveSrtlaSettings());
 $("b_save_spread").addEventListener("click",()=>saveSrtlaSettings());
-$("b_save_pulse").addEventListener("click",()=>saveSrtlaSettings("Gespeichert. Die Pulsanzeige gilt sofort."));
 srtlaLoad();
 
 // ---- WLAN ----
@@ -2226,34 +2213,17 @@ async function doLiveStop(){
   setTimeout(sendLoad,800);
 }
 // Kopfleiste: immer sichtbar, zeigt den Zustand der Sendung und startet oder beendet sie (ohne Rückfrage)
-// Herzschlag in der Kopfleiste (Handy, während der Sendung): Farbe nach der Gesamtbitrate; die Grenzen stellt man unter "SRTLA" > "Pulsanzeige" ein (Rot gilt darunter)
-function pulseLevel(kbps){
-  const st=(srtlaData&&srtlaData.settings)||{}, g=+st.pulse_green_kbps||6000, y=+st.pulse_yellow_kbps||1000;
-  return kbps>=g?"ok":(kbps>=y?"warn":"crit");
+// Kopfleiste am Handy während der Sendung: die Pulsanzeige und die Kamerapunkte des Chats (dieselben Elemente, sie ziehen um); sonst stehen sie wieder im Chat
+function placeSig(){
+  const sig=$("net_sig"), dots=$("cam_dots"), hold=$("hdr_sig"), gear=$("chat_opt"); if(!sig||!dots||!hold||!gear) return;
+  const want=isPhone()&&document.body.classList.contains("streaming");
+  if(want&&sig.parentNode!==hold){ hold.appendChild(sig); hold.appendChild(dots); }
+  else if(!want&&sig.parentNode===hold){ gear.before(sig); gear.before(dots); }
 }
-// EKG-Linie: eine Periode ist 32 Einheiten breit; ihre Geschwindigkeit gleitet zum Wert der neuen Stufe (grün ruhig, gelb schneller, rot am schnellsten), ohne Sprung
-const ECG={off:0,speed:14.5,target:14.5,last:0,raf:0,g:null,still:!!(window.matchMedia&&matchMedia("(prefers-"+"reduced-motion:reduce)").matches)};
-function ecgFrame(t){
-  ECG.raf=0; const el=$("hdr_pulse");
-  if(!el||el.offsetParent===null||document.hidden){ ECG.last=0; return; }                  // nicht sichtbar: anhalten, das nächste Messen startet sie wieder
-  const dt=ECG.last?Math.min(.1,(t-ECG.last)/1000):0; ECG.last=t;
-  ECG.speed+=(ECG.target-ECG.speed)*(1-Math.exp(-dt/.7));
-  ECG.off=(ECG.off+ECG.speed*dt)%32; ECG.g.setAttribute("transform","translate("+(-ECG.off).toFixed(2)+" 0)");
-  ECG.raf=requestAnimationFrame(ecgFrame);
-}
-function paintPulse(mbit){
-  const el=$("hdr_pulse"); if(!el) return;
-  const lv=pulseLevel((+mbit||0)*1000);
-  ECG.target=lv==="ok"?14.5:(lv==="warn"?21.3:35.5);
-  if(!ECG.g) ECG.g=el.querySelector(".ecgg");
-  if(ECG.g&&!ECG.raf&&!ECG.still) ECG.raf=requestAnimationFrame(ecgFrame);
-  el.className="hpulse "+lv; $("hp_val").textContent=fmt(mbit);
-  const t=lv==="ok"?`Gesamtbitrate ${fmt(mbit)} Mbit/s: gut`:(lv==="warn"?`Gesamtbitrate ${fmt(mbit)} Mbit/s: mittel`:`Gesamtbitrate ${fmt(mbit)} Mbit/s: schlecht`);
-  el.setAttribute("aria-label",t); el.title=t;
-}
+if(window.matchMedia) matchMedia("(max-width:620px)").addEventListener("change",placeSig);
 $("hdr_more").addEventListener("click",()=>{ const o=document.body.classList.toggle("hdr-open"); $("hdr_more").setAttribute("aria-expanded",o?"true":"false"); });
 function updHdrLive(d){
-  { const on=!!d.active&&d.state!=="stopping"; if(on!==document.body.classList.contains("streaming")){ document.body.classList.toggle("streaming",on); document.body.classList.remove("hdr-open"); $("hdr_more").setAttribute("aria-expanded","false"); } }
+  { const on=!!d.active&&d.state!=="stopping"; if(on!==document.body.classList.contains("streaming")){ document.body.classList.toggle("streaming",on); document.body.classList.remove("hdr-open"); $("hdr_more").setAttribute("aria-expanded","false"); placeSig(); } }
   const b=$("hdr_live"), live=!!d.active, busy=d.state==="restarting"||d.state==="starting"||d.state==="stopping";
   b.hidden=false; b.className="livebtn"+(live&&!busy?" on":"")+(busy?" busy":"");
   b.textContent=busy?(LIVE_LABEL[d.state]==="Wird beendet…"?"Wird beendet…":"Verbinde …"):(live?"● LIVE":"Live gehen");
@@ -2681,7 +2651,6 @@ async function tick(){
       el.hidden=!(sendData&&sendData.active);
       el.innerHTML=`${fmt(tot)} <small>Mbit/s ↑</small>`;
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
-      paintPulse(tot);
     }
     const upRow=(nm,tx,rx,cls)=>`<div class="row${cls||""}"><span class="nm">${nm}</span><span class="num"><b>${fmt(tx)}</b></span><span class="unit u">Mbit/s ↑</span><span class="sep">·</span><span class="num">${fmt(rx)}</span><span class="unit u">↓</span></div>`;
     let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(ifd(n)),r.tx_mbit,r.rx_mbit)).join("");
