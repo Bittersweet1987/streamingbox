@@ -84,7 +84,6 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 #c_chat>summary{flex-wrap:nowrap;gap:6px}                                              /* ⚙ bleibt immer in der ersten Zeile */
 #c_chat>summary .sumh{white-space:nowrap}
 .pb-arr #c_chat>summary{flex-wrap:wrap;row-gap:4px}                                     /* nur beim Anordnen (zusätzliche Pfeile) darf umbrochen werden */
-@media(max-width:460px){.sig{gap:5px;margin-left:6px}.sig .sgs{display:none}.sig svg{width:60px}.camdots{gap:4px}.camdots .dot{width:8px;height:8px}}
 .sig.stale,.sig.stale.ok,.sig.stale.warn,.sig.stale.crit{color:var(--muted)}
 .chattoast{margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
 .chatoptbtn{margin-left:auto;padding:2px 9px;line-height:1.3}
@@ -137,6 +136,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .camdots:not(:empty)+.chatoptbtn{margin-left:0}
 @keyframes sigpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.82)}}
 @media(prefers-reduced-motion:reduce){.sig .sigdot{animation:none}}
+@media(min-width:461px){.sig{height:28px}.sig svg{height:28px}.sig .sgs{height:28px;font-size:8px;line-height:9px;min-width:22px;overflow:visible}}      /* Rechner: höherer Verlauf, damit alle drei Zahlen lesbar sind */
+@media(max-width:460px){.sig{gap:5px;margin-left:6px}.sig .sgs{display:none}.sig svg{width:60px}.camdots{gap:4px}.camdots .dot{width:8px;height:8px}}
 .chatbox img.em{height:1.6em;width:auto;vertical-align:middle;margin:0 1px}
 @media(max-width:620px){.chatbox{max-height:56vh;font-size:16px}.chatbox .cm{padding:9px 2px}}
 .qrline{margin-top:4px;display:flex;align-items:center;gap:6px;opacity:.75}.qrline:hover,.qrline:focus-within{opacity:1}
@@ -428,7 +429,7 @@ dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn
   <details class="card wide" id="c_chat" open><summary><span class="sumh">Chat</span><span id="net_sig" class="sig" role="img" aria-label="Verbindung: keine Messung" title="Verbindung: keine Messung"><i class="sigdot"></i><span class="sgs" aria-hidden="true"><span id="sg_max">10</span><span id="sg_mid">5,5</span><span id="sg_min">1</span></span><svg viewBox="0 0 80 20" preserveAspectRatio="none" aria-hidden="true"><path class="sg" d="M0 1H80M0 10H80M0 19H80"></path><polyline id="net_line" points=""></polyline></svg><span id="sg_val" class="sgv"></span></span><span id="cam_dots" class="camdots" role="img"></span><button type="button" id="chat_opt" class="sec small chatoptbtn" aria-expanded="false" title="Konto und Ansicht des Chats" aria-label="Konto und Ansicht des Chats">⚙</button></summary>
     <div class="twacc" id="tw_accrow"><span id="tw_acc_t" class="muted"></span><button type="button" id="tw_acc_go" class="sec small">Mit Twitch anmelden</button></div>
     <div id="chat_optbox" class="chatopts" hidden>
-      <div class="accrow" id="tw_accpanel" hidden><span id="tw_acc_t2" class="muted" translate="no"></span><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="tw_acc_out" class="sec small">Abmelden</button></div>
+      <div class="accrow" id="tw_accpanel" hidden><span id="tw_acc_t2" class="muted" translate="no"></span><button type="button" id="tw_acc_mod" class="sec small" hidden>Moderation einschalten</button><button type="button" id="tw_acc_modoff" class="sec small" hidden>Moderation ausschalten</button><button type="button" id="tw_acc_out" class="sec small">Abmelden</button></div>
       <label><input type="checkbox" data-opt="ts" checked> Uhrzeit</label>
       <label><input type="checkbox" data-opt="badge" checked> Abzeichen</label>
       <label><input type="checkbox" data-opt="emote" checked> Emotes als Bild</label>
@@ -2496,11 +2497,11 @@ async function tick(){
   }catch(e){ /* keine Antwort: beim nächsten Durchlauf wieder */ }
 }
 // ---- Twitch-Konto: Anmeldung per Geräte-Code (kein Token einfügen); Zugangsdaten bleiben auf der Box ----
-let twAccPoll=null;
+let twAccPoll=null, twAcc=null;
 function twAccRender(a){
   if(!a) return;
   const t=$("tw_acc_t"), go=$("tw_acc_go"), code=$("tw_acc_code"), on=a.state==="angemeldet";
-  const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(on&&!a.mod);
+  twAcc=a; const wait=a.state==="wartet"; $("tw_acc_mod").hidden=!(on&&!a.mod); $("tw_acc_modoff").hidden=!(on&&a.mod);
   code.hidden=!wait; go.hidden=wait||on;
   $("tw_accrow").hidden=on;                                              // angemeldet: die Zeile verschwindet, Konto und Abmelden liegen hinter dem ⚙ in der Kopfzeile
   $("tw_accpanel").hidden=!on; $("tw_acc_t2").textContent=on?(a.mod?`Angemeldet als ${a.login} · Moderation an`:`Angemeldet als ${a.login}`):"";
@@ -2519,7 +2520,10 @@ function twAccRender(a){
 }
 async function twAccLoad(){ try{ twAccRender(await srtlaCall("GET","/api/twitch/login")); }catch(e){} }
 $("tw_acc_go").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start"})); }catch(x){ $("tw_acc_t").textContent=x.message; } });
-$("tw_acc_mod").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"start",mod:true})); }catch(x){ $("chat_err").textContent=x.message; } });
+$("tw_acc_mod").addEventListener("click",async()=>{
+  try{ twAccRender(await srtlaCall("POST","/api/twitch/login",twAcc&&twAcc.mod_scope?{action:"mod",on:true}:{action:"start",mod:true})); }      // Rechte schon da: sofort an; sonst einmal bei Twitch bestätigen
+  catch(x){ $("chat_err").textContent=x.message; } });
+$("tw_acc_modoff").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"mod",on:false})); }catch(x){ $("chat_err").textContent=x.message; } });
 $("tw_acc_cancel").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/login",{action:"cancel"})); }catch(x){} });
 $("tw_acc_out").addEventListener("click",async()=>{ try{ twAccRender(await srtlaCall("POST","/api/twitch/logout",{})); }catch(x){} });
 twAccLoad();
@@ -2646,6 +2650,7 @@ $("chat_form").addEventListener("submit",async e=>{
       const near=box.clientHeight>0?box.scrollHeight-box.scrollTop-box.clientHeight<60:stick;
       const wasMod=modOn; modOn=!!(d.account&&d.account.mod); me=(d.account&&d.account.login)||"";
       if(modOn&&!wasMod) box.querySelectorAll(".cm").forEach(addMm);
+      if(!modOn&&wasMod) box.querySelectorAll(".mm,.mrow").forEach(e=>e.remove());                  // Moderation ausgeschaltet: alle ⋯ und offenen Menüs weg
       const first=since0===0; let evNew=false;
       for(const m of d.items){
         try{
