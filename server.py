@@ -28,6 +28,7 @@ import stat
 import subprocess
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -4175,9 +4176,8 @@ class TwitchStore:
         acc = self.account.login() if self.account else ""
         if acc:                                                    # angemeldetes Twitch-Konto hat Vorrang vor dem von Hand eingetragenen Token
             tok = self.account.token()
-            if tok:
-                d["login"], d["token"] = acc, tok
-                d["channel"] = d["channel"] or acc
+            d["login"], d["token"] = acc, tok                      # ist der Zugang gerade nicht verfügbar (wird erneuert), bleibt er leer: nie still als Bot-Konto schreiben
+            d["channel"] = d["channel"] or acc
         return d
 
     # ---- für welche Kamera schon gewarnt wurde
@@ -4262,8 +4262,9 @@ class TwitchChat:
     @staticmethod
     def clean_text(text):
         """Der Text für PRIVMSG oder None: nur druckbare Zeichen (kein CR, LF, NUL), nicht mit / oder . am Anfang, höchstens MAX_BYTES Byte."""
-        t = text.strip()
-        if not t or any(not ch.isprintable() for ch in t) or t[0] in "/.":
+        t = "".join(" " if unicodedata.category(ch) == "Zs" else ch for ch in text).strip()                  # geschütztes Leerzeichen und Ähnliches -> Leerzeichen
+        bad = ("Cc", "Zl", "Zp", "Cs", "Co", "Cn")
+        if not t or any(unicodedata.category(ch) in bad or ch in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069" for ch in t) or t[0] in "/.":
             return None
         raw = t.encode("utf-8")
         return t if len(raw) <= TwitchChat.MAX_BYTES else raw[:TwitchChat.MAX_BYTES].decode("utf-8", "ignore").rstrip()
@@ -4370,6 +4371,11 @@ class TwitchChat:
         return False, self.NOT_ALLOWED + (": " + notice if notice else "")
 
 
+def _ascii_digits(v):
+    """True nur für nicht leere Zeichenketten aus den Ziffern 0-9 (str.isdigit() lässt auch "²" und andere Ziffernzeichen zu, int() scheitert dann)."""
+    return isinstance(v, str) and v.isascii() and v.isdigit()
+
+
 class ChatPaths:
     """Wege ins Internet für den Chat (Anmeldung, Lesen, Schreiben, Moderation). Die Box hat je Sendeweg eine eigene Quelladresse mit eigener Route (Quell-Routing),
     wie sie auch srtla_send benutzt: Ein Socket, der an die Adresse eines Sendewegs gebunden wird, geht genau über diesen Weg hinaus. Der Chat nimmt die gewählten
@@ -4408,7 +4414,7 @@ class ChatPaths:
             good = [x for x in srcs if self.bad.get(x, 0) <= now]
             bad = [x for x in srcs if x not in good]
         good.sort(key=lambda x: q.get(x, 50000))                                  # stabil: gleiche Güte behält die Reihenfolge der Einstellung
-        return good + bad + [None]
+        return good + [None] + bad
 
     def fail(self, src, hold=300.0):
         if src:
@@ -4421,13 +4427,17 @@ class ChatPaths:
         for src in self.order():
             try:
                 return socket.create_connection((host, port), timeout=timeout, source_address=(src, 0) if src else None), src
+            except socket.gaierror as e:                       # Namensauflösung: hängt nicht am Weg, also keinen Weg sperren und nicht jeden einzeln versuchen
+                raise e
             except OSError as e:
                 last = e
                 self.fail(src, 120.0)
         raise last
 
-    def request(self, method, url, data=None, headers=None, timeout=15.0):
-        """(Status, Antworttext als Bytes) einer HTTP(S)-Anfrage über den ersten Weg, der antwortet; (0, b"") ohne Verbindung."""
+    def request(self, method, url, data=None, headers=None, timeout=15.0, limit=200_000, once=False):
+        """(Status, Antworttext als Bytes) einer HTTP(S)-Anfrage über den ersten Weg, der antwortet; (0, b"") ohne Verbindung.
+        once=True für Anfragen, die sich nicht wiederholen lassen (Erneuern des Zugangs mit einmaligem Schlüssel): Nur ein Fehler beim Verbinden führt zum
+        nächsten Weg; ist die Anfrage erst gesendet und die Antwort geht verloren, wird nicht ein zweites Mal gesendet."""
         import http.client
         import urllib.parse
         u = urllib.parse.urlsplit(url)
@@ -4437,9 +4447,21 @@ class ChatPaths:
             conn = None
             try:
                 conn = cls(u.hostname, u.port, timeout=timeout, source_address=(src, 0) if src else None)
-                conn.request(method, target, body=data, headers=headers or {})
-                r = conn.getresponse()
-                return r.status, r.read(200_000)
+                try:
+                    conn.connect()
+                except socket.gaierror:
+                    return 0, b""                                  # Namensauflösung hängt nicht am Weg: keinen Weg sperren, nicht alle durchprobieren
+                except (OSError, http.client.HTTPException, ValueError):
+                    self.fail(src, 120.0)
+                    continue
+                try:
+                    conn.request(method, target, body=data, headers=headers or {})
+                    r = conn.getresponse()
+                    return r.status, r.read(limit)
+                except (OSError, http.client.HTTPException, ValueError):
+                    self.fail(src, 120.0)
+                    if once:
+                        return 0, b""
             except (OSError, http.client.HTTPException, ValueError):
                 self.fail(src, 120.0)
             finally:
@@ -4492,29 +4514,39 @@ class TwitchLogin:
             pass
 
     # ---- Anfragen an Twitch (nur Standardbibliothek)
-    def _call(self, url, fields=None, headers=None):
+    def _call(self, url, fields=None, headers=None, once=False):
         """(Status, JSON-dict) einer Anfrage über die Wege des Chats; bei Netzfehlern (0, {})."""
         import urllib.parse
         data = urllib.parse.urlencode(fields).encode() if fields is not None else None
         hdr = dict(headers or {}, **{"User-Agent": "irl4you-box"})
         if data is not None:
             hdr["Content-Type"] = "application/x-www-form-urlencoded"
-        status, body = self.paths.request("POST" if data is not None else "GET", url, data, hdr)
+        status, body = self.paths.request("POST" if data is not None else "GET", url, data, hdr, once=once)
         try:
             out = json.loads(body.decode("utf-8", "replace") or "{}")
         except ValueError:
             out = {}
         return status, out if isinstance(out, dict) else {}
 
-    def _write(self):
+    def _write(self, tokens=None):
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             with os.fdopen(fd, "w") as f:
                 os.fchmod(f.fileno(), 0o600)
-                json.dump(self.tokens, f)
+                json.dump(tokens if tokens is not None else self.tokens, f)
+                f.flush()
+                os.fsync(f.fileno())                          # auch bei Stromausfall nie eine halbe oder leere Datei
             os.replace(tmp, self.path)
+            try:
+                dfd = os.open(os.path.dirname(os.path.abspath(self.path)), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError:
+                pass
         except OSError:
             try:
                 os.remove(tmp)
@@ -4524,39 +4556,43 @@ class TwitchLogin:
 
     # ---- Zustand für die Oberfläche (ohne Tokens)
     def status(self):
-        with self.lock:
-            if self.demo:
+        if self.demo:
+            with self.lock:
                 self._demo_step()
-            t, p = self.tokens, self.pending
-            scopes = list((t or {}).get("scopes", []))
-            out = {"state": self.state, "login": (t or {}).get("login", ""), "scopes": scopes, "error": self.error,
-                   "mod": "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes}
-            if p and self.state == "wartet":
-                out.update(code=p["user_code"], uri=p["uri"], expires_in=max(0, int(p["expires_at"] - self.clock())))
-            return out
+        t, p, state = self.tokens, self.pending, self.state                # nur lesen: nie hinter einer laufenden Anfrage an Twitch warten
+        scopes = list((t or {}).get("scopes", []))
+        out = {"state": state, "login": (t or {}).get("login", ""), "scopes": scopes, "error": self.error,
+               "mod": "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes}
+        if p and state == "wartet":
+            out.update(code=p["user_code"], uri=p["uri"], expires_in=max(0, int(p["expires_at"] - self.clock())))
+        return out
 
+    # ready/login/user_id nehmen die Sperre nicht: Sie lesen nur, und die Oberfläche (alle paar Sekunden) darf nie hinter einer Anfrage an Twitch warten.
+    # Maßgeblich ist, ob Zugangsdaten da sind, nicht der Zustand einer gerade laufenden neuen Anmeldung (wartet/fehler).
     def ready(self):
-        with self.lock:
-            return bool(self.tokens and self.state == "angemeldet")
+        return bool(self.tokens)
 
     def login(self):
-        with self.lock:
-            return (self.tokens or {}).get("login", "") if self.state == "angemeldet" else ""
+        t = self.tokens
+        return t.get("login", "") if t else ""
 
     def user_id(self):
-        with self.lock:
-            return (self.tokens or {}).get("user_id", "") if self.state == "angemeldet" else ""
+        t = self.tokens
+        return t.get("user_id", "") if t else ""
 
     def token(self):
         """Gültiger Zugangsschlüssel oder "" (erneuert bei Bedarf sofort)."""
-        with self.lock:
-            if not (self.tokens and self.state == "angemeldet"):
-                return ""
-            if self.tokens["expires_at"] - self.clock() < 60:
-                self.refresh()
-            if self.state == "angemeldet" and self.tokens and self.tokens["expires_at"] - self.clock() > 0:
-                return self.tokens["access"]
+        t = self.tokens
+        if not t:
             return ""
+        if t["expires_at"] - self.clock() < 60:
+            with self.lock:
+                if self.tokens and self.tokens["expires_at"] - self.clock() < 60:
+                    self.refresh()
+            t = self.tokens
+        if t and t["expires_at"] - self.clock() > 0:
+            return t["access"]
+        return ""
 
     # ---- Anmelden
     def start(self, mod=False):
@@ -4574,14 +4610,17 @@ class TwitchLogin:
                 return self.status()
             st, d = self._call(self.base + "device", {"client_id": self.client_id, "scopes": scopes})
             if st != 200 or not all(isinstance(d.get(k), str) for k in ("device_code", "user_code", "verification_uri")):
-                self.state, self.error = ("fehler", self.ERR_NET if st == 0 else "Twitch hat die Anmeldung nicht angenommen")
+                self.state, self.error = ("angemeldet" if self.tokens else "fehler", self.ERR_NET if st == 0 else "Twitch hat die Anmeldung nicht angenommen")
                 raise ValueError(self.error)
             try:
                 interval = max(2, min(30, int(d.get("interval", 5))))
                 expires = max(60, min(3600, int(d.get("expires_in", 1800))))
             except (TypeError, ValueError):
                 interval, expires = 5, 1800
-            self.pending = {"device_code": d["device_code"], "user_code": d["user_code"][:20], "uri": d["verification_uri"][:300],
+            uri = d["verification_uri"][:300]
+            if not re.match(r"https://(www\.|id\.)?twitch\.tv/", uri):
+                uri = "https://www.twitch.tv/activate"                              # nur Twitch-Adressen als Link und QR-Code
+            self.pending = {"device_code": d["device_code"], "user_code": d["user_code"][:20], "uri": uri,
                             "expires_at": self.clock() + expires, "interval": interval, "scopes": scopes}
             self.state = "wartet"
         threading.Thread(target=self._poll, args=(gen,), daemon=True).start()
@@ -4602,13 +4641,15 @@ class TwitchLogin:
                 if gen != self.gen or not p or self.state != "wartet":
                     return
                 if p["expires_at"] <= self.clock():
-                    self.state, self.error, self.pending = "fehler", self.ERR_DENIED, None
+                    self.state, self.error, self.pending = ("angemeldet" if self.tokens else "fehler"), self.ERR_DENIED, None
                     return
                 wait, device, scopes = p["interval"], p["device_code"], p.get("scopes", self.SCOPES)
             self.sleep(wait)
-            st, d = self._call(self.base + "token", {"client_id": self.client_id, "scopes": scopes, "device_code": device, "grant_type": self.GRANT})
+            st, d = self._call(self.base + "token", {"client_id": self.client_id, "scopes": scopes, "device_code": device, "grant_type": self.GRANT}, once=True)
             with self.lock:
                 if gen != self.gen or self.state != "wartet":
+                    if st == 200 and isinstance(d.get("access_token"), str):          # der Nutzer hat abgebrochen, Twitch hat trotzdem ausgestellt: Zugang gleich widerrufen
+                        self._call(self.base + "revoke", {"client_id": self.client_id, "token": d["access_token"]})
                     return
                 if st == 200 and isinstance(d.get("access_token"), str) and isinstance(d.get("refresh_token"), str):
                     self._adopt(d)
@@ -4619,9 +4660,12 @@ class TwitchLogin:
                 if st == 400 and "slow_down" in msg:
                     self.pending["interval"] = min(30, self.pending["interval"] + 5)
                     continue
-                if st == 0:
-                    continue                                    # Netz kurz weg: weiter versuchen, bis der Code abläuft
-                self.state, self.error, self.pending = "fehler", self.ERR_DENIED, None
+                if st == 0 or st >= 500:
+                    continue                                    # Netz kurz weg oder Twitch hakt: weiter versuchen, bis der Code abläuft
+                if st == 429:
+                    self.pending["interval"] = min(30, self.pending["interval"] + 5)
+                    continue
+                self.state, self.error, self.pending = ("angemeldet" if self.tokens else "fehler"), self.ERR_DENIED, None
                 return
 
     def _adopt(self, d):
@@ -4635,16 +4679,26 @@ class TwitchLogin:
         old = self.tokens or {}
         t = {"access": d["access_token"], "refresh": d["refresh_token"], "expires_at": self.clock() + expires, "scopes": scopes,
              "login": old.get("login", ""), "user_id": old.get("user_id", "")}
-        st, v = self._call(self.base + "validate", None, {"Authorization": "OAuth " + t["access"]})
-        if st == 200 and isinstance(v.get("login"), str):
-            t["login"], t["user_id"] = v["login"][:25].lower(), str(v.get("user_id", ""))[:20]
-            if isinstance(v.get("scopes"), list):
-                t["scopes"] = [str(x)[:60] for x in v["scopes"]][:30]
-        self.tokens = t
-        self.pending, self.state, self.error = None, "angemeldet", ""
+        werr = False
         try:
-            self._write()
+            self._write(t)                                           # sofort: der alte Erneuerungsschlüssel ist ab jetzt ungültig, der neue darf nie verloren gehen
         except OSError:
+            werr = True
+        st, v = self._call(self.base + "validate", None, {"Authorization": "OAuth " + t["access"]})
+        changed = False
+        if st == 200 and isinstance(v.get("login"), str):
+            new = (v["login"][:25].lower(), str(v.get("user_id", ""))[:20], [str(x)[:60] for x in v["scopes"]][:30] if isinstance(v.get("scopes"), list) else scopes)
+            changed = new != (t["login"], t["user_id"], t["scopes"])
+            t["login"], t["user_id"], t["scopes"] = new
+        self.tokens = t                                              # erst jetzt sichtbar: nie mit leerem Namen oder leerer Konto-Kennung
+        self.pending, self.state, self.error = None, "angemeldet", ""
+        if changed:
+            try:
+                self._write()
+                werr = False
+            except OSError:
+                werr = True
+        if werr:
             self.error = "Die Anmeldung konnte nicht gespeichert werden"
 
     # ---- Erneuern und Abmelden
@@ -4653,10 +4707,17 @@ class TwitchLogin:
         with self.lock:
             if not self.tokens:
                 return False
-            st, d = self._call(self.base + "token", {"client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": self.tokens["refresh"]})
+            if self.clock() < getattr(self, "next_try", 0.0):
+                return False                                          # nach Fehlschlägen nicht gleich wieder (Twitch oder Netz hakt)
+            st, d = self._call(self.base + "token", {"client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": self.tokens["refresh"]}, once=True)
             if st == 200 and isinstance(d.get("access_token"), str) and isinstance(d.get("refresh_token"), str):
+                self.fails, self.next_try = 0, 0.0
                 self._adopt(d)
                 return True
+            if st == 0 or st == 429 or st >= 500:
+                self.fails = getattr(self, "fails", 0) + 1
+                self.next_try = self.clock() + min(300.0, 15.0 * 2 ** min(self.fails, 5))
+                return False
             if st in (400, 401):
                 keep = self.tokens.get("login", "")
                 self.tokens, self.pending, self.state = None, None, "abgelaufen"
@@ -4670,10 +4731,20 @@ class TwitchLogin:
     def keep(self):
         """Hintergrunddienst: erneuert rechtzeitig vor dem Ablauf (läuft, solange die Box läuft, auch ohne Sendung)."""
         while True:
-            with self.lock:
-                if self.tokens and self.state == "angemeldet" and self.tokens["expires_at"] - self.clock() < self.REFRESH_BEFORE:
-                    self.refresh()
+            try:
+                if self.tokens and self.tokens["expires_at"] - self.clock() < self.REFRESH_BEFORE:
+                    with self.lock:
+                        if self.tokens and self.tokens["expires_at"] - self.clock() < self.REFRESH_BEFORE:
+                            self.refresh()
+            except Exception:
+                pass                                                  # nie den Hintergrunddienst verlieren
             self.sleep(self.KEEP_EVERY)
+
+    def refresh_now(self):
+        """Sofort erneuern (auch gegen den Wartebetrieb nach Fehlschlägen), zum Beispiel nach einem 401 von Twitch. True, wenn es geklappt hat."""
+        with self.lock:
+            self.next_try = 0.0
+            return bool(self.tokens) and self.refresh()
 
     def logout(self):
         with self.lock:
@@ -4694,6 +4765,112 @@ class TwitchLogin:
             self.tokens = {"access": "demo", "refresh": "demo", "expires_at": self.clock() + 14400, "login": "demo_streamer", "user_id": "1",
                            "scopes": (self.pending.get("scopes") or self.SCOPES).split()}
             self.pending, self.state = None, "angemeldet"
+
+
+class ThirdPartyEmotes:
+    """Emotes von 7TV, BetterTTV und FrankerFaceZ (global und je Kanal) für den Chat. Die Box lädt die Listen selbst (über dieselben Wege wie der Chat),
+    baut die Bildadressen **nur aus geprüften Kennungen** (nie aus Adressen der Dienste) und hält sie 30 Minuten. Der Reader ersetzt damit Wörter im Text
+    durch [Adresse, von, bis]. Ohne Verbindung bleiben die Wörter Text; Fehler bleiben still."""
+    TTL = 1800.0
+    RETRY = 300.0
+    MAX = 8000
+    NAME_RE = re.compile(r"[A-Za-z0-9_:()!.\-]{1,40}")
+    BTTV_ID, STV_ID, FFZ_ID = re.compile(r"[0-9a-f]{24}"), re.compile(r"[0-9A-Za-z]{26}"), re.compile(r"[0-9]{1,9}")
+    URLS = {"bttv": "https://cdn.betterttv.net/emote/%s/2x.webp", "7tv": "https://cdn.7tv.app/emote/%s/2x.webp", "ffz": "https://cdn.frankerfacez.com/emote/%s/2"}
+    HOSTS = re.compile(r"https://(cdn\.betterttv\.net|cdn\.7tv\.app|cdn\.frankerfacez\.com)/")
+
+    def __init__(self, paths=None, fetch=None, clock=time.monotonic):
+        self.paths, self.fetch, self.clock = paths, fetch or self._fetch, clock
+        self.lock = threading.Lock()
+        self.map, self.room, self.until, self.thread = {}, None, 0.0, None
+
+    def _fetch(self, url):
+        try:
+            if self.paths is not None:
+                status, body = self.paths.request("GET", url, headers={"User-Agent": "pipbox"}, timeout=10.0, limit=3_000_000)
+            else:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "pipbox"}), timeout=10) as r:
+                    status, body = r.status, r.read(3_000_000)
+            return json.loads(body.decode("utf-8", "replace")) if status == 200 else (False if status in (404, 410) else None)
+        except Exception:
+            return None
+
+    def snapshot(self):
+        return self.map
+
+    def ensure(self, room):
+        room = room if isinstance(room, str) and re.fullmatch(r"[0-9]{1,12}", room) else ""
+        with self.lock:
+            if (self.thread is not None and self.thread.is_alive()) or (self.room == room and self.clock() < self.until):
+                return
+            self.room = room
+            self.until = self.clock() + self.RETRY            # bis zur Fertigstellung nicht noch einmal starten
+            self.thread = threading.Thread(target=self._load, args=(room,), daemon=True)
+            self.thread.start()
+
+    @classmethod
+    def _add(cls, out, kind, items, idkey, namekey, idre):
+        for it in (items or [])[:3000]:
+            if len(out) >= cls.MAX or not isinstance(it, dict):
+                continue
+            i, n = it.get(idkey), it.get(namekey)
+            if isinstance(i, (str, int)) and isinstance(n, str) and cls.NAME_RE.fullmatch(n) and idre.fullmatch(str(i)):
+                out[n] = cls.URLS[kind] % i
+
+    def _load(self, room):
+        out, fails = {}, 0
+        def get(url):
+            nonlocal fails
+            try:
+                d = self.fetch(url)
+            except Exception:
+                d = None
+            if d is None:
+                fails += 1                                   # Zeitüberschreitung, 5xx, kaputte Antwort (ein 404 für den Kanal ist dagegen in Ordnung)
+            return d or None
+        ffz = lambda d: [e for st in ((d or {}).get("sets") or {}).values() if isinstance(st, dict) for e in (st.get("emoticons") or [])]
+        def lst(x):
+            return x if isinstance(x, list) else []
+        def dct(x):
+            return x if isinstance(x, dict) else {}
+        steps = [
+            lambda: self._add(out, "bttv", lst(get("https://api.betterttv.net/3/cached/emotes/global")), "id", "code", self.BTTV_ID),
+            lambda: self._add(out, "ffz", ffz(get("https://api.frankerfacez.com/v1/set/global")), "id", "name", self.FFZ_ID),
+            lambda: self._add(out, "7tv", lst(dct(get("https://7tv.io/v3/emote-sets/global")).get("emotes")), "id", "name", self.STV_ID)]
+        if room:
+            steps += [
+                lambda: (lambda d: self._add(out, "bttv", lst(d.get("channelEmotes")) + lst(d.get("sharedEmotes")), "id", "code", self.BTTV_ID))(
+                    dct(get("https://api.betterttv.net/3/cached/users/twitch/" + room))),
+                lambda: self._add(out, "ffz", ffz(get("https://api.frankerfacez.com/v1/room/id/" + room)), "id", "name", self.FFZ_ID),
+                lambda: self._add(out, "7tv", lst(dct(dct(get("https://7tv.io/v3/users/twitch/" + room)).get("emote_set")).get("emotes")), "id", "name", self.STV_ID)]
+        for step in steps:
+            try:
+                step()
+            except Exception:
+                fails += 1
+        with self.lock:
+            if fails == 0 or not self.map:
+                self.map = out                                # vollständig geladen (oder noch nichts da: Teilstand ist besser als nichts)
+            else:
+                merged = dict(self.map)                       # teilweise gescheitert: die gute alte Liste behalten und nur ergänzen
+                merged.update(out)
+                self.map = merged
+            self.until = self.clock() + (self.TTL if fails == 0 else self.RETRY)
+
+    def mark(self, item):
+        """Wörter des Textes, die ein Emote sind, in item["emotes"] eintragen (mit den Twitch-eigenen zusammengeführt, nichts überlappt)."""
+        m = self.map
+        text = item.get("text") or ""
+        if not m or not text:
+            return
+        found = [[m[w.group()], w.start(), w.end() - 1] for w in re.finditer(r"\S+", text) if w.group() in m]
+        if not found:
+            return
+        merged = [list(e) for e in item.get("emotes") or []]
+        for e in found:
+            if all(e[2] < o[1] or e[1] > o[2] for o in merged):
+                merged.append(e)
+        item["emotes"] = sorted(merged, key=lambda e: e[1])[:60]
 
 
 class TwitchReader:
@@ -4719,14 +4896,16 @@ class TwitchReader:
     STALE = 100.0                        # Sekunden ohne jede Zeile (auch ohne Antwort auf unser PING): Verbindung gilt als tot, nächster Weg
     PROBE = 40.0                         # nach so vielen stillen Sekunden schickt die Box selbst ein PING (Twitch antwortet mit PONG), sonst fiele ein toter Weg erst nach Minuten auf
 
-    def __init__(self, store, demo=False, host=None, port=None, tls=True, context=None, clock=time.monotonic, wall=time.time, sleep=time.sleep, paths=None):
+    def __init__(self, store, demo=False, host=None, port=None, tls=True, context=None, clock=time.monotonic, wall=time.time, sleep=time.sleep, paths=None, third=None):
         self.paths = paths or ChatPaths()
+        self.third = third or ThirdPartyEmotes(self.paths)
         self.store, self.demo = store, demo
         self.host, self.port, self.tls, self.context = host or self.HOST, port or self.PORT, tls, context
         self.clock, self.wall, self.sleep = clock, wall, sleep
         self.lock = threading.Lock()
         self.items = collections.deque(maxlen=self.KEEP)
         self.next_id = 1
+        self.gen = 0
         self.state = "aus"                  # aus | verbinde | ok | fehler
         self.channel = ""
         self.thread = None
@@ -4744,6 +4923,33 @@ class TwitchReader:
         return out
 
     @staticmethod
+    def _clean_map(text, limit):
+        """Wie _clean (nicht druckbare Zeichen und Leerraum werden zu einem einzelnen Leerzeichen, Anfang und Ende ohne), aber mit Zuordnung:
+        (bereinigter Text, Liste mit der neuen Stelle jedes ursprünglichen Zeichens oder -1)."""
+        out, mp, pend = [], [-1] * len(text), False
+        for i, ch in enumerate(text):
+            if not ch.isprintable() or ch.isspace():
+                pend = bool(out)
+                continue
+            if pend:
+                out.append(" ")
+                pend = False
+            if len(out) < limit:
+                mp[i] = len(out)
+                out.append(ch)
+        return "".join(out)[:limit], mp
+
+    @staticmethod
+    def _remap(emotes, mp):
+        """Bereiche [id, von, bis] (Stellen im ursprünglichen Text) auf den bereinigten Text umrechnen; was wegfällt, entfällt."""
+        out = []
+        for eid, a, b in emotes:
+            kept = [mp[i] for i in range(a, min(b, len(mp) - 1) + 1) if mp[i] >= 0]
+            if kept:
+                out.append([eid, kept[0], kept[-1]])
+        return out
+
+    @staticmethod
     def _clean(text, limit):
         t = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
         return t[:limit]
@@ -4758,7 +4964,7 @@ class TwitchReader:
                 continue
             for r in ranges.split(",")[:40]:
                 a, _, b = r.partition("-")
-                if a.isdigit() and b.isdigit() and int(a) <= int(b) < length:
+                if _ascii_digits(a) and _ascii_digits(b) and int(a) <= int(b) < length:
                     out.append([eid, int(a), int(b)])
         return sorted(out, key=lambda e: e[1])
 
@@ -4779,8 +4985,8 @@ class TwitchReader:
         if cmd == "CLEARCHAT":                                        # Timeout, Bann oder der ganze Chat geleert
             uid = tags.get("target-user-id", "")
             dur = tags.get("ban-duration", "")
-            return {"type": "clear", "meta": True, "uid": uid if uid.isdigit() and len(uid) <= 20 else "",
-                    "seconds": int(dur) if dur.isdigit() and len(dur) <= 8 else 0, "text": "", "emotes": []}
+            return {"type": "clear", "meta": True, "uid": uid if _ascii_digits(uid) and len(uid) <= 20 else "",
+                    "seconds": int(dur) if _ascii_digits(dur) and len(dur) <= 8 else 0, "text": "", "emotes": []}
         if cmd not in ("PRIVMSG", "USERNOTICE"):
             return None
         _, _, msg = rest.partition(" :")
@@ -4791,8 +4997,9 @@ class TwitchReader:
         kind, text = "msg", msg
         if cmd == "PRIVMSG" and text.startswith("\x01ACTION ") and text.endswith("\x01"):
             kind, text = "me", text[8:-1]
-        text = self._clean(text, 500)
-        item = {"type": kind, "name": name, "color": color, "text": text, "emotes": self._emotes(tags.get("emotes", ""), len(text))}
+        native = self._emotes(tags.get("emotes", ""), len(text))            # Stellen beziehen sich auf den Text, wie Twitch ihn schickt
+        text, mp = self._clean_map(text, 500)
+        item = {"type": kind, "name": name, "color": color, "text": text, "emotes": self._remap(native, mp)}
         if cmd == "USERNOTICE":
             item["type"] = self.NOTICE_KINDS.get(tags.get("msg-id", ""), "notice")
             item["name"], item["emotes"] = "", []
@@ -4800,7 +5007,7 @@ class TwitchReader:
             item["text"] = (system + (" – " + text if text else "")) or text
             item["color"] = ""
         bits = tags.get("bits", "")
-        if bits.isdigit():
+        if _ascii_digits(bits):
             item["bits"] = min(int(bits), 10_000_000)
         ev = self._event(cmd, tags, item)
         if ev is False:                                              # Einzelgeschenk einer Sammelaktion: die Sammelmeldung zeigt es schon
@@ -4811,19 +5018,22 @@ class TwitchReader:
             if self.MID_RE.fullmatch(tags.get("id", "")):
                 item["mid"] = tags["id"]
             uid = tags.get("user-id", "")
-            if uid.isdigit() and len(uid) <= 20:
+            if _ascii_digits(uid) and len(uid) <= 20:
                 item["uid"] = uid
             item["login"] = self._clean(nick, 25).lower()
             names = [b.partition("/")[0] for b in tags.get("badges", "").split(",")[:20]]
             item["badges"] = [b for b in self.BADGES if b in names]
+        if item["text"] and cmd == "PRIVMSG":                         # Emotes von 7TV, BTTV und FFZ (Liste des Kanals wird im Hintergrund geladen)
+            self.third.ensure(tags.get("room-id", ""))
+            self.third.mark(item)
         sent = tags.get("tmi-sent-ts", "")                           # Zeitpunkt, an dem Twitch die Nachricht angenommen hat (Millisekunden)
-        if sent.isdigit() and len(sent) <= 13:
+        if _ascii_digits(sent) and len(sent) <= 13:
             item["ts"] = int(sent) // 1000
         return item if item["text"] else None
 
     @staticmethod
     def _num(v, limit=10_000_000):
-        return min(int(v), limit) if isinstance(v, str) and v.isdigit() and len(v) <= 9 else 0
+        return min(int(v), limit) if isinstance(v, str) and _ascii_digits(v) and len(v) <= 9 else 0
 
     @classmethod
     def _event(cls, cmd, tags, item):
@@ -4846,8 +5056,10 @@ class TwitchReader:
             return {"k": "announce", "n": 0}
         return None
 
-    def _add(self, item):
+    def _add(self, item, gen=None):
         with self.lock:
+            if gen is not None and gen != self.gen:
+                return                                      # Nachzügler eines alten Fadens
             item["id"], item["t"] = self.next_id, int(item.get("ts") or self.wall())
             self.next_id += 1
             self.items.append(item)
@@ -4883,31 +5095,41 @@ class TwitchReader:
                 self.items.clear()
             self.channel = ch
             self.state = "verbinde"
-            t = threading.Thread(target=self._run, args=(ch,), daemon=True)
+            self.gen += 1                                   # jeder Start zählt: ein alter Faden (anderer Kanal, später wieder derselbe) beendet sich selbst
+            gen = self.gen
+            t = threading.Thread(target=self._run, args=(ch, gen), daemon=True)
             self.thread = t
         t.start()
 
     def _idle(self):
         return self.clock() - self.last_poll > self.IDLE
 
-    def _run(self, ch):
+    def _mine(self, ch, gen):
+        return self.gen == gen and self.channel == ch
+
+    def _run(self, ch, gen):
         wait = 3.0
-        while not self._idle() and self.channel == ch:
+        while not self._idle() and self._mine(ch, gen):
+            began = self.clock()
             try:
-                self._session(ch)
-                wait = 3.0
+                self._session(ch, gen)
             except Exception:
-                self.state = "fehler"
+                with self.lock:
+                    if self._mine(ch, gen):
+                        self.state = "fehler"
+            if self.clock() - began > 30:
+                wait = 3.0                                  # die Sitzung hat lange gehalten: schnell neu verbinden, nicht mit dem Wert vom letzten Ausfall
             end = self.clock() + wait
-            while self.clock() < end and not self._idle() and self.channel == ch:
+            while self.clock() < end and not self._idle() and self._mine(ch, gen):
                 self.sleep(0.5)
             wait = min(wait * 2, 60.0)
         with self.lock:
-            if self.channel == ch:
+            if self._mine(ch, gen):
                 self.state = "aus"
 
-    def _session(self, ch):
+    def _session(self, ch, gen):
         sock, src = self.paths.connect(self.host, self.port, timeout=8)
+        ok = False
         try:
             if self.tls:
                 sock = (self.context or ssl.create_default_context()).wrap_socket(sock, server_hostname=self.host)
@@ -4925,9 +5147,12 @@ class TwitchReader:
                 if cmd == "PING":
                     sock.sendall(b"PONG :tmi.twitch.tv\r\n")
             sock.sendall(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nJOIN #" + ch.encode("ascii") + b"\r\n")
-            self.state = "ok"
+            ok = True
+            with self.lock:
+                if self._mine(ch, gen):
+                    self.state = "ok"
             heard = probed = self.clock()
-            while not self._idle() and self.channel == ch:
+            while not self._idle() and self._mine(ch, gen):
                 line = rd.get(self.clock() + 5)
                 if line is None:
                     if self.clock() - heard > self.PROBE and self.clock() - probed > self.PROBE:
@@ -4941,11 +5166,18 @@ class TwitchReader:
                 if line.startswith("PING"):
                     sock.sendall(b"PONG :tmi.twitch.tv\r\n")
                     continue
-                if "RECONNECT" in line[:60]:
+                if TwitchChat._parse(line)[0] == "RECONNECT":            # nur der Befehl, nie ein Name in den Tags
                     return
-                item = self.parse(line)
-                if item:
-                    self._add(item)
+                try:
+                    item = self.parse(line)
+                    if item:
+                        self._add(item, gen)
+                except Exception:
+                    continue                                                   # eine unlesbare Zeile beendet nie die Sitzung
+        except OSError:
+            if not ok:
+                self.paths.fail(src, 120.0)                                    # verbunden, aber TLS/Begrüßung hängt: diesen Weg eine Weile meiden
+            raise
         finally:
             try:
                 sock.close()
@@ -4970,6 +5202,13 @@ class TwitchReader:
                        "mid": "%08x-0000-4000-8000-000000000000" % n, "uid": "102", "login": "lena", "badges": ["vip", "subscriber"]})
         elif n % 19 == 0:
             self._add({"type": "sub", "name": "", "color": "", "text": "nightowl verschenkt 5 Abos an die Community", "emotes": [], "ev": {"k": "gift", "n": 5}})
+        elif n % 7 == 0 and (self.third.ensure("") or True) and self.third.snapshot():             # Vorschau: echte globale Emotes von 7TV/BTTV/FFZ
+            names = sorted(self.third.snapshot())
+            a, b = names[n % len(names)], names[(n * 7) % len(names)]
+            item = {"type": "msg", "name": "emote_fan", "color": "#8A2BE2", "text": "Der Chat zeigt jetzt %s und %s" % (a, b), "emotes": [],
+                    "mid": "%08x-0000-4000-8000-000000000000" % n, "uid": "103", "login": "emote_fan", "badges": []}
+            self.third.mark(item)
+            self._add(item)
         else:
             i = n % len(self.DEMO)
             name, color, text = self.DEMO[i]
@@ -5016,6 +5255,9 @@ class TwitchMod:
         if data is not None:
             hdr["Content-Type"] = "application/json"
         status, raw = self.paths.request(method, url, data, hdr)
+        if status == 401 and self.account.refresh_now():                  # Zugang war abgelaufen (zum Beispiel falsche Uhr): einmal erneuern, einmal wiederholen
+            hdr["Authorization"] = "Bearer " + self.account.token()
+            status, raw = self.paths.request(method, url, data, hdr)
         if status == 0:
             raise ValueError(self.ERR_NET)
         try:
@@ -5088,7 +5330,7 @@ class TwitchMod:
         if act == "timeout":
             try:
                 sec = int(req.get("seconds", 600))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 raise ValueError("Dauer: Zahl in Sekunden")
             data["duration"] = max(1, min(self.MAX_SECONDS, sec))
         self._call("POST", "moderation/bans", base, {"data": data})
@@ -5096,7 +5338,7 @@ class TwitchMod:
 
     def _target(self, req):
         uid = req.get("user_id")
-        if isinstance(uid, str) and uid.isdigit() and len(uid) <= 20:
+        if isinstance(uid, str) and _ascii_digits(uid) and len(uid) <= 20:
             return uid
         if isinstance(req.get("user"), str):
             return self.lookup(req["user"])
@@ -5105,7 +5347,7 @@ class TwitchMod:
     def _demo(self, act, req):
         if act == "delete" and self.demo_reader is not None and isinstance(req.get("message_id"), str):
             self.demo_reader._add({"type": "del", "meta": True, "mid": req["message_id"], "text": "", "emotes": []})
-        if act in ("timeout", "ban") and self.demo_reader is not None and str(req.get("user_id") or "").isdigit():
+        if act in ("timeout", "ban") and self.demo_reader is not None and _ascii_digits(str(req.get("user_id") or "")):
             self.demo_reader._add({"type": "clear", "meta": True, "uid": str(req["user_id"]), "seconds": int(req.get("seconds") or 0) if act == "timeout" else 0,
                                    "text": "", "emotes": []})
         return {"ok": True, "action": act, "user_id": str(req.get("user_id") or "1"),
@@ -5137,7 +5379,7 @@ class TwitchSender:
             self.last = now
         req = {"action": cmd, "user": parts[1]}
         rest = parts[2:]
-        if cmd == "timeout" and rest and rest[0].isdigit():
+        if cmd == "timeout" and rest and _ascii_digits(rest[0]):
             req["seconds"] = int(rest[0])
             rest = rest[1:]
         if cmd != "unban" and rest:
@@ -6215,7 +6457,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Die Anfrage ist zu groß")
         data = self.read_body(n)
         self.request_read()
-        return json.loads(data or b"{}")
+        out = json.loads(data or b"{}")
+        if not isinstance(out, dict):
+            raise ValueError("Ungültige Anfrage")                 # alle Routen erwarten ein Objekt
+        return out
 
     def read_body(self, n):
         """Liest n Bytes, insgesamt höchstens BODY_SECONDS lang (ein Absender, der alle paar Sekunden ein Byte schickt, hält sonst die Verbindung offen)."""
