@@ -247,6 +247,21 @@ def drop_noise(text, keep=15):
     return "\n".join(out) + "\n"
 
 
+def previous_boot(kernel_lines=150, all_lines=120):
+    """Ende des Journals vom vorigen Start: Wenn die Box hängt und neu gestartet wird, stehen die letzten Meldungen davor (Kernel, Dienste) nur dort;
+    der Abschnitt "seit dem Start" zeigt sie nicht. Die letzte Zeile verrät, wann die Box stehen blieb."""
+    nl = chr(10)
+    boots = [l for l in run(["journalctl", "--list-boots", "--no-pager"], 20).splitlines() if l.strip()]
+    if len(boots) < 2 or not re.match(r"\s*-?\d+\s", boots[-2]):
+        persist = os.path.isdir("/var/log/journal")
+        return "(kein früherer Start im Journal gefunden%s)" % ("" if persist else "; das Journal wird nicht dauerhaft gespeichert (/var/log/journal fehlt)") + nl
+    out = "Starts:" + nl + nl.join(boots[-4:]) + nl
+    for title, args, n in (("Kernel, letzte Zeilen vor dem Neustart", ["-k"], kernel_lines), ("Alle Dienste, letzte Zeilen vor dem Neustart", [], all_lines)):
+        text = run(["journalctl", "-b", "-1"] + args + ["--no-pager", "-o", "short-iso", "-n", str(n)], 20).strip()
+        out += nl + "--- %s ---" % title + nl + (collapse_repeats(text).rstrip(nl) if text else "(leer)") + nl
+    return out
+
+
 RTMP_STAT = "http://127.0.0.1:1936/"
 
 
@@ -950,6 +965,7 @@ def sections():
            and not re.search(r"(?i)portmapper|magicsock|derp|disco|netcheck", l)]
     out.append(("Journal tailscaled (nur Freigabe, Zertifikat, Anmeldung, Fehler)", "\n".join(tsj[-120:]) + "\n"))
     out.append(("Warnungen und Fehler des Systems (seit dem Start)", run(["journalctl", "-p", "warning", "-b", "--no-pager", "-o", "short-iso", "-n", "200"], 20)))
+    out.append(("Vorheriger Start (Ende des Journals: Kernel und Dienste vor dem letzten Neustart, zum Beispiel nach einem Hänger)", previous_boot()))
     out.append(("Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)", kernel_hints()))
     out.append(("Kernel (USB, Bluetooth, WLAN)", "\n".join([l for l in run(["dmesg"], 10).splitlines()
                                                               if re.search(r"(?i)usb|bluetooth|btusb|wlan|wifi|cfg80211|rtl|brcm", l)][-150:]) + "\n"))
