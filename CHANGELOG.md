@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.133 (Beta)
+- **Behoben: Die Zahlen links vom Verlauf der Amplitude waren am Rechner zu groß, die „0“ ragte unten aus dem Verlauf heraus.** Die Schrift ist kleiner (7 statt 9 Pixel), alle drei Zahlen stehen jetzt innerhalb der Höhe des Verlaufs.
+- **Chat, hinter dem ⚙: „Angemeldet als … · Moderation an“.** Man sieht jetzt, dass die Moderation schon eingeschaltet ist (der Knopf „Moderation einschalten“ verschwindet dann). Die Knöpfe ⋯ erscheinen an den Nachrichten **anderer** Zuschauer; an den eigenen Nachrichten des Streamers gibt es keine, weil Twitch das Löschen eigener Streamer-Nachrichten nicht zulässt.
+
 ## 0.9.132 (Beta)
 - **Behoben: In der Kopfzeile der Chat-Karte rutschte das ⚙ am Handy in eine zweite Zeile** (die Prüfung für 0.9.131 hatte das Umbrechen erlaubt). Die Kopfzeile bleibt jetzt einzeilig, das ⚙ steht immer rechts oben; bei Breiten bis 460 Pixel entfällt die kleine Skala links vom Verlauf, der Verlauf ist etwas schmaler. Geprüft bei 320, 360, 390, 430 und 500 Pixel, auch mit vier Kamerapunkten, ohne seitliches Scrollen. Nur beim Anordnen der Karten darf die Zeile umbrechen.
 - Keine neuen Texte.
