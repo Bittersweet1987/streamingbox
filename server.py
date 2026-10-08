@@ -3394,6 +3394,9 @@ class Developer:
         return {"user": self.ssh_user(), "password": pw, "state": self.status().get("password_state")}
 
 
+UPDATE_REPO = "Bittersweet1987/streamingbox"       # Quelle der Software-Updates (GitHub-Konto/Repository); der Root-Helfer install/pipbox-swupdate.py hat dieselbe Angabe (REPO)
+
+
 class SwUpdate:
     """Software-Update von IRL4YOU BOX aus dem eigenen GitHub-Repository.
 
@@ -3406,8 +3409,8 @@ class SwUpdate:
     RETRY_AFTER_ERROR = 30 * 60   # ein Fehlversuch (kein Internet) wird früher wiederholt
     EARLY_SECONDS = 30 * 60       # in der ersten halben Stunde nach dem Start (Router und Mobilfunk brauchen oft einige Minuten) ...
     RETRY_EARLY = 3 * 60          # ... wird ein Fehlversuch schon nach 3 Minuten wiederholt
-    RAW = "https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/"
-    API = "https://api.github.com/repos/IRL4YOU/irl4you-pip/releases?per_page=30"
+    RAW = "https://raw.githubusercontent.com/" + UPDATE_REPO + "/main/"
+    API = "https://api.github.com/repos/" + UPDATE_REPO + "/releases?per_page=30"
     STATUS = "/run/pipbox-swupdate/status.json"
     BACKUP = "/var/lib/pipbox-backup"
     STAGE = "Beta"
@@ -3424,7 +3427,7 @@ class SwUpdate:
         self.fake = {}
         self.fake_t0 = 0.0
 
-    CONTENTS = "https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/%s?ref=main"
+    CONTENTS = "https://api.github.com/repos/" + UPDATE_REPO + "/contents/%s?ref=main"
 
     def _get(self, name, limit):
         """Eine Datei des Repositorys lesen. Zuerst über die API von GitHub (immer der aktuelle Stand), dann über raw.githubusercontent.com: Dort liegt

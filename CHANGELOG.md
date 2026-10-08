@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.142 (Beta)
+- **Die Update-Quelle ist jetzt der eigene Fork `Bittersweet1987/streamingbox`** statt `IRL4YOU/irl4you-pip`. Die Box prüft und lädt Updates von dort (Angabe `UPDATE_REPO` in `server.py` und `REPO` in `install/pipbox-swupdate.py`); die Links „Quellcode auf GitHub“, „Drittprojekte“ und die Anleitung im Fußbereich zeigen ebenfalls auf den Fork. Webseite und Discord von IRL4YOU bleiben als Verweis.
+- Änderungen gehen ab jetzt zuerst in den Fork; nach IRL4YOU kommen sie nur auf ausdrücklichen Wunsch als Pull Request. Versions-Auswahl und Änderungsliste („Releases“) stammen aus den Releases des Forks; der Fork hat bisher keine (die Liste ist leer, die Versionsnummer wird weiter aus `VERSION` gelesen).
+
 ## 0.9.141 (Beta)
 - **Kopfleiste am Handy während der Sendung zeigt jetzt die vorhandene Pulsanzeige und die Kamerapunkte aus dem Chat** (dieselben Elemente, sie ziehen vom Chat in den Kopf und danach wieder zurück; Farbe und Verlauf wie dort). Die in 0.9.139 eigens gebaute EKG-Linie samt Untermenü „Pulsanzeige“ (Grün/Gelb/Rot-Grenzen unter SRTLA) entfällt. Der Pfeil ganz rechts klappt wie bisher die Knöpfe auf (dann sind Pulsanzeige und Punkte im Kopf weg, er sieht aus wie ohne sie).
 - Die Karte „SRTLA“ behält die Untermenüs „SRTLA-Server“, „Leitungssteuerung“ (Verteilung der Netze) und „Bitrate und Latenz“.
