@@ -581,13 +581,35 @@ class HelperRun(unittest.TestCase):
         self.assertIn("throttling", kern)
         self.assertNotIn("new device", kern)
 
+    def test_previous_boot_shows_the_end_of_the_last_journal(self):
+        nl = chr(10)
+        calls = []
+
+        def fake_run(cmd, timeout=15, limit=400_000):
+            calls.append(cmd)
+            if "--list-boots" in cmd:
+                return "-1 aaa Wed 2026-10-07 18:17:55 UTC Wed 2026-10-07 21:14:44 UTC" + nl + " 0 bbb Wed 2026-10-07 21:38:13 UTC Wed 2026-10-07 21:40:00 UTC" + nl
+            if "-k" in cmd:
+                return "2026-10-07T21:14:40+0000 belabox kernel: rk_iommu page fault" + nl
+            return "2026-10-07T21:14:44+0000 belabox python3[1]: send: Kamera on" + nl
+        with mock.patch.object(H, "run", side_effect=fake_run):
+            out = H.previous_boot()
+        self.assertIn("rk_iommu page fault", out)
+        self.assertIn("send: Kamera on", out)
+        self.assertIn("21:14:44", out)
+        self.assertTrue(any(c[:3] == ["journalctl", "-b", "-1"] for c in calls))
+
+    def test_previous_boot_without_an_earlier_start(self):
+        with mock.patch.object(H, "run", return_value="0 bbb Wed 2026-10-07 21:38:13 UTC" + chr(10)):
+            self.assertIn("kein früherer Start", H.previous_boot())
+
     def test_bundle_has_the_cpu_and_system_sections(self):
         def fake_run(cmd, timeout=15, limit=400_000):
             return ""
         with mock.patch.object(H, "run", side_effect=fake_run), mock.patch.object(H, "cpu_report", return_value="x"),                 mock.patch.object(H, "stream_probe", return_value="x"), mock.patch.object(H, "rtmp_inputs", return_value="x"),                 mock.patch.object(H, "decoder_probe", return_value="x"):
             text = H.build()
         for title in ("Dekoder-Ausgang je Quelle", "Auslastung je Kern und je Dienst", "System: Druck, freier Platz, Speicherbedarf", "Netzwerk-Zähler", "Ereignisse der Sendekette",
-                      "nginx: letzte Fehler", "Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)"):
+                      "nginx: letzte Fehler", "Vorheriger Start", "Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)"):
             self.assertIn("===== " + title, text)
 
     def test_size_is_capped_and_head_kept(self):

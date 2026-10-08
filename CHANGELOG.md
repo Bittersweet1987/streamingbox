@@ -1,5 +1,8 @@
 # Änderungen
 
+## 0.9.136 (Beta)
+- **Protokolle: neuer Abschnitt „Vorheriger Start“.** Er zeigt die Starts im Journal (mit Endzeit) sowie die letzten Kernel- und Dienstmeldungen vor dem letzten Neustart. So sieht man nach einem Hänger der Box, was zuletzt gemeldet wurde und wann sie stehen blieb. Gleiche Zugangsdaten-Schwärzung wie im übrigen Protokoll. Keine neuen Texte.
+
 ## 0.9.135 (Beta)
 - **Neu: Menü „Optionen“** (zwischen Fernzugriff und Software-Update, ersetzt die Karte „Anpassen“ ganz unten). Darin „Menüpunkte anzeigen“ (ein- und ausklappbar): Haken weg = Menü oder Bereich ausgeblendet; „Alle einblenden“ und „Reihenfolge der Hauptmenüs zurücksetzen“. Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts.
 - **Hauptmenüs verschieben:** jedes Hauptmenü hat oben rechts dauerhaft ▲ ▼ (wie bei den aktiven Kameras); ausgeblendete Menüs werden dabei übersprungen. Der Knopf „Anordnen“ in der Kopfzeile und der Anordnen-Modus entfallen. Die gemerkte Auswahl und Reihenfolge (je Browser) bleiben gültig.
