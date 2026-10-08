@@ -344,6 +344,152 @@ class RoundTrip(unittest.TestCase):
         self.assertTrue(by["cameras"]["ok"] and by["srtla"]["ok"] and by["wifi"]["ok"])
 
 
+class UiParts(unittest.TestCase):
+    """Einstellungen der Oberfläche in der Sicherung: Optionen (Menüs), HDMI-Eingang, Akku-Warnung im Twitch-Chat (ohne Token), Netzwerk der Kameras."""
+    IFACES = [{"iface": "eth0", "ip": "192.168.1.5"}, {"iface": "usb0", "ip": "192.168.20.2"}]
+    TOKEN = "geheimer-token-" + "x" * 12
+
+    def attach(self, box):
+        box.layout = server.UiLayout(box.dir)
+        box.twitch = server.TwitchStore(os.path.join(box.dir, "twitch.json"))
+        box.netchoice = server.NetChoice(os.path.join(box.dir, "camera-net.json"))
+        box.hdmi = server.HdmiService(box.dir, box.cams, True)
+        box.t.layout, box.t.twitch, box.t.netchoice, box.t.hdmi = box.layout, box.twitch, box.netchoice, box.hdmi
+        return box
+
+    def setUp(self):
+        p = mock.patch.object(server, "iface_ips", lambda: self.IFACES)
+        p.start()
+        self.addCleanup(p.stop)
+        self.box = self.attach(fill(make_box()))
+        self.box.layout.set(["c_chat", "netcard", "c_status"], ["rcard", "sm_btn", "hlp_btn", "opt_design"])
+        self.box.hdmi.set({"enabled": True, "bitrate": 6000, "fps": 25, "audio": "none"})
+        self.box.twitch.set({"channel": "MeinKanal", "login": "MeinBot", "token": self.TOKEN, "threshold": 15, "message": "Akku leer: {Kamera}", "only_live": False, "enabled": True})
+        self.box.netchoice.select("usb0")
+        self.out = export_with_wifi(self.box, False)["document"]
+
+    def fresh(self):
+        return self.attach(make_box())
+
+    def test_export_has_the_parts_and_never_the_twitch_token(self):
+        d = self.out
+        self.assertEqual(d["layout"], {"order": ["c_chat", "netcard", "c_status"], "hidden": ["rcard", "sm_btn", "hlp_btn", "opt_design"]})
+        self.assertEqual(d["hdmi"], {"enabled": True, "bitrate": 6000, "fps": 25, "audio": "none"})
+        self.assertEqual(d["camnet"], {"iface": "usb0"})
+        self.assertEqual(d["twitch"], {"enabled": True, "channel": "meinkanal", "login": "meinbot", "threshold": 15, "message": "Akku leer: {Kamera}", "only_live": False})
+        self.assertNotIn(self.TOKEN, json.dumps(d))
+        self.assertNotIn("token", json.dumps(d["twitch"]))
+
+    def test_nothing_is_exported_that_the_box_does_not_have(self):
+        box = make_box()                                                                 # ohne Optionen, ohne Netzwerkwahl: keine leeren Teile
+        box.layout = server.UiLayout(box.dir)
+        box.netchoice = server.NetChoice(os.path.join(box.dir, "camera-net.json"))
+        box.t.layout, box.t.netchoice = box.layout, box.netchoice
+        d = box.t.make_document(False)
+        self.assertNotIn("layout", d)
+        self.assertNotIn("camnet", d)
+
+    def test_import_restores_all_parts(self):
+        b = self.fresh()
+        b.twitch.set({"login": "meinbot", "token": self.TOKEN})                         # auf dieser Box gibt es ein Token (Anmeldung bleibt dort)
+        res = b.t.apply(self.out, None, ["layout", "hdmi", "twitch", "camnet"])
+        self.assertTrue(all(r["ok"] for r in res["results"]), res)
+        self.assertEqual(b.layout.get(), {"set": True, "order": ["c_chat", "netcard", "c_status"], "hidden": ["rcard", "sm_btn", "hlp_btn", "opt_design"]})
+        self.assertEqual({k: b.hdmi.status()["settings"][k] for k in ("enabled", "bitrate", "fps", "audio")}, {"enabled": True, "bitrate": 6000, "fps": 25, "audio": "none"})
+        t = b.twitch.data
+        self.assertEqual((t["enabled"], t["channel"], t["threshold"], t["message"], t["only_live"], t["token"]), (True, "meinkanal", 15, "Akku leer: {Kamera}", False, self.TOKEN))
+        self.assertEqual(b.netchoice.iface, "usb0")
+
+    def test_battery_warning_stays_off_without_token_or_login(self):
+        b = self.fresh()
+        res = b.t.apply(self.out, None, ["twitch"])
+        self.assertTrue(res["results"][0]["ok"])
+        self.assertIn("bleibt aber ausgeschaltet", res["results"][0]["message"])
+        self.assertFalse(b.twitch.data["enabled"])
+        self.assertEqual(b.twitch.data["channel"], "meinkanal")                          # die übrigen Werte sind trotzdem da
+        self.assertEqual(b.twitch.data["token"], "")
+
+    def test_unknown_network_for_cameras_is_skipped(self):
+        b = self.fresh()
+        doc = dict(self.out, camnet={"iface": "wlan9"})
+        res = b.t.apply(doc, None, ["camnet"])
+        self.assertTrue(res["results"][0]["ok"])
+        self.assertIn("gibt es hier nicht", res["results"][0]["message"])
+        self.assertIsNone(b.netchoice.iface)
+
+    def test_bad_values_are_refused_per_part(self):
+        b = self.fresh()
+        bad = dict(self.out, layout={"order": ["../x"], "hidden": []}, hdmi={"enabled": True, "bitrate": 1, "fps": 99, "audio": "none"},
+                   twitch=dict(self.out["twitch"], threshold=99), camnet={"iface": "../etc"})
+        p = {s["id"]: s for s in b.t.preview(bad, None)["sections"]}
+        for sid in ("layout", "hdmi", "twitch", "camnet"):
+            self.assertFalse(p[sid]["ok"], sid)
+        with self.assertRaisesRegex(ValueError, "Nichts zum Einspielen"):                   # nichts Gültiges übrig: es wird nichts verändert
+            b.t.apply(bad, None, ["layout", "hdmi", "twitch", "camnet"])
+        self.assertFalse(b.layout.get()["set"])
+        self.assertEqual(b.twitch.data["threshold"], 10)
+
+    def test_old_files_without_these_parts_still_work(self):
+        b = self.fresh()
+        old = {k: v for k, v in self.out.items() if k not in ("layout", "hdmi", "twitch", "camnet")}
+        ids = [s["id"] for s in b.t.preview(old, None)["sections"]]
+        self.assertTrue({"cameras", "pipeline", "srtla"} <= set(ids))
+        self.assertFalse({"layout", "hdmi", "twitch", "camnet"} & set(ids))
+
+    def test_undo_brings_the_options_back(self):
+        b = self.fresh()
+        b.layout.set(["c_logs"], ["c_bk"])
+        b.t.apply(self.out, None, ["layout"])
+        self.assertEqual(b.layout.get()["hidden"], ["rcard", "sm_btn", "hlp_btn", "opt_design"])
+        b.t.restore()
+        self.assertEqual(b.layout.get(), {"set": True, "order": ["c_logs"], "hidden": ["c_bk"]})
+
+
+class RenamedThings(unittest.TestCase):
+    """Selbst vergebene Namen gehen mit: Namen der Verbindungen (Netzwerke) und umbenannte DJI-Kameras."""
+    def setUp(self):
+        self.box = fill(make_box())
+        self.box.names.set("net:eth0", "Kabel zuhause")
+        self.box.names.set("net:usb0", "Handy per USB")
+        cam = next(c for c in self.box.cams.cams if c["key"] == "dji-001122")
+        self.box.cams.update(cam["id"], name="Mein Osmo")                                   # in der Kameraliste umbenannt
+        self.doc = export_with_wifi(self.box, False)["document"]
+
+    def fresh(self):
+        return make_box()
+
+    def test_connection_names_are_in_the_file(self):
+        self.assertEqual(self.doc["names"]["net:eth0"], "Kabel zuhause")
+        self.assertEqual(self.doc["names"]["net:usb0"], "Handy per USB")
+
+    def test_connection_names_come_back(self):
+        b = self.fresh()
+        res = b.t.apply(self.doc, None, ["names"])
+        self.assertTrue(res["results"][0]["ok"])
+        self.assertEqual(b.names.conn_names(), {"eth0": "Kabel zuhause", "usb0": "Handy per USB"})
+
+    def test_renamed_dji_camera_keeps_its_name_after_the_import(self):
+        b = self.fresh()
+        orig = b.dji.command
+
+        def like_the_dji_service(req):                                                      # der DJI-Dienst benennt die Kamera in der Liste nach seinem eigenen Namen
+            if req.get("cmd") == "update" and req.get("name"):
+                for c in b.cams.cams:
+                    if c["key"] == "dji-001122":
+                        c["name"] = req["name"]
+            return orig(req)
+        b.dji.command = like_the_dji_service
+        self.assertEqual(self.doc["dji"][0]["name"], "Action Test")                         # im DJI-Teil steht noch der alte Name
+        res = b.t.apply(self.doc, None, ["cameras", "dji"])
+        self.assertTrue(all(r["ok"] for r in res["results"]), res)
+        self.assertEqual({c["key"]: c["name"] for c in b.cams.cams}["dji-001122"], "Mein Osmo")   # es gilt der Name der Kameraliste
+
+    def test_names_of_the_camera_list_are_all_restored(self):
+        b = self.fresh()
+        b.t.apply(self.doc, None, ["cameras", "dji"])
+        self.assertEqual({c["key"]: c["name"] for c in b.cams.cams}, {c["key"]: c["name"] for c in self.box.cams.cams})
+
+
 class Validation(unittest.TestCase):
     def setUp(self):
         self.box = fill(make_box())

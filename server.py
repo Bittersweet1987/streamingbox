@@ -436,7 +436,18 @@ class SrtlaStore:
     spätere Sende-Dienst läuft mit Root-Rechten und liest dieselbe Datei.
     """
     DEFAULT_SETTINGS = {"min_kbps": 300, "max_kbps": 12000, "latency_ms": 4000, "uplinks": ["eth0", "eth1"],
-                        "spread": "best"}
+                        "spread": "best", "pulse_green_kbps": 6000, "pulse_yellow_kbps": 1000}
+
+    @staticmethod
+    def check_pulse(green, yellow):
+        """Pulsanzeige (Herzschlag im Kopf am Handy): Grün ab "green" kbit/s, Gelb ab "yellow" kbit/s, darunter Rot (Rot ist immer ab 0 und wird nicht eingestellt)."""
+        try:
+            g, y = int(green), int(yellow)
+        except (TypeError, ValueError):
+            raise ValueError("Pulsanzeige: Grün ab und Gelb ab müssen Zahlen sein")
+        if isinstance(green, bool) or isinstance(yellow, bool) or not 1 <= y < g <= 100000:
+            raise ValueError("Pulsanzeige: Gelb ab muss kleiner sein als Grün ab (1 bis 100000 kbit/s)")
+        return g, y
 
     def __init__(self, path):
         self.path = path
@@ -551,9 +562,10 @@ class SrtlaStore:
         spread = req.get("spread", cur.get("spread", "best"))
         if spread not in ("best", "all"):
             raise ValueError("Verteilung: beste Leitung bevorzugen oder alle gleichzeitig")
+        pg, py = self.check_pulse(req.get("pulse_green_kbps", cur.get("pulse_green_kbps", 6000)), req.get("pulse_yellow_kbps", cur.get("pulse_yellow_kbps", 1000)))
         with self.lock:
             self.data["settings"] = {"min_kbps": mn, "max_kbps": mx, "latency_ms": lat, "uplinks": sorted(set(ups)),
-                                     "spread": spread}
+                                     "spread": spread, "pulse_green_kbps": pg, "pulse_yellow_kbps": py}
             self.save()
 
 
@@ -2469,6 +2481,46 @@ class DeviceNames:
             tmp = self.path + ".tmp"
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
             with os.fdopen(fd, "w") as f:
+                json.dump(d, f, indent=1, ensure_ascii=False)
+            os.replace(tmp, self.path)
+
+
+class UiLayout:
+    """Reihenfolge der Hauptmenüs und ausgeblendete Menüpunkte (Optionen): gilt für alle Geräte an dieser Box (Handy, Rechner). Die Datei steht im
+    Zustandsordner; es sind keine Geheimnisse. Ohne Datei gilt das Standardaussehen (und die Oberfläche übernimmt einmal den Stand des ersten Geräts)."""
+    ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")
+    MAX = 80
+
+    def __init__(self, state_dir):
+        self.path = os.path.join(state_dir, "ui-layout.json")
+        self.lock = threading.Lock()
+
+    @classmethod
+    def _ids(cls, raw):
+        if not isinstance(raw, list) or len(raw) > cls.MAX:
+            raise ValueError("Die Liste der Menüs ist ungültig")
+        out = []
+        for x in raw:
+            if not isinstance(x, str) or not cls.ID_RE.match(x):
+                raise ValueError("Ein Menü ist ungültig")
+            if x not in out:
+                out.append(x)
+        return out
+
+    def get(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                d = json.load(f)
+            return {"set": True, "order": self._ids(d.get("order", [])), "hidden": self._ids(d.get("hidden", []))}
+        except (OSError, ValueError, AttributeError):
+            return {"set": False, "order": [], "hidden": []}
+
+    def set(self, order, hidden):
+        d = {"order": self._ids(order), "hidden": self._ids(hidden)}
+        with self.lock:
+            tmp = self.path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(d, f, indent=1, ensure_ascii=False)
             os.replace(tmp, self.path)
 
@@ -5734,8 +5786,10 @@ class Vault:
 SETTINGS_FORMAT = "irl4you-box-einstellungen"
 SETTINGS_VERSION = 1
 SETTINGS_SECTIONS = (("cameras", "Kameras"), ("pipeline", "Bildaufbau"), ("srtla", "SRTLA-Server und Sendeeinstellungen"),
-                     ("autostart", "Automatischer Start"), ("names", "Namen der WLAN- und Bluetooth-Sticks"),
-                     ("dji", "DJI-Kameras (Einstellungen)"), ("hotspots", "Hotspots"), ("wifi", "Gespeicherte WLAN-Netze"))
+                     ("autostart", "Automatischer Start"), ("names", "Namen (Verbindungen, WLAN- und Bluetooth-Sticks)"),
+                     ("dji", "DJI-Kameras (Einstellungen)"), ("hdmi", "HDMI-Eingang (Einstellungen)"), ("twitch", "Akku-Warnung im Twitch-Chat (Einstellungen)"),
+                     ("camnet", "Netzwerk für Kameras (Standard)"), ("layout", "Optionen (Menüs: Reihenfolge und Ausblenden)"),
+                     ("hotspots", "Hotspots"), ("wifi", "Gespeicherte WLAN-Netze"))
 IFACE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
 
 
@@ -5743,7 +5797,9 @@ class SettingsTransfer:
     """Einstellungen in eine Datei sichern und wieder einspielen (Issue #20), zum Beispiel nach dem Neu-Aufspielen der SD-Karte.
 
     Gesichert werden Kameras, Bildaufbau, SRTLA-Server und Sendeeinstellungen, automatischer Start, Namen der Sticks, DJI-Kameras (ihre Einstellungen, nicht die
-    Bluetooth-Kopplung), Hotspots und die gespeicherten WLAN-Netze. Nie dabei: das Passwort dieser Oberfläche, SSH, Schlüssel, die Anmeldung der Fernfreigabe.
+    Bluetooth-Kopplung), der HDMI-Eingang, die Akku-Warnung im Twitch-Chat (ohne Token und Anmeldung), das Netzwerk der Kameras, die Optionen der Oberfläche (Reihenfolge
+    und Ausblenden der Menüs), Hotspots und die gespeicherten WLAN-Netze. Nie dabei: das Passwort dieser Oberfläche, SSH, Schlüssel, die Anmeldung der Fernfreigabe,
+    Token und Anmeldung bei Twitch.
     Eine Datei mit Passwörtern und Zugangsdaten wird immer mit einem Passwort verschlüsselt (Vault). Beim Einspielen wird jeder Teil streng geprüft; die
     Prüfung der einzelnen Speicher (Kameras, Bildaufbau, SRTLA, Hotspots, WLAN-Helfer) gilt dabei wie bei der Eingabe von Hand. Eingespielt wird nur, wenn
     nicht gesendet wird, und der Stand davor wird gesichert (Rückgängig)."""
@@ -5752,6 +5808,7 @@ class SettingsTransfer:
     def __init__(self, state_dir, cams, pipeline, srtla, autostart, names, djisvc, wifi, send, demo=False):
         self.cams, self.pipeline, self.srtla, self.autostart = cams, pipeline, srtla, autostart
         self.names, self.djisvc, self.wifi, self.send, self.demo = names, djisvc, wifi, send, demo
+        self.hdmi = self.twitch = self.layout = self.netchoice = None          # werden nach dem Start gesetzt (entstehen später oder fehlen in Tests)
         self.backup_dir = os.path.join(state_dir, "backup")
         self.backup_path = os.path.join(self.backup_dir, "vor-einspielen.json")
         self.version = (read(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"), "") or "").strip()
@@ -5790,6 +5847,24 @@ class SettingsTransfer:
                 e["password"] = h["password"]
             hs[iface] = e
         doc["hotspots"] = hs
+        if self.hdmi is not None:
+            try:
+                st = self.hdmi.status()
+            except Exception:                                                # der HDMI-Dienst fehlt: der Teil bleibt weg
+                st = {}
+            if st.get("service"):
+                doc["hdmi"] = {k: st["settings"][k] for k in HdmiService.ALLOWED}
+        if self.twitch is not None:
+            with self.twitch.lock:                                           # ohne Token und Anmeldung: beides bleibt auf der Box
+                t = self.twitch.data
+                doc["twitch"] = {"enabled": bool(t["enabled"]), "channel": t["channel"], "login": t["login"], "threshold": t["threshold"],
+                                 "message": t["message"], "only_live": bool(t["only_live"])}
+        if self.netchoice is not None and self.netchoice.iface:
+            doc["camnet"] = {"iface": self.netchoice.iface}
+        if self.layout is not None:
+            lay = self.layout.get()
+            if lay["set"]:
+                doc["layout"] = {"order": lay["order"], "hidden": lay["hidden"]}
         if wifi_data is not None:
             doc["wifi"] = {"networks": [{k: v for k, v in n.items() if secrets_on or k != "password"} for n in wifi_data.get("networks", [])],
                            "skipped": list(wifi_data.get("skipped", []))}
@@ -5910,8 +5985,9 @@ class SettingsTransfer:
         ups = st.get("uplinks", [])
         if not isinstance(ups, list) or len(ups) > 20 or any(not isinstance(u, str) or not IFACE_NAME_RE.match(u) for u in ups):
             raise ValueError("Die Netze zum Senden sind ungültig")
+        pg, py = SrtlaStore.check_pulse(st.get("pulse_green_kbps", cur["pulse_green_kbps"]), st.get("pulse_yellow_kbps", cur["pulse_yellow_kbps"]))
         return {"servers": servers, "selected": sel, "settings": {"min_kbps": mn, "max_kbps": mx, "latency_ms": lat, "spread": spread,
-                                                                  "uplinks": sorted(set(ups))}}, notes
+                                                                  "uplinks": sorted(set(ups)), "pulse_green_kbps": pg, "pulse_yellow_kbps": py}}, notes
 
     def _clean_autostart(self, raw):
         if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):
@@ -5988,6 +6064,34 @@ class SettingsTransfer:
             out.append(e)
         return out, ["Die Bluetooth-Kopplung lässt sich nicht mitnehmen: Die Kameras müssen nach dem Einspielen einmal neu verbunden werden"] if out else []
 
+    def _clean_hdmi(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("Die HDMI-Einstellungen sind ungültig")
+        want = {k: raw[k] for k in HdmiService.ALLOWED if k in raw}
+        out = hdmi_daemon.clean_settings(want, None)                         # dieselbe Prüfung wie im Dienst (wirft ValueError mit kurzem Text)
+        return {k: out[k] for k in HdmiService.ALLOWED}, []
+
+    def _clean_twitch(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("Die Einstellungen der Akku-Warnung sind ungültig")
+        for k in ("enabled", "only_live"):
+            if not isinstance(raw.get(k), bool):
+                raise ValueError("Die Einstellungen der Akku-Warnung sind ungültig")
+        out = {"enabled": raw["enabled"], "only_live": raw["only_live"],
+               "channel": TwitchStore._name(raw.get("channel", ""), TwitchStore.ERR_CHANNEL), "login": TwitchStore._name(raw.get("login", ""), TwitchStore.ERR_LOGIN),
+               "threshold": TwitchStore._threshold(raw.get("threshold")), "message": TwitchStore._message(raw.get("message"))}
+        return out, ["Token und Twitch-Anmeldung werden nie mitgenommen: bitte hier neu anmelden"]
+
+    def _clean_camnet(self, raw):
+        if not isinstance(raw, dict) or not isinstance(raw.get("iface"), str) or not IFACE_NAME_RE.match(raw["iface"]):
+            raise ValueError("Das Netzwerk für Kameras ist ungültig")
+        return {"iface": raw["iface"]}, []
+
+    def _clean_layout(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("Die Optionen sind ungültig")
+        return {"order": UiLayout._ids(raw.get("order", [])), "hidden": UiLayout._ids(raw.get("hidden", []))}, []
+
     def _clean_hotspots(self, raw):
         if not isinstance(raw, dict) or len(raw) > 8:
             raise ValueError("Die Hotspots sind ungültig")
@@ -6060,6 +6164,18 @@ class SettingsTransfer:
                 elif sid == "dji":
                     data, notes = self._clean_dji(raw)
                     count = len(data)
+                elif sid == "hdmi":
+                    data, notes = self._clean_hdmi(raw)
+                    count = 1
+                elif sid == "twitch":
+                    data, notes = self._clean_twitch(raw)
+                    count = 1
+                elif sid == "camnet":
+                    data, notes = self._clean_camnet(raw)
+                    count = 1
+                elif sid == "layout":
+                    data, notes = self._clean_layout(raw)
+                    count = 1
                 elif sid == "hotspots":
                     data, notes = self._clean_hotspots(raw)
                     count = len(data)
@@ -6114,10 +6230,26 @@ class SettingsTransfer:
                 results.append({"id": sid, "label": labels[sid], "ok": True, "message": msg})
             except Exception as e:                                  # ein Teil darf nie die anderen oder die Oberfläche mitnehmen
                 results.append({"id": sid, "label": labels[sid], "ok": False, "message": str(e) or type(e).__name__})
+        if "cameras" in wanted and "dji" in wanted:
+            self._restore_camera_names(clean["cameras"])
         for r in report:
             if not r["ok"] and (sections is None or r["id"] in sections):
                 results.append({"id": r["id"], "label": r["label"], "ok": False, "message": "Nicht eingespielt: " + r["note"]})
         return {"ok": True, "results": results, "backup": True}
+
+    def _restore_camera_names(self, cams):
+        """Die Namen der Kameraliste aus der Sicherung gelten (auch für DJI-Kameras): Beim Einspielen der DJI-Kameras gibt der DJI-Dienst der Kamera in der Liste
+        sonst seinen eigenen Namen zurück, und ein in der Liste vergebener Name ginge verloren."""
+        want = {c["key"]: c["name"] for c in cams}
+        with self.cams.lock:
+            changed = False
+            for c in self.cams.cams:
+                n = want.get(c["key"])
+                if n and c["name"] != n:
+                    c["name"] = n
+                    changed = True
+            if changed:
+                self.cams.save()
 
     def restore(self):
         """Den Stand vor dem letzten Einspielen wiederherstellen."""
@@ -6194,6 +6326,39 @@ class SettingsTransfer:
         if problems and not done:
             raise RuntimeError("; ".join(problems))
         return "%d DJI-Kameras eingespielt (bitte einmal verbinden)" % done + ((", Probleme: " + "; ".join(problems)) if problems else "")
+
+    def _apply_hdmi(self, d):
+        if self.hdmi is None:
+            raise RuntimeError("Der HDMI-Dienst ist hier nicht verfügbar")
+        self.hdmi.set(dict(d))
+        return "HDMI-Einstellungen eingespielt"
+
+    def _apply_twitch(self, d):
+        if self.twitch is None:
+            raise RuntimeError("Die Akku-Warnung ist hier nicht verfügbar")
+        self.twitch.set(dict({k: d[k] for k in ("channel", "login", "threshold", "message", "only_live")}, enabled=False))      # erst die Werte, dann ggf. einschalten
+        if not d["enabled"]:
+            return "Akku-Warnung: Einstellungen eingespielt (aus)"
+        try:
+            self.twitch.set({"enabled": True})
+        except ValueError:
+            return "Akku-Warnung: eingespielt, bleibt aber ausgeschaltet (Token oder Twitch-Anmeldung fehlt auf dieser Box)"
+        return "Akku-Warnung: eingespielt (an)"
+
+    def _apply_camnet(self, d):
+        if self.netchoice is None:
+            raise RuntimeError("Das Netzwerk für Kameras ist hier nicht verfügbar")
+        try:
+            self.netchoice.select(d["iface"])
+        except ValueError:
+            return "Netzwerk für Kameras: „%s“ gibt es hier nicht (ausgelassen)" % d["iface"]
+        return "Netzwerk für Kameras eingespielt"
+
+    def _apply_layout(self, d):
+        if self.layout is None:
+            raise RuntimeError("Die Optionen sind hier nicht verfügbar")
+        self.layout.set(d["order"], d["hidden"])
+        return "Optionen eingespielt"
 
     def _apply_hotspots(self, hs):
         return self.wifi.hotspot_import(hs)
@@ -6422,6 +6587,7 @@ class Handler(BaseHTTPRequestHandler):
     djisvc = None
     netchoice = None
     names = None
+    layout = None
     srtla = None
     pipeline = None
     send = None
@@ -6581,6 +6747,8 @@ class Handler(BaseHTTPRequestHandler):
                     if f:
                         c["fps"], c["fps_set"] = float(f), True      # eingestellt, nicht gemessen
             return self.reply(200, m)
+        if path == "/api/layout":
+            return self.reply(200, self.layout.get() if self.layout else {"set": False, "order": [], "hidden": []})
         if path == "/api/logmode":
             return self.reply(200, self.logmode.status())
         if path == "/api/logs":
@@ -6701,6 +6869,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/wifi":
                 self.wifi.request(d)
                 return self.reply(200, {"ok": True})
+            if path == "/api/layout":
+                if self.layout is None:
+                    raise ValueError("Die Menüeinstellung ist hier nicht verfügbar")
+                self.layout.set(d.get("order", []), d.get("hidden", []))
+                return self.reply(200, {"ok": True})
             if path == "/api/devname":
                 if self.names is None:
                     raise ValueError("Namen sind hier nicht verfügbar")
@@ -6740,6 +6913,9 @@ class Handler(BaseHTTPRequestHandler):
                 with_key = d.get("with")
                 if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
                     raise ValueError("Kamera unbekannt")
+                target = with_key or self.pipeline.cfg.get("pip")
+                if target and any(x["key"] == target and x.get("state") == "offline" for x in self.cams.listing("")):
+                    raise ValueError("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.")
                 shown = self.pipeline.swap_main_pip(with_key)
                 if self.send.always_live() or self.send.swap_live():
                     note = "Getauscht, ohne Unterbrechung."
@@ -6903,6 +7079,7 @@ def main():
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
     Handler.names = DeviceNames(args.state)
+    Handler.layout = UiLayout(args.state)
     Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names, Handler.srtla)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
@@ -6921,6 +7098,7 @@ def main():
         ips = {x["iface"]: x["ip"] for x in iface_ips() if x.get("ip")}
         return [ips[u] for u in ups if u in ips]
     Handler.chatpaths = ChatPaths(chat_sources)
+    Handler.transfer.layout, Handler.transfer.netchoice = Handler.layout, Handler.netchoice
     Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, chat=TwitchChat(paths=Handler.chatpaths), demo=args.demo)
     Handler.twitchlogin = TwitchLogin(os.path.join(args.state, "twitch-login.json"), demo=args.demo, paths=Handler.chatpaths)
     Handler.twitch.store.account = Handler.twitchlogin                                # angemeldetes Konto ersetzt Bot-Konto und Token von Hand
@@ -6930,6 +7108,7 @@ def main():
     Handler.chatmod = TwitchMod(Handler.twitch.store, Handler.twitchlogin, paths=Handler.chatpaths, demo=args.demo, demo_reader=Handler.chatreader if args.demo else None)
     Handler.chatsender = TwitchSender(Handler.twitch.store, chat=TwitchChat(paths=Handler.chatpaths), demo_reader=Handler.chatreader if args.demo else None, mod=Handler.chatmod)       # liest den Kanal der Twitch-Karte (dieselben Einstellungen)
     Handler.hdmi = HdmiService(args.state, Handler.cams, args.demo)
+    Handler.transfer.hdmi, Handler.transfer.twitch = Handler.hdmi, Handler.twitch.store
     if not args.demo:
         threading.Thread(target=Handler.twitch.run, daemon=True).start()
 

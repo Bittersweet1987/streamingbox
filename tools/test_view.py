@@ -411,7 +411,7 @@ class Endpoint(unittest.TestCase):
         self.send = server.SendControl(d, None, pipeline, None, demo=True)
         server.Handler.send = self.send
         server.Handler.pipeline = pipeline
-        server.Handler.cams = mock.Mock(cams=[{"key": k} for k in KEYS])
+        server.Handler.cams = mock.Mock(cams=[{"key": k} for k in KEYS], listing=lambda host: cam_listing())
         self.pipeline = pipeline
 
     def test_view_endpoint_demo_flow(self):
@@ -597,6 +597,22 @@ class FooterSwapEndpoint(Endpoint):
         out = json.loads(h.out.data)
         self.assertEqual(out["note"], "Getauscht, ohne Unterbrechung.")
         self.assertEqual(applied, [(0, -1, False)])                                        # Klein 1 ist jetzt sichtbar
+
+    def test_swap_to_a_camera_that_is_not_connected_is_refused(self):
+        server.Handler.cams = mock.Mock(cams=[{"key": k} for k in KEYS], listing=lambda host: cam_listing({"cam-b": "offline"}))
+        before = dict(self.pipeline.cfg)
+        with mock.patch.object(self.send, "swap_live", lambda: True), mock.patch.object(self.send, "apply_view", side_effect=AssertionError("nichts zu tun")):
+            h = self.handler("/api/pipeline/swap", {"with": "cam-b"})
+            h.do_POST()
+        self.assertEqual(h.sent, [400])
+        self.assertIn("nicht verbunden", json.loads(h.out.data)["error"])
+        self.assertEqual(self.pipeline.cfg["main"], before["main"])                         # nichts getauscht
+
+    def test_swap_without_a_name_checks_the_first_small_picture(self):
+        server.Handler.cams = mock.Mock(cams=[{"key": k} for k in KEYS], listing=lambda host: cam_listing({self.pipeline.cfg["pip"]: "offline"}))
+        h = self.handler("/api/pipeline/swap", {})
+        h.do_POST()
+        self.assertEqual(h.sent, [400])
 
     def test_swap_endpoint_says_so_when_the_view_cannot_be_applied(self):
         self.pipeline.cfg["styles"] = hidden({"1": False})

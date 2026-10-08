@@ -141,7 +141,12 @@ class FooterScripts(unittest.TestCase):
 
     def test_buttons_only_for_picture_in_picture(self):
         self.assertTrue(self.render(None)["hidden"])
-        self.assertTrue(self.render({"cams": self.CAMS[:1], "audio": {}})["hidden"])                # eine Kamera: nichts zu schalten
+        self.assertTrue(self.render({"cams": [], "audio": {}})["hidden"])                           # keine Kamera: nichts zu schalten
+        one = self.render({"cams": self.CAMS[:1], "audio": {"key": "a", "name": "Osmo Action 4", "mute": False, "src": "main", "next": "main"}})
+        self.assertFalse(one["hidden"])                                                             # eine Kamera: nur der Ton-Knopf (stumm), keine Kamera-Knöpfe
+        self.assertEqual(one["html"].count('data-kind="cam"'), 0)
+        self.assertEqual(one["html"].count('data-kind="aud"'), 1)
+        self.assertIn('data-single="1"', one["html"])
         r = self.render({"cams": self.CAMS, "audio": {"key": "a", "name": "Osmo Action 4", "mute": False, "next": "pip"}})
         self.assertFalse(r["hidden"])
 
@@ -203,17 +208,17 @@ class FooterBehaviour(unittest.TestCase):
     def test_requests_of_the_buttons(self):
         i = PAGE.index("async function footAct(b,long,dbl){")
         body = PAGE[i:PAGE.index("(function(){", i)]
-        self.assertIn('"/api/pipeline/swap",{with:b.dataset.key}', body)                            # lang auf eine Kamera: Hauptbild tauschen
-        self.assertIn('"/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}}', body)   # kurz: aus-/einblenden
+        self.assertIn('"/api/pipeline/swap",{with:b.dataset.key}', body)                            # kurz auf eine Kamera: zum Hauptbild machen
+        self.assertIn('"/api/pipeline/view",{visible:{[b.dataset.slot]:b.dataset.hidden==="1"}}', body)   # doppelt: aus-/einblenden
         self.assertIn('"/api/pipeline/view",{mute:b.dataset.mute!=="1"}', body)                    # lang auf Ton: stumm und wieder laut
         self.assertIn('"/api/pipeline/view",{audio:b.dataset.next}', body)                          # kurz auf Ton: nächste Tonspur
         self.assertIn("Das Hauptbild lässt sich nicht ausblenden", body)
         self.assertIn("Stumm schalten geht nur während der Sendung.", body)
 
-    def test_double_tap_deactivates_and_a_single_tap_waits_for_it(self):
+    def test_double_tap_hides_and_a_single_tap_waits_for_it(self):
         i = PAGE.index("let tapT=null, tapKey=\"\";")
         block = PAGE[i:PAGE.index("});", PAGE.index("tapT=setTimeout", i)) + 3]
-        self.assertIn("footAct(b,false,true)", block)                                           # zweiter Tipp: deaktivieren
+        self.assertIn("footAct(b,false,true)", block)                                           # zweiter Tipp: kleines Bild aus-/einblenden
         self.assertIn("setTimeout(()=>{ tapT=null; footAct(b,false); },300)", block)            # sonst nach 300 ms der kurze Tipp
         self.assertIn('b.dataset.kind!=="cam"', block)                                          # der Ton-Knopf wartet nicht
         j = PAGE.index("async function footAct(b,long,dbl){")
@@ -221,6 +226,56 @@ class FooterBehaviour(unittest.TestCase):
         self.assertIn('"/api/pipeline/active",{key:b.dataset.key,active:on}', body)
         self.assertIn("Das Hauptbild lässt sich nicht deaktivieren.", body)
         self.assertIn("on=b.dataset.inactive===\"1\"", body)
+
+    def test_gestures_short_main_double_hide_long_deactivate(self):
+        j = PAGE.index("async function footAct(b,long,dbl){")
+        body = PAGE[j:PAGE.index("}else if(long){", j)]                                         # nur der Teil für die Kamera-Knöpfe
+        i_long, i_dbl, i_swap = body.index("if(long){"), body.index("if(dbl) r="), body.index("else r=await srtlaCall(\"POST\",\"/api/pipeline/swap\"")
+        self.assertLess(i_long, i_dbl)
+        self.assertIn('"/api/pipeline/active"', body[i_long:i_dbl])                               # lang: deaktivieren (und wieder aktivieren)
+        self.assertIn('"/api/pipeline/view",{visible:', body[i_dbl:i_swap])                       # doppelt: ausblenden
+        self.assertIn('"/api/pipeline/swap"', body[i_swap:])                                      # kurz: Hauptbild wechseln
+        self.assertIn("Das ist schon das Hauptbild.", body)                                       # kurz auf das Hauptbild: nichts zu tun
+        self.assertIn("Zum Tauschen kurz auf eine andere Kamera drücken.", body)                  # der Hinweis nennt die neue Bedienung
+
+    def test_descriptions_match_the_gestures(self):
+        i = PAGE.index('$("mf_info").addEventListener("click"')
+        info = PAGE[i:PAGE.index("function fitMsg", i)]
+        for text in ("Kurzer Klick = zum Hauptbild machen", "Doppelklick = aus-/einblenden, Ton bleibt", "Langer Klick = deaktivieren / aktivieren",
+                     "Ton: kurzer Klick = nächste Spur", "Ton: langer Klick = stumm / wieder laut"):
+            self.assertIn(text, info)
+        tip = PAGE[PAGE.index("const tip=(c.main?"):PAGE.index('.join(" ");', PAGE.index("const tip=(c.main?"))]
+        for text in ("Kurz drücken macht es zum Hauptbild.", "Doppelt tippen: das kleine Bild ausblenden", "Doppelt tippen: das kleine Bild einblenden.",
+                     "Lang drücken: deaktivieren", "Lang drücken: aktivieren."):
+            self.assertIn(text, tip)
+        for old in ("Lang drücken macht es zum Hauptbild", "Kurz drücken blendet es aus"):
+            self.assertNotIn(old, PAGE)
+
+    def test_info_lines_never_wrap(self):
+        i = PAGE.index('$("mf_info").addEventListener("click"')
+        info = PAGE[i:PAGE.index("function fitMsg", i)]
+        for line in re.findall(r'"([^"]+)"', info[info.index("const lines="):info.index("footMsg(lines")]):
+            self.assertLessEqual(len(line), 42, line)                                               # kurze Zeilen
+        self.assertIn('.mf-msg[data-info="1"]{white-space:pre;overflow:hidden}', PAGE)               # kein Umbruch in jedem Design
+        fit = PAGE[PAGE.index("function fitMsg(m)"):PAGE.index("function sizeFoot")]
+        self.assertIn("m.scrollWidth>m.clientWidth", fit)                                           # die Schrift schrumpft, bis die breiteste Zeile passt
+        self.assertIn("fitMsg(m)", info)
+
+    def test_one_camera_keeps_the_audio_button_and_live_is_not_stretched(self):
+        i = PAGE.index("function renderFoot(d){")
+        body = PAGE[i:PAGE.index("async function footAct", i)]
+        self.assertIn("!f.cams.length", body)                                                       # erst ohne Kamera verschwindet die Leiste
+        self.assertIn("multi=f.cams.length>=2", body)
+        self.assertIn('data-single="${one?1:0}"', body)
+        self.assertIn("#mfoot:has(#mf_tools[hidden]) .mf-live{flex:0 0 auto", PAGE)                  # "Live"/"Stop" allein nicht über die ganze Breite
+
+    def test_a_camera_that_is_not_connected_is_never_made_main(self):
+        j = PAGE.index("async function footAct(b,long,dbl){")
+        body = PAGE[j:PAGE.index("}else if(long){", j)]
+        self.assertIn('data-gone="${c.state==="offline"?1:0}"', PAGE)
+        self.assertIn('b.dataset.gone==="1") return footMsg("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.")', body)
+        self.assertLess(body.index('b.dataset.gone==="1"'), body.index('"/api/pipeline/swap"'))       # die Prüfung kommt vor dem Wechsel
+        self.assertIn("Es gibt nur eine Tonquelle", PAGE)                                              # kurz drücken auf den einzigen Ton: Hinweis statt Wechsel
 
     def test_footer_and_header_never_open_a_popup_on_the_phone(self):                        # Issue #23
         i = PAGE.index("async function footAct(b,long,dbl){")
@@ -260,7 +315,7 @@ class MovedFunctions(unittest.TestCase):
         for needle in ('id="auto_on"', 'id="auto_help_btn"', 'id="auto_help"', 'id="autostatus"'):
             self.assertIn(needle, card)
             self.assertEqual(PAGE.count(needle), 1, needle)
-        self.assertLess(card.index('id="auto_on"'), card.index(">SRTLA-Server</div>"))
+        self.assertLess(card.index('id="auto_on"'), card.index(">SRTLA-Server</summary>"))
         live = PAGE[PAGE.index('id="livecard"'):PAGE.index("</section>", PAGE.index('id="livecard"'))]
         self.assertNotIn("auto_on", live)
 
