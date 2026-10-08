@@ -1,5 +1,9 @@
 # Änderungen
 
+## 0.9.137 (Beta)
+- **Reihenfolge der Hauptmenüs jetzt unter „Optionen“** (Unterpunkt „Reihenfolge der Hauptmenüs“, ein- und ausklappbar): je Menü eine Zeile mit ▲ ▼, ausgeblendete Menüs stehen grau darin. Die ▲ ▼ in den Titelzeilen der Hauptmenüs entfallen, am Handy wie am Rechner. Gespeicherte Auswahl und Reihenfolge bleiben gültig.
+- „Reihenfolge zurücksetzen“ steht jetzt in diesem Unterpunkt; „Alle einblenden“ bei „Menüpunkte anzeigen“. Neue Texte in allen 14 Sprachen (maschinell übersetzt).
+
 ## 0.9.136 (Beta)
 - **Protokolle: neuer Abschnitt „Vorheriger Start“.** Er zeigt die Starts im Journal (mit Endzeit) sowie die letzten Kernel- und Dienstmeldungen vor dem letzten Neustart. So sieht man nach einem Hänger der Box, was zuletzt gemeldet wurde und wann sie stehen blieb. Gleiche Zugangsdaten-Schwärzung wie im übrigen Protokoll. Keine neuen Texte.
 
