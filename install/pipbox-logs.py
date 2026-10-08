@@ -907,6 +907,19 @@ def usb_devices():
     return "\n".join(rows) + "\n"
 
 
+def usb_events():
+    """USB-Trennungen, abgeschaltete Anschlüsse und Überstrom der letzten 3 Tage (Kernel-Journal) und die Ereignisse, die die Oberfläche gemerkt hat."""
+    pat = re.compile(r"usb \d+-[\d.]+: USB disconnect|disabled by hub|over-current|unable to enumerate USB device|device descriptor read/\w+, error -71|xhci_hcd.*(died|dead|host controller)")
+    lines = [l for l in run(["journalctl", "-k", "--since", "-3 days", "--no-pager", "-o", "short-iso"], 20).splitlines() if pat.search(l)]
+    saved = load_json("usb-events.json")
+    mem = ""
+    if isinstance(saved, list):
+        mem = "".join("%s UTC  Anschluss %s  Art %s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(e["t"])), e.get("port", "?"), e.get("cat", "?"), e.get("why", "?"))
+                      for e in saved[-20:] if isinstance(e, dict) and isinstance(e.get("t"), (int, float)))
+    return ("Kernel (letzte 3 Tage):\n" + (chr(10).join(lines[-60:]) if lines else "keine Ereignisse") + "\n\nVon der Oberfläche gemerkt (Anschluss, Art des Geräts, Grund: gone = getrennt, "
+            "emi = Anschluss abgeschaltet durch Störung oder Spannungseinbruch, over = Überstrom):\n" + (mem or "keine") + "\n")
+
+
 def sections():
     now = time.time()
     local = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
@@ -966,6 +979,7 @@ def sections():
     out.append(("Journal tailscaled (nur Freigabe, Zertifikat, Anmeldung, Fehler)", "\n".join(tsj[-120:]) + "\n"))
     out.append(("Warnungen und Fehler des Systems (seit dem Start)", run(["journalctl", "-p", "warning", "-b", "--no-pager", "-o", "short-iso", "-n", "200"], 20)))
     out.append(("Vorheriger Start (Ende des Journals: Kernel und Dienste vor dem letzten Neustart, zum Beispiel nach einem Hänger)", previous_boot()))
+    out.append(("USB-Ereignisse (Trennungen, abgeschaltete Anschlüsse; Ausfall eines Adapters oder Routers)", usb_events()))
     out.append(("Kernel (Video, Speicher, Temperatur, Abstürze, USB-Fehler)", kernel_hints()))
     out.append(("Kernel (USB, Bluetooth, WLAN)", "\n".join([l for l in run(["dmesg"], 10).splitlines()
                                                               if re.search(r"(?i)usb|bluetooth|btusb|wlan|wifi|cfg80211|rtl|brcm", l)][-150:]) + "\n"))
