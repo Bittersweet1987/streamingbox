@@ -2027,14 +2027,14 @@ class UpdateVersionCheck(unittest.TestCase):
         opener.fail_api = False
         with mock.patch.object(server.urllib.request, "urlopen", opener):
             self.assertEqual(sw._get("VERSION", 64).strip(), "0.9.64")
-            self.assertEqual(urls[0][0], "https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/VERSION?ref=main")
+            self.assertEqual(urls[0][0], "https://api.github.com/repos/" + server.UPDATE_REPO + "/contents/VERSION?ref=main")
             self.assertEqual(urls[0][1], "application/vnd.github.raw+json")
             self.assertEqual(len(urls), 1)
             opener.fail_api = True                                   # Anfragegrenze erreicht: dann über raw
             urls.clear()
             self.assertEqual(sw._get("VERSION", 64).strip(), "0.9.64")
-            self.assertEqual([u for u, _ in urls], ["https://api.github.com/repos/IRL4YOU/irl4you-pip/contents/VERSION?ref=main",
-                                                     "https://raw.githubusercontent.com/IRL4YOU/irl4you-pip/main/VERSION"])
+            self.assertEqual([u for u, _ in urls], ["https://api.github.com/repos/" + server.UPDATE_REPO + "/contents/VERSION?ref=main",
+                                                     "https://raw.githubusercontent.com/" + server.UPDATE_REPO + "/main/VERSION"])
             def fail_all(req, timeout=0):
                 raise urllib.error.URLError("kein Netz")
             with mock.patch.object(server.urllib.request, "urlopen", fail_all):
