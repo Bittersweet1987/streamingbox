@@ -3473,9 +3473,13 @@ class BtDriver:
     STATUS = "/run/pipbox-btdriver/status.json"
     UNIT = "/etc/systemd/system/pipbox-btdriver.path"
     STATES = ("working", "waiting", "failed", "unsupported", "ok", "none")
+    CHIP_STATUS = "/run/pipbox-btchip/status.json"          # Helfer für den eingebauten Bluetooth-Chip der ROCK 5B Plus (schreibt nur dort)
+    CHIP_UNIT = "/etc/systemd/system/pipbox-btchip.path"
+    CHIP_STATES = ("working", "waiting", "failed", "unsupported", "ok")
 
     def __init__(self, state_dir, demo):
         self.req = os.path.join(state_dir, "btdriver-request")
+        self.chip_req = os.path.join(state_dir, "btchip-request")
         self.demo = demo
         self.fake = {}
 
@@ -3492,7 +3496,24 @@ class BtDriver:
                            time=int(raw.get("time") or 0))
         except (OSError, ValueError, TypeError, AttributeError):
             pass
+        chip = self.chip_status()
+        if chip:
+            out["chip"] = chip
         return out
+
+    def chip_status(self):
+        """Stand des eingebauten Bluetooth-Chips der ROCK 5B Plus, oder None (anderes Gerät, Helfer fehlt, noch nichts geschrieben)."""
+        if self.demo:
+            return None
+        try:
+            with open(self.CHIP_STATUS) as f:
+                raw = json.load(f)
+            if raw.get("applies") is True and raw.get("state") in self.CHIP_STATES:
+                return {"state": raw["state"], "message": str(raw.get("message", ""))[:300], "name": str(raw.get("name", ""))[:80],
+                        "manual": bool(raw.get("manual")), "time": int(raw.get("time") or 0)}
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return None
 
     def request(self):
         st = self.status()
@@ -3500,12 +3521,19 @@ class BtDriver:
             raise ValueError("Der Helfer ist nicht installiert (Software-Update einspielen oder install.sh erneut ausführen)")
         if st.get("state") == "working" and time.time() - st.get("time", 0) < 1800:
             raise ValueError("Der Treiber wird gerade eingerichtet")
+        chip = st.get("chip") or {}
+        if chip.get("state") == "working" and time.time() - chip.get("time", 0) < 600:
+            raise ValueError("Der Bluetooth-Chip auf dem Board wird gerade eingerichtet")
         if self.demo:
             self.fake = {"state": "working", "manual": True, "step": 2, "steps": 5, "step_text": "Treiber wird gebaut", "message": "Treiber für TP-Link UB500 wird gebaut und eingerichtet (einige Minuten) …"}
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write("install\n")
+        if os.path.exists(self.CHIP_UNIT):                                  # der Chip-Helfer prüft selbst, ob dieses Gerät die ROCK 5B Plus ist
+            fd = os.open(self.chip_req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write("install\n")
 
 
 class LogBundle:
