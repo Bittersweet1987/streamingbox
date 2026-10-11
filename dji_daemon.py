@@ -477,6 +477,7 @@ class Camera:
         self.link_ended = 0.0         # wann zuletzt eine Bluetooth-Verbindung zu dieser Kamera endete (danach nimmt sie etwa eine Minute lang keine neue an)
         self._reusing = False         # diese Sitzung nutzt eine Verbindung weiter, die BlueZ schon hält
         self.reuse_failed = False     # das Weiterverwenden hat nicht geklappt: der nächste Versuch räumt auf und verbindet neu
+        self._resume_sig = None       # Einstellungen des zuletzt gestarteten Streams; geht nur Bluetooth verloren, läuft er ungestört weiter (siehe _connect_and_stream)
         self.leaving = False          # der Dienst wird beendet: Sitzung ohne Stopp des Streams verlassen, Verbindung ordentlich trennen
 
     def locked(self):
@@ -735,48 +736,68 @@ class Camera:
                 await self._status_only_loop(client, disconnected)
                 return
 
-            # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
-            self.set_state("preparing", "Stream wird vorbereitet")
-            await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
-            await wait_for(ID_STOP)
-            await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
-            await wait_for(ID_PREPARE)
-            if self.stop_requested:
-                return
+            async def setup_stream():
+                nonlocal ssid, password, rtmp_url
+                # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
+                self.set_state("preparing", "Stream wird vorbereitet")
+                await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
+                await wait_for(ID_STOP)
+                await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
+                await wait_for(ID_PREPARE)
+                if self.stop_requested:
+                    return False
 
-            if not cfg.get("status_only"):
-                # Netz, Passwort und Adresse jetzt noch einmal lesen: während des Suchens und Verbindens darf man sie ändern (siehe locked)
-                ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
-            self.set_state("wifi", ssid)
-            await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
-            resp = await wait_for(ID_WIFI, 30)
-            if resp.payload != bytes([0, 0]):
-                raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
-            if self.typed_network and ssid:
-                self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
-            if self.stop_requested:
-                return
+                if not cfg.get("status_only"):
+                    # Netz, Passwort und Adresse jetzt noch einmal lesen: während des Suchens und Verbindens darf man sie ändern (siehe locked)
+                    ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
+                self.set_state("wifi", ssid)
+                await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
+                resp = await wait_for(ID_WIFI, 30)
+                if resp.payload != bytes([0, 0]):
+                    raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
+                if self.typed_network and ssid:
+                    self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
+                if self.stop_requested:
+                    return False
 
-            # 3. Bildstabilisierung bei den Modellen, die sie brauchen
-            if model_kind in CONFIGURE_KINDS:
-                self.set_state("configuring", "Bildstabilisierung wird eingestellt")
-                await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
-                                   build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
-                await wait_for(ID_CONFIGURE)
-            if self.stop_requested:
-                return
+                # 3. Bildstabilisierung bei den Modellen, die sie brauchen
+                if model_kind in CONFIGURE_KINDS:
+                    self.set_state("configuring", "Bildstabilisierung wird eingestellt")
+                    await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
+                                       build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
+                    await wait_for(ID_CONFIGURE)
+                if self.stop_requested:
+                    return False
 
-            # 4. den RTMP-Stream starten
-            self.set_state("starting", "Stream wird gestartet")
-            payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
-                                          int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
-            await send(Message(T_START, ID_START, TY_START, payload))
-            if model_kind in NEW_PROTOCOL:
-                await send(Message(T_STOP, ID_STOP, TY_STOP, CONFIRM_PAYLOAD))
-            await wait_for(ID_START, 30)
-            self.set_state("streaming", rtmp_url)
-            self.fail_count = 0
-            self.reuse_failed = False
+                # 4. den RTMP-Stream starten
+                self.set_state("starting", "Stream wird gestartet")
+                payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
+                                              int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
+                await send(Message(T_START, ID_START, TY_START, payload))
+                if model_kind in NEW_PROTOCOL:
+                    await send(Message(T_STOP, ID_STOP, TY_STOP, CONFIRM_PAYLOAD))
+                await wait_for(ID_START, 30)
+                self.set_state("streaming", rtmp_url)
+                self.fail_count = 0
+                self.reuse_failed = False
+                return True
+
+            sig = (model_kind, rtmp_url, ssid, cfg.get("resolution", "1080p"), int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)), cfg.get("stabilization", "off"))
+            # Ging eine laufende Sitzung nur durch einen Bluetooth-Verlust zu Ende, kommt der Stream der Kamera meist weiter an. Ihn mit "Stopp, Vorbereiten, Start"
+            # neu aufzubauen, unterbräche ihn grundlos (gemessen: 6 s Ausfall). Darum: kommt er an und sind die Einstellungen gleich geblieben, bleibt er unberührt.
+            resume = False
+            if self._resume_sig == sig:
+                resume = (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is True
+            if resume:
+                log.info("%s: Der Stream der Kamera läuft noch: Einrichtung übersprungen, nur die Verbindung wird wieder aufgenommen", self.addr)
+                self.set_state("streaming", rtmp_url)
+                self.fail_count = 0
+                self.reuse_failed = False
+            else:
+                self._resume_sig = None
+                if not await setup_stream():
+                    return
+                self._resume_sig = sig
 
             # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen. Geht nur die
             #    Bluetooth-Verbindung verloren, während der Stream noch ankommt, läuft er unverändert weiter (die frühere Version
@@ -805,8 +826,11 @@ class Camera:
                     last_check = now
                     publishing = await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)
                     if publishing is None and bt_lost:
-                        raise CameraError("Die Bluetooth-Verbindung ging verloren")     # ohne Statistik nicht zu beurteilen
-                    if publishing is None or publishing:
+                        # Ohne Statistik nicht zu beurteilen. Eine einzelne nicht lesbare Abfrage (kurze Last auf der Box, zum Beispiel durch apt-get update) darf einen gesunden
+                        # Stream nicht abbrechen: erst wenn sie so lange fehlt wie ein ausgebliebener Stream, endet die Sitzung (gemessen: sonst 6 s Ausfall).
+                        if now - last_ok > self.STREAM_LOST_SECONDS:
+                            raise CameraError("Die Bluetooth-Verbindung ging verloren")
+                    elif publishing is None or publishing:
                         last_ok = now
                         if bt_lost:
                             if time.time() - self.last_rx < 20:
@@ -815,8 +839,8 @@ class Camera:
                                 self.set_state("streaming", "Der Stream läuft, die Bluetooth-Verbindung ist getrennt")
                     elif now - last_ok > self.STREAM_LOST_SECONDS:
                         raise CameraError("Der Stream ist ausgefallen (Kamera außer Reichweite des WLANs?)")
-                if not bt_lost and now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
-                    raise CameraError("Die Bluetooth-Verbindung ging verloren")
+                if not bt_lost and now - self.last_rx > 180 and (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is False:
+                    raise CameraError("Die Bluetooth-Verbindung ging verloren")             # nur bei einem wirklich ausbleibenden Stream; "nicht lesbar" (None) zählt nicht
 
             if self.stop_requested and client.is_connected and not bt_lost and not self.leaving:
                 self.set_state("stopping", "Stream wird beendet")
@@ -851,8 +875,10 @@ class Camera:
             try:
                 await self.session()
                 self.fail_count = 0
+                self._resume_sig = None
                 self.set_state("idle", "Getrennt")
             except asyncio.CancelledError:
+                self._resume_sig = None
                 self.set_state("idle")
                 raise
             except CameraError as e:
@@ -931,6 +957,7 @@ class Camera:
 
     async def stop_session(self):
         self.stop_requested = True
+        self._resume_sig = None                  # "Trennen" und "Neu verbinden" richten die Kamera immer von vorn ein
         self.wake.set()
         if self.running():
             try:
