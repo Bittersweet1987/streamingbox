@@ -2,6 +2,15 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.4
+- **Bluetooth auf der ROCK 5B Plus: der Chip auf dem Board läuft jetzt von selbst (Ursachenforschung vom 11. Oktober 2026).** Der Bluetooth-Teil des WLAN-Moduls (Realtek RTL8852BE, USB `13d3:3572`) hing am allgemeinen Kerneltreiber `btusb`, der für diesen Chip keine Firmware lädt. Der Adapter stand auf „bereit“, empfing aber nichts (Suche: 0 Geräte, dazu die Meldung „Antennen am Funkmodul prüfen“). Die Antenne war nicht die Ursache.
+  - Neuer Helfer `install/pipbox-btchip.py` (root, eigener Dienst mit strenger Sandbox): legt die zwei Firmware-Verknüpfungen an (`rtl8852bu_fw` und `rtl8852bu_config` auf die Dateien in `rtl_bt/`) und hängt den Chip auf den Realtek-Herstellertreiber `rtk_btusb` um, der im BELABOX-Kernel schon vorhanden ist. Das geschieht beim Start, beim Erkennen des Chips (udev) und per Knopf „Treiber jetzt einrichten“. Danach findet die Suche Kameras und andere Geräte (auf der Testbox 38 bis 43 Geräte in 15 bis 20 Sekunden, davor 0; die Suche der Software erkannte drei DJI-Kameras).
+  - **Nur auf dem Board „Radxa ROCK 5B Plus“**, nur mit genau diesem USB-Chip und einem 5.10-Kernel. Auf jedem anderen Gerät (zum Beispiel dem Orange Pi 5 Plus) endet der Helfer sofort, ohne etwas zu ändern oder zu melden.
+  - Sicherheitsnetz: Während einer Übertragung wird nichts umgehängt. Scheitert es (kein Adapter nach dem Umhängen, Firmware-Fehler), geht der Chip zurück an `btusb`, und es wird für diesen Kernelbau nicht noch einmal versucht (außer per Knopf).
+  - Oberfläche: Der Knopf „Treiber jetzt einrichten“ meldet auf diesem Board den Zustand des Chips („eingerichtet, ein Stick ist nicht nötig“) statt „Es steckt kein Bluetooth-Stick, der diesen Treiber braucht“. Auf allen anderen Geräten bleibt die Anzeige unverändert.
+  - Das getrennte Paket [belabox-rtl8852be](https://github.com/IRL4YOU/belabox-rtl8852be) (neuer WLAN-Treiber und derselbe Bluetooth-Fix) kann daneben installiert sein; beide sind wiederholbar und ändern nichts, was schon läuft.
+  - Tests: `tools/test_btchip.py` (23 Tests mit nachgebautem `/sys`, darunter „anderes Board tut nichts“), 5 neue in `tools/test_ui_backend.py`, `test_i18n` (nur Deutsch und Englisch, die übrigen Sprachen später).
+
 ## 1.0.3
 - **DJI-Kameras: ein laufender Stream wird nicht mehr grundlos unterbrochen (Ursachenforschung vom 11. Oktober 2026).** Eine Kamera wurde zwar per Bluetooth getrennt, ihr Bild lief aber ungestört über das WLAN weiter. Eine einzige nicht lesbare Abfrage der RTMP-Statistik (kurze Last auf der Box, zum Beispiel durch das stündliche `apt-get update` von BELABOX) genügte, damit der Dienst die Sitzung beendete, sich vier Minuten lang neu verband und danach die Kamera mit „Stopp, Vorbereiten, Start“ neu einrichtete: **6 Sekunden Ausfall** und ein kurzer Sprung des Hauptbilds auf HDMI.
   - Eine nicht lesbare Statistik beendet die Sitzung erst, wenn sie so lange fehlt wie ein ausbleibender Stream (30 Sekunden), und zählt bei bestehender Bluetooth-Verbindung gar nicht mehr als Verlust.
