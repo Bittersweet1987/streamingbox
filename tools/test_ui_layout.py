@@ -321,6 +321,22 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('LIMITS = {"temp_warn": 70.0, "temp_crit": 80.0', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())     # gleiche Grenzen wie die Meldung
         self.assertIn("#livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}", PAGE)        # am Handy bleibt alles wie vorher
 
+    def test_live_row_has_a_small_gap_between_graph_and_megabit(self):
+        """Zwischen dem Verlauf und der Megabit-Zahl standen 42 Pixel (14 Rand rechts, 16 Rand links, 12 Zeilenabstand): zu viel (Wunsch des Nutzers). Jetzt rund 14."""
+        self.assertIn("#livebox .row .sig{margin:0 0 0 16px}", PAGE)
+        self.assertIn(".liveup{margin-left:2px;font-size:22px;", PAGE)
+        self.assertNotIn("#livebox .row .sig{margin:0 14px 0 16px}", PAGE)
+        self.assertNotIn(".liveup{margin-left:16px;", PAGE)
+
+    def test_removed_dji_camera_disappears_from_the_list_at_once(self):
+        """Eine entfernte Kamera blieb in der Liste stehen, bis man die Seite neu lud: djiRender baut die Liste nicht neu auf, solange der Fokus in ihr steht, und der Knopf "Entfernen" hatte ihn (Nutzermeldung)."""
+        self.assertIn("if(sig!==djiStruct&&!box.contains(document.activeElement)){", PAGE)                 # der Schutz fürs Tippen bleibt
+        i = PAGE.index('if(cl.contains("d-remove")){')
+        handler = PAGE[i:PAGE.index('else if(cl.contains("d-saveddel"))', i)]
+        self.assertIn('document.activeElement.blur()', handler)                                           # Fokus lösen
+        self.assertIn('djiStruct=""; tick(); djiLoad();', handler)                                        # und sofort neu laden
+        self.assertLess(handler.index("blur()"), handler.index('djiStruct=""'))                           # erst Fokus lösen, dann neu aufbauen lassen
+
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
         self.assertIn('<a id="r_httpslink" class="btnlink" href="https://login.tailscale.com/admin/dns" target="_blank" rel="noopener noreferrer">Tailscale-Einstellungen öffnen</a>', PAGE)
