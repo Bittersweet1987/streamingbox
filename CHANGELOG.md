@@ -2,6 +2,13 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.8
+- **WLAN-Profile folgen jetzt der Karte, nicht ihrem Namen (Ursache einer nicht mehr funktionierenden DJI Action 4, 11. Oktober 2026).** Die Namen `wlan0`, `wlan1` vergibt der Kernel in der Reihenfolge, in der die Karten beim Start erscheinen. Steckt ein WLAN-Stick, kann der Stick `wlan0` bekommen und die eingebaute Karte `wlan1`. Ein an den Namen gebundenes gespeichertes Netz landete dann auf der falschen Karte: Auf einer ROCK 5B Plus ging die eingebaute Karte nach dem Neustart ins Handy-Netz statt ins Kameranetz, und die Action 4 bekam dessen Adresse als Ziel („Der Stream ist ausgefallen“). Kameras waren schon an die Hardware-Adresse gebunden, die Profile nicht.
+  - Profile, die diese Software anlegt oder auswählt (WLAN verbinden, gespeichertes Netz auf einer Karte wählen), werden an die **Hardware-Adresse** der Karte gebunden (`802-11-wireless.mac-address`, die Bindung an den Namen entfällt). Fehlt die Adresse, bleibt es beim Namen wie bisher.
+  - **Einmal beim Update** (`pipbox-wifi.py migrate`, aus `install.sh`) werden vorhandene, an einen Namen gebundene Profile an die Karte gebunden, die den Namen gerade trägt. Unberührt bleiben Profile mit Hardware-Adresse oder für alle Karten, die Hotspot-Profile dieser Box, das Kameranetz und Namen, die es gerade nicht gibt. Der Lauf ist wiederholbar. Hinweis: Steht die Zuordnung zum Zeitpunkt des Updates schon vertauscht, wird die vertauschte Zuordnung festgehalten; ein Netz auf der gewünschten Karte neu auswählen (Karte „Verbindungen“) bindet es an diese.
+  - Die Namen selbst bleiben unverändert (kein Eingriff in die Original-Oberfläche der BELABOX); der Hotspot und seine Einstellungen sind weiter pro Kartenname.
+  - Tests: `tools/test_ui_backend.py` (neues Profil wird an die Adresse gebunden, Rückfall auf den Namen, Umstellung nur der richtigen Profile, wiederholbar, `hwaddr`, Aufruf aus `install.sh`), `test_i18n` (Deutsch und Englisch).
+
 ## 1.0.7
 - **Live-Karte am Rechner: Platz gespart und die Temperatur der Box steht jetzt dabei (Wunsch des Nutzers).** Auf der breiten Ansicht stand links „LIVE“, der Verlauf und die Megabit-Zahl, rechts daneben war die Karte leer, und „Server: …“ stand eine Zeile tiefer. Jetzt stehen Server und Temperatur **rechts außen in derselben Zeile**: „LIVE · Verlauf · 13,2 Mbit/s ↑ … Server: Heim · 44 °C“. Die Karte ist eine Zeile niedriger.
   - Die Temperatur ist die des Prozessors der Box (wie in der Karte „Status“), auch ohne Sendung zu sehen. Farbe wie bei den Meldungen: ab 70 °C orange, ab 80 °C rot; ohne Messwert bleibt sie weg.
