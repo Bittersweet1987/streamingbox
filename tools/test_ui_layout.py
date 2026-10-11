@@ -308,6 +308,19 @@ class ImportProgress(unittest.TestCase):
         self.assertEqual(PAGE.count("Vorschau von außen: klein, damit der Upload für die Sendung bleibt."), 1)
         self.assertNotIn('msg.textContent=st.origin==="extern"?', PAGE)                         # nicht mehr dauerhaft gesetzt
 
+    def test_live_row_carries_server_and_box_temperature_on_the_right(self):
+        """Desktop: Rechts neben LIVE, Graph und Megabit war die Karte leer, der Server stand eine Zeile tiefer und die Temperatur fehlte (Wunsch des Nutzers)."""
+        i = PAGE.index('<div class="row liverow"')
+        row = PAGE[i:PAGE.index("</div>", i)]
+        for part in ('id="livestate"', 'id="liveup"', 'id="liveserver" class="muted livesrv"', 'id="livetemp"'):
+            self.assertIn(part, row)
+        self.assertEqual(PAGE.count('id="liveserver"'), 1)                                       # nicht mehr zusätzlich eine Zeile tiefer
+        self.assertIn("#livebox .liverow .livesrv{margin:0 0 0 auto}", PAGE)                      # rechts außen
+        self.assertIn('lt.textContent=`${fmt(tc,0)} °C`; lt.style.color=tc>=80?"var(--crit)":(tc>=70?"var(--warn)":"");', PAGE)
+        self.assertIn('lt.hidden=tc==null;', PAGE)
+        self.assertIn('LIMITS = {"temp_warn": 70.0, "temp_crit": 80.0', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())     # gleiche Grenzen wie die Meldung
+        self.assertIn("#livecard #livebox>.row,#livecard #swapbar,#livecard #liveserver,#livecard #livehealth{display:none}", PAGE)        # am Handy bleibt alles wie vorher
+
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
         self.assertIn('<a id="r_httpslink" class="btnlink" href="https://login.tailscale.com/admin/dns" target="_blank" rel="noopener noreferrer">Tailscale-Einstellungen öffnen</a>', PAGE)
