@@ -33,6 +33,8 @@ ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_
 EXPORT_FILE = f"{STATE}/wifi-export.json"
 MARK_RE = re.compile(r"^[0-9a-f]{16}$")
 HS_PREFIX = "pipbox-hotspot-"
+SYS_NET = "/sys/class/net"
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 HOTSPOT_FILE = f"{STATE}/hotspot.json"
 HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}       # erlaubte Kanäle (0 = automatisch); 5 GHz nur ohne Radarpflicht (DFS)
 
@@ -88,6 +90,55 @@ def wifi_devices():
 def connection_names():
     r = nm("-t", "-f", "NAME,TYPE", "con", "show")
     return [p for p in (split_terse(l) for l in r.stdout.splitlines()) if len(p) >= 2 and p[1] == "802-11-wireless"]
+
+
+def hwaddr(iface):
+    """Hardware-Adresse einer Karte (aus /sys), klein geschrieben, oder "" wenn es sie nicht gibt."""
+    try:
+        with open(f"{SYS_NET}/{iface}/address") as f:
+            mac = f.read().strip().lower()
+    except (OSError, ValueError):
+        return ""
+    return mac if MAC_RE.match(mac) and mac != "00:00:00:00:00:00" else ""
+
+
+def bind_to_card(name, iface):
+    """Ein Profil an die Karte binden, und zwar über ihre Hardware-Adresse statt über den Namen (wlan0, wlan1 ...). Die Namen vergibt der Kernel in der Reihenfolge, in der
+    die Geräte beim Start erscheinen, und sie wechseln, sobald ein Stick steckt oder fehlt: Ein an den Namen gebundenes Profil landete dann auf der falschen Karte (die
+    eingebaute Karte im Handy-Hotspot statt im Kameranetz, 11. Oktober 2026). Gibt True zurück, wenn die Adresse eingetragen wurde (sonst bleibt es beim Namen)."""
+    mac = hwaddr(iface)
+    if mac:
+        r = nm("con", "modify", "id", name, "connection.interface-name", "", "802-11-wireless.mac-address", mac)
+        if r.returncode == 0:
+            return True
+    nm("con", "modify", "id", name, "connection.interface-name", iface)
+    return False
+
+
+def do_migrate():
+    """Beim Update einmal: Profile, die an einen Kartennamen gebunden sind, werden an die Karte gebunden, die den Namen gerade trägt. Unberührt bleiben Profile mit
+    Hardware-Adresse oder für alle Karten, die Hotspot-Profile dieser Box, das Kameranetz und Namen, die es gerade nicht gibt."""
+    bound, skipped = [], 0
+    for name in saved_wifi():
+        r = nm("-g", "connection.type,connection.interface-name,802-11-wireless.mac-address", "con", "show", "id", name, timeout=15)
+        v = [x.strip() for x in r.stdout.splitlines()] + ["", "", ""]
+        ctype, ifn, mac = v[0], v[1], v[2]
+        if r.returncode != 0 or ctype != "802-11-wireless" or not ifn or ifn == "*" or mac:
+            continue
+        try:
+            check_not_camera_profile(name)
+        except ValueError:
+            continue
+        if ifn == camera_iface() or not hwaddr(ifn):
+            skipped += 1
+            continue
+        if bind_to_card(name, ifn):
+            bound.append(f"{name} ({ifn})")
+        else:
+            skipped += 1
+    print(f"pipbox-wifi: {len(bound)} Profile an die Hardware-Adresse der Karte gebunden" + (": " + ", ".join(bound) if bound else "") +
+          (f"; {skipped} unverändert (Karte nicht da oder Kameranetz)" if skipped else ""))
+    return 0
 
 
 def saved_wifi():
@@ -309,7 +360,7 @@ def do_scan(iface):
 def connect_saved(iface, ssid):
     """Ein gespeichertes Netz ohne neue Passworteingabe mit seinem gespeicherten Passwort auf der gewählten Karte einschalten. Früher wurde das
     Profil hier gelöscht und ohne Passwort neu versucht: das schlug mit "Password" fehl, und das gespeicherte Netz war danach weg."""
-    nm("con", "modify", "id", ssid, "connection.interface-name", iface)      # das Profil gilt auch für eine andere Karte, wenn man es dort wählt
+    bind_to_card(ssid, iface)                                                 # das Profil gilt auch für eine andere Karte, wenn man es dort wählt (an ihre Hardware-Adresse gebunden)
     r = nm("con", "up", "id", ssid, "ifname", iface, timeout=60)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout).strip()[:160] or "unbekannter Fehler"
@@ -337,6 +388,7 @@ def do_connect(req):
     if r.returncode != 0:
         msg = (r.stderr or r.stdout).strip().replace(pw, "***") if pw else (r.stderr or r.stdout).strip()
         raise RuntimeError("Verbinden fehlgeschlagen: " + (msg[:160] or "unbekannter Fehler"))
+    bind_to_card(ssid, iface)                                                 # das neue Profil folgt der Karte, nicht ihrem Namen
     nm("con", "modify", "id", ssid, "connection.autoconnect", "yes", "ipv4.route-metric", "600")
     return f"Mit „{ssid}“ verbunden"
 
@@ -662,6 +714,8 @@ def read_req(path, limit=4096):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "migrate":              # nur von install.sh beim Update (als root), keine Eingaben von außen
+        return do_migrate()
     try:
         req = json.loads(read_req(REQ, 65536))
     except (OSError, ValueError):

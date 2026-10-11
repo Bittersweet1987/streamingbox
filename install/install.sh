@@ -253,6 +253,7 @@ PY
     systemctl try-restart pipbox-preview.service 2>/dev/null || true       # neuer Programmstand (der Dienst endet sonst nach einer Minute ohne Zuschauer von selbst)
     systemctl restart pipbox.service
     systemctl start --no-block pipbox-btdriver.service pipbox-wlandriver.service pipbox-btchip.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
+    [ -x /opt/pipbox/pipbox-wifi.py ] && python3 /opt/pipbox/pipbox-wifi.py migrate || true                 # WLAN-Profile einmal an die Hardware-Adresse der Karte binden (die Namen wlan0, wlan1 wechseln, sobald ein Stick steckt oder fehlt)
     ts_snapshot "nach der Installation"
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
