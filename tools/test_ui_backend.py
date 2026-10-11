@@ -513,6 +513,57 @@ class BtDriverButton(unittest.TestCase):
             json.dump({"state": "boese", "step": "x"}, f)
         self.assertEqual(bd.status()["state"], "")
 
+    def chip(self, bd, d, status=None, unit=True):
+        """Stand des Chip-Helfers der ROCK 5B Plus nachstellen."""
+        bd.CHIP_STATUS = os.path.join(d, "chip-status.json")
+        bd.CHIP_UNIT = os.path.join(d, "chip-unit") if unit else os.path.join(d, "chip-fehlt")
+        open(os.path.join(d, "chip-unit"), "w").close()
+        if status is not None:
+            with open(bd.CHIP_STATUS, "w") as f:
+                json.dump(status, f)
+
+    def test_chip_status_is_passed_with_known_fields_only(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "ok", "message": "eingerichtet", "name": "Realtek", "manual": True, "time": 7, "geheim": "x"})
+        chip = bd.status()["chip"]
+        self.assertEqual((chip["state"], chip["message"], chip["manual"], chip["time"]), ("ok", "eingerichtet", True, 7))
+        self.assertNotIn("geheim", chip)
+
+    def test_no_chip_entry_on_other_devices_or_without_a_valid_status(self):
+        for raw in (None, {"state": "ok", "message": "m"}, {"applies": False, "state": "ok"}, {"applies": True, "state": "boese"}):
+            bd, d = self.make({"state": "none"})
+            self.chip(bd, d, raw)
+            self.assertNotIn("chip", bd.status(), raw)
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d)
+        with open(bd.CHIP_STATUS, "w") as f:
+            f.write("{kaputt")
+        self.assertNotIn("chip", bd.status())
+
+    def test_button_also_asks_the_chip_helper_when_it_is_installed(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "ok"})
+        bd.request()
+        self.assertEqual(open(os.path.join(d, "btchip-request")).read(), "install\n")
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, "btchip-request")).st_mode), 0o600)
+        self.assertEqual(open(os.path.join(d, "btdriver-request")).read(), "install\n")
+
+    def test_button_writes_no_chip_request_without_the_chip_helper(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, None, unit=False)
+        bd.request()
+        self.assertFalse(os.path.exists(os.path.join(d, "btchip-request")))
+        self.assertTrue(os.path.exists(os.path.join(d, "btdriver-request")))
+
+    def test_button_is_refused_while_the_chip_is_being_set_up(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "working", "time": int(time.time())})
+        with self.assertRaises(ValueError):
+            bd.request()
+        self.assertFalse(os.path.exists(os.path.join(d, "btchip-request")))
+        self.chip(bd, d, {"applies": True, "state": "working", "time": int(time.time()) - 3600})    # hängengebliebener Stand
+        bd.request()
+
     def test_demo_runs(self):
         bd = server.BtDriver(tempfile.mkdtemp(), demo=True)
         bd.request()
