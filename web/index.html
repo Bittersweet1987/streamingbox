@@ -476,7 +476,7 @@ details.locked>summary{cursor:not-allowed;opacity:.6}body.sm .sens{display:none!
 .pending{margin-top:10px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:13px}.pending button{margin-left:8px;padding:4px 10px}
 dialog#rdlg{background:var(--card);color:var(--text);border:1px solid var(--warn);border-radius:12px;max-width:min(420px,90vw);padding:18px}dialog#rdlg::backdrop{background:rgba(0,0,0,.6)}
 #livecard #liveerr,#livecard #livewhy{min-height:0;margin-top:8px}#livecard #liveerr:empty,#livecard #livewhy:empty{display:none}
-.livesrv{font-size:12px;margin-top:3px}.liveup{margin-left:16px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.liveup small{font-size:13px;font-weight:400;color:var(--muted)}
+.livesrv{font-size:12px;margin-top:3px}#livebox .liverow{flex-wrap:wrap}#livebox .liverow .livesrv{margin:0 0 0 auto}.livetemp{margin-left:16px;font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}.liveup{margin-left:16px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.liveup small{font-size:13px;font-weight:400;color:var(--muted)}
 .logopt{display:block;margin:10px 0;line-height:1.4}.logopt input{margin-right:6px}
 .autolbl{margin-top:10px;font-size:13px;color:var(--muted)}.autolbl input{margin-right:6px}
 [data-pbhide]{display:none!important}
@@ -627,7 +627,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
 <main>
     <section class="card wide" id="livecard" aria-label="Live">
     <div id="livebox">
-      <div class="row" style="justify-content:flex-start"><span class="big" id="livestate">–</span><span id="liveup" class="liveup" hidden title="Gesamter Upload über die gewählten Netze"></span></div>
+      <div class="row liverow" style="justify-content:flex-start"><span class="big" id="livestate">–</span><span id="liveup" class="liveup" hidden title="Gesamter Upload über die gewählten Netze"></span><span id="liveserver" class="muted livesrv"></span><span id="livetemp" class="livetemp" hidden title="Temperatur der Box (Prozessor)"></span></div>
       <div id="swapbar" hidden><div class="sech" style="margin:12px 0 6px">Hauptbild</div><div class="seg" id="swapbtns" role="group" aria-label="Hauptbild wählen"></div></div>
       <div id="livewhy" class="ph"></div>
       <div id="livehint" class="pending" hidden><span>Live geht erst, wenn der Bildaufbau fertig ist: Hauptkamera wählen und „Bildaufbau speichern“.</span><button type="button" id="live_topipe" class="warnbtn">Zum Bildaufbau</button></div>
@@ -635,7 +635,6 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
       <div id="livepending" class="pending" hidden><span id="livepending_t"></span> <button type="button" id="live_restart" class="warnbtn">Stream neu starten</button><button type="button" id="live_ignore" class="sec">Später</button></div>
       <div id="liveerr" class="err"></div>
       <div id="livehealth" class="livehealth"></div>
-      <div id="liveserver" class="muted livesrv"></div>
     </div>
   </section>
 
@@ -3077,6 +3076,8 @@ async function tick(){
     paintSig(m);
     $("cpu").textContent=fmt(m.cpu.avg,0); if($("cpumax")) $("cpumax").textContent=m.cpu.max==null?"":`höchster Kern ${fmt(m.cpu.max,0)} %`; $("cpubar").style.width=(m.cpu.avg||0)+"%";
     $("temp").textContent=fmt(m.temp_c,0);
+    { const lt=$("livetemp"), tc=m.temp_c; lt.hidden=tc==null;                              // Temperatur der Box rechts in der Live-Zeile (Grenzen wie in der Meldung: ab 70 orange, ab 80 rot)
+      if(tc!=null){ lt.textContent=`${fmt(tc,0)} °C`; lt.style.color=tc>=80?"var(--crit)":(tc>=70?"var(--warn)":""); } }
     $("fanline").hidden=m.fan_pct==null; if(m.fan_pct!=null) $("fan").textContent=fmt(m.fan_pct,0);
     $("mem").textContent=fmt(m.mem.used_pct,0); $("membar").style.width=(m.mem.used_pct||0)+"%";
     $("memfree").textContent=(m.mem.avail_mb/1024).toFixed(1)+" GiB";
