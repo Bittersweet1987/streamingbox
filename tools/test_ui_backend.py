@@ -259,7 +259,8 @@ class HelperChecks(unittest.TestCase):
             return mock.Mock(returncode=fail, stdout="", stderr=err if fail else "")
         with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: saved), \
                 mock.patch.object(self.h, "check_iface", lambda i: None), mock.patch.object(self.h, "check_not_camera_profile", lambda s: None), \
-                mock.patch.object(self.h, "hotspot_active", lambda i: False):
+                mock.patch.object(self.h, "hotspot_active", lambda i: False), \
+                mock.patch.object(self.h, "hwaddr", lambda i: {"wlan1": "aa:bb:cc:dd:ee:01", "wlan0": "aa:bb:cc:dd:ee:00"}.get(i, "")):
             try:
                 return calls, self.h.do_connect(req), None
             except RuntimeError as e:
@@ -272,10 +273,80 @@ class HelperChecks(unittest.TestCase):
         self.assertIn("gespeichert", msg)
         names = [c[0] for c in calls]
         self.assertNotIn(("con", "delete", "id", "Bittersweet_EXT"), names)                      # nichts gelöscht
-        self.assertIn(("con", "modify", "id", "Bittersweet_EXT", "connection.interface-name", "wlan1"), names)
+        self.assertIn(("con", "modify", "id", "Bittersweet_EXT", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:bb:cc:dd:ee:01"), names)   # an die Karte (Hardware-Adresse) gebunden, nicht an den Namen
         self.assertIn(("con", "up", "id", "Bittersweet_EXT", "ifname", "wlan1"), names)
         self.assertFalse(any(a[0] == "--ask" for a in names))                                    # kein Versuch ohne Passwort
         self.assertTrue(all(c[1] is None for c in calls))                                         # nichts über stdin
+
+    def test_a_new_profile_is_bound_to_the_card_by_hardware_address(self):
+        """11. Oktober 2026: Die Namen wlan0/wlan1 wechseln mit einem Stick; ein an den Namen gebundenes Profil landete auf der falschen Karte. Neue Profile folgen jetzt der Karte."""
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Neu", "password": "abcdefgh"}, ["Heim"])
+        self.assertIsNone(err)
+        names = [c[0] for c in calls]
+        i_connect = next(i for i, n in enumerate(names) if n[:3] == ("--ask", "dev", "wifi"))
+        i_bind = names.index(("con", "modify", "id", "Neu", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:bb:cc:dd:ee:01"))
+        self.assertGreater(i_bind, i_connect)
+
+    def test_without_a_known_hardware_address_the_name_binding_stays(self):
+        calls, msg, err = self.connect({"iface": "wlan7", "ssid": "Heim", "password": ""}, ["Heim"])
+        self.assertIsNone(err)
+        self.assertIn(("con", "modify", "id", "Heim", "connection.interface-name", "wlan7"), [c[0] for c in calls])
+
+    def migrate(self, profiles, cards, camera="", camera_profiles=()):
+        """do_migrate mit nachgebautem nmcli: profiles = {Name: (Art, Schnittstelle, MAC)}, cards = {Schnittstelle: MAC}."""
+        calls = []
+
+        def nm(*args, stdin=None, timeout=60):
+            calls.append(args)
+            if args[:2] == ("-g", "connection.type,connection.interface-name,802-11-wireless.mac-address"):
+                return mock.Mock(returncode=0, stdout="\n".join(profiles[args[-1]]) + "\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def not_camera(n):
+            if n in camera_profiles:
+                raise ValueError("Kameranetz")
+        with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: sorted(profiles)), \
+                mock.patch.object(self.h, "hwaddr", lambda i: cards.get(i, "")), mock.patch.object(self.h, "camera_iface", lambda: camera), \
+                mock.patch.object(self.h, "check_not_camera_profile", not_camera), mock.patch("builtins.print"):
+            self.h.do_migrate()
+        return [c for c in calls if c[:2] == ("con", "modify")]
+
+    def test_migration_binds_name_bound_profiles_to_the_card_that_holds_the_name(self):
+        mods = self.migrate({"GL": ("802-11-wireless", "wlan0", ""), "S23": ("802-11-wireless", "wlan1", "")}, {"wlan0": "aa:00", "wlan1": "aa:01"})
+        self.assertEqual(sorted(m[3] for m in mods), ["GL", "S23"])
+        self.assertIn(("con", "modify", "id", "GL", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:00"), mods)
+        self.assertIn(("con", "modify", "id", "S23", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:01"), mods)
+
+    def test_migration_leaves_everything_else_alone(self):
+        profiles = {"schon": ("802-11-wireless", "wlan0", "AA:00"),            # hat schon eine Hardware-Adresse
+                    "alle": ("802-11-wireless", "*", ""),                      # für alle Karten
+                    "ohne": ("802-11-wireless", "", ""),                       # ohne Bindung
+                    "fehlt": ("802-11-wireless", "wlan9", ""),                 # die Karte gibt es gerade nicht
+                    "kabel": ("802-3-ethernet", "eth0", ""),                   # kein WLAN
+                    "kamera": ("802-11-wireless", "wlan0", ""),                # Kameranetz
+                    "camnet": ("802-11-wireless", "wlan2", "")}                # Karte des Kameranetzes
+        mods = self.migrate(profiles, {"wlan0": "aa:00", "wlan2": "aa:02"}, camera="wlan2", camera_profiles=("kamera",))
+        self.assertEqual(mods, [])
+
+    def test_migration_can_run_twice(self):
+        profiles = {"GL": ("802-11-wireless", "wlan0", "")}
+        self.assertEqual(len(self.migrate(profiles, {"wlan0": "aa:00"})), 1)
+        profiles["GL"] = ("802-11-wireless", "", "aa:00")                      # so sieht das Profil nach dem ersten Lauf aus
+        self.assertEqual(self.migrate(profiles, {"wlan0": "aa:00"}), [])
+
+    def test_hwaddr_reads_sys_and_rejects_junk(self):
+        d = tempfile.mkdtemp()
+        for name, text in (("wlan0", "F0:68:E3:BE:06:D4\n"), ("wlan1", "00:00:00:00:00:00\n"), ("wlan2", "kaputt\n")):
+            os.makedirs(os.path.join(d, name))
+            with open(os.path.join(d, name, "address"), "w") as f:
+                f.write(text)
+        with mock.patch.object(self.h, "SYS_NET", d):
+            self.assertEqual(self.h.hwaddr("wlan0"), "f0:68:e3:be:06:d4")
+            self.assertEqual((self.h.hwaddr("wlan1"), self.h.hwaddr("wlan2"), self.h.hwaddr("gibtsnicht")), ("", "", ""))
+
+    def test_install_script_runs_the_migration_once_per_update(self):
+        inst = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        self.assertIn("python3 /opt/pipbox/pipbox-wifi.py migrate || true", inst)
 
     def test_failed_saved_connection_keeps_the_profile_and_says_what_to_do(self):
         calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": ""}, ["Heim"], rc=4, err="Error: Secrets were required")
