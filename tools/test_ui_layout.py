@@ -270,7 +270,8 @@ class ImportProgress(unittest.TestCase):
         self.assertIn("Sie lässt sich unter „Verbindungen → Zugriff auf diese Oberfläche“ erlauben.", PAGE)
         self.assertIn('running()&&(st.why==="off"||st.why==="kein-bild")) return waiting();', PAGE)  # "extern" wartet nicht endlos, der Grund steht da
         self.assertIn('extern:"Die Vorschau ist von außen nicht freigegeben.', PAGE)
-        self.assertIn('st.origin==="extern"?"Vorschau von außen: klein', PAGE)
+        self.assertIn('st.origin==="extern"&&!auto', PAGE)                                      # seit 1.0.6: der Hinweis erscheint nur kurz, siehe test_external_preview_hint_disappears_after_a_while
+        self.assertIn('const hint="Vorschau von außen: klein', PAGE)
 
     def test_dji_scan_button_shows_the_reason_in_the_camera_card(self):
         """"Netze suchen" in der DJI-Karte schrieb Fehler nur in die WLAN-Karte weiter oben; dort stand nur "keine Netze gefunden". Jetzt steht der Grund in der Kamera-Karte."""
@@ -298,6 +299,14 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('$("live_tosrv").addEventListener("click",()=>{ const c=$("srtlacard"); c.open=true;', PAGE)
         self.assertIn('out["no_server"] = not active and not pub["selected"]', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
         self.assertIn('id="srtlacard"', PAGE)                                                      # Ziel des Knopfs
+
+    def test_external_preview_hint_disappears_after_a_while(self):
+        """Der Hinweis über der kleinen Vorschau von außen stand die ganze Zeit da (Wunsch des Nutzers: nach einer Weile ausblenden, nicht bei jedem automatischen Neustart)."""
+        self.assertIn("hintTimer=setTimeout(()=>{ if(msg.textContent===hint) msg.textContent=\"\"; },15000);", PAGE)
+        self.assertIn('if(st.origin==="extern"&&!auto){', PAGE)                                  # nicht bei automatischem Neustart
+        self.assertIn("clearTimeout(hintTimer); mode=\"\"", PAGE)                                     # halt() räumt den Zeitgeber auf
+        self.assertEqual(PAGE.count("Vorschau von außen: klein, damit der Upload für die Sendung bleibt."), 1)
+        self.assertNotIn('msg.textContent=st.origin==="extern"?', PAGE)                         # nicht mehr dauerhaft gesetzt
 
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
