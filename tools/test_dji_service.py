@@ -946,6 +946,108 @@ class Session(unittest.TestCase):
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
+    def test_a_single_unreadable_statistic_does_not_end_a_healthy_stream(self):
+        """1.0.3: Ohne Bluetooth reichte eine einzige nicht lesbare nginx-Abfrage (kurze Last durch apt-get update), und der Dienst baute den gesunden Stream neu auf (6 s Ausfall)."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            n = len(sim.sent)
+            state = {"v": True}
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: state["v"]), \
+                    mock.patch.object(dd.Camera, "STREAM_LOST_SECONDS", 3.0):
+                sim.drop_bluetooth()
+                await asyncio.sleep(0.5)
+                state["v"] = None                                                  # Statistik kurz nicht lesbar (die Schleife prüft ohne Bluetooth jede Sekunde, kürzer als STREAM_LOST_SECONDS)
+                await asyncio.sleep(1.5)
+                state["v"] = True
+                await asyncio.sleep(1.2)
+                self.assertEqual(cam.state, "streaming")                          # keine neue Sitzung
+                self.assertEqual(len(sim.sent), n)                                # nichts an die Kamera gesendet
+                state["v"] = None                                                  # bleibt sie länger als STREAM_LOST_SECONDS unlesbar, endet die Sitzung wie bisher
+                self.assertTrue(await self.wait_state(cam, ("error",), 8))
+                self.assertIn("Bluetooth", cam.detail)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_unreadable_statistic_with_bluetooth_up_is_not_a_lost_connection(self):
+        """Nur ein wirklich ausbleibender Stream (False) zählt, nicht eine nicht lesbare Statistik (None), wenn Bluetooth seit 3 Minuten still ist."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            state = {"v": None}
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: state["v"]):
+                cam.last_rx = time.time() - 1000                                   # seit über 180 s keine Statusmeldung
+                await asyncio.sleep(1.6)
+                self.assertEqual(cam.state, "streaming")
+                state["v"] = False
+                self.assertTrue(await self.wait_state(cam, ("error",), 4))
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_a_running_stream_is_left_alone_when_only_bluetooth_was_lost(self):
+        """1.0.3: Nach einem Bluetooth-Verlust baute der Dienst bei der Neuverbindung "Stopp, Vorbereiten, Start" neu auf und unterbrach damit den laufenden Stream."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, autoconnect=True)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            n = len(sim.sent)
+            state = {"v": True}
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: state["v"]):
+                sim.drop_bluetooth()
+                state["v"] = None
+                self.assertTrue(await self.wait_state(cam, ("error", "connecting", "searching"), 4))     # Sitzung endet
+                state["v"] = True                                                  # der Stream kam die ganze Zeit an
+                self.assertTrue(await self.wait_state(cam, ("streaming",), 6), cam.detail)
+                ids = [m.id for m in sim.sent[n:]]
+                self.assertEqual(ids, [dd.ID_PAIR])                               # nur gekoppelt: kein Stopp, kein Vorbereiten, kein Start
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_changed_settings_or_a_gone_stream_set_the_camera_up_again(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, autoconnect=True)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)))
+            n = len(sim.sent)
+            state = {"v": True}
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: state["v"]):
+                sim.drop_bluetooth()
+                state["v"] = None
+                self.assertTrue(await self.wait_state(cam, ("error", "connecting", "searching"), 4))
+                cam.cfg["bitrate"] = 9000                                          # Einstellungen geändert: nicht übernehmen, was läuft
+                state["v"] = True
+                self.assertTrue(await self.wait_state(cam, ("streaming",), 6), cam.detail)
+                ids = [m.id for m in sim.sent[n:]]
+                self.assertIn(dd.ID_STOP, ids)
+                self.assertIn(dd.ID_START, ids)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            n = len(sim.sent)                                                      # "Trennen" und neu "Verbinden": immer von vorn
+            with mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: True):
+                await dm.handle({"cmd": "connect", "addr": ADDR})
+                self.assertTrue(await self.wait_state(cam, ("streaming",), 6), cam.detail)
+                ids = [m.id for m in sim.sent[n:]]
+                self.assertIn(dd.ID_START, ids)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
     def test_older_model_skips_the_confirmation_and_pocket3_the_stabilization(self):
         async def go():
             sim = CameraSim()
