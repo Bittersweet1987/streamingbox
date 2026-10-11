@@ -2,6 +2,12 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.7
+- **Live-Karte am Rechner: Platz gespart und die Temperatur der Box steht jetzt dabei (Wunsch des Nutzers).** Auf der breiten Ansicht stand links „LIVE“, der Verlauf und die Megabit-Zahl, rechts daneben war die Karte leer, und „Server: …“ stand eine Zeile tiefer. Jetzt stehen Server und Temperatur **rechts außen in derselben Zeile**: „LIVE · Verlauf · 13,2 Mbit/s ↑ … Server: Heim · 44 °C“. Die Karte ist eine Zeile niedriger.
+  - Die Temperatur ist die des Prozessors der Box (wie in der Karte „Status“), auch ohne Sendung zu sehen. Farbe wie bei den Meldungen: ab 70 °C orange, ab 80 °C rot; ohne Messwert bleibt sie weg.
+  - Am Handy ändert sich nichts (die Live-Zeile ist dort ausgeblendet, der Status steht in der Kopfzeile). Bei 760 Pixeln Breite passt alles in eine Zeile.
+  - Tests: `tools/test_ui_layout.py` (Aufbau der Zeile, nur ein „Server“-Feld, Grenzen wie die Meldung, Handy-Regel unverändert), `test_i18n` (Deutsch und Englisch).
+
 ## 1.0.6
 - **Der Hinweis über der kleinen Vorschau von außen verschwindet nach 15 Sekunden (Wunsch des Nutzers).** „Vorschau von außen: klein, damit der Upload für die Sendung bleibt.“ stand die ganze Zeit über dem Bild. Jetzt erscheint er beim Start der Vorschau und blendet sich nach 15 Sekunden von selbst aus. Startet die Vorschau nach einer Sendepause von selbst neu, erscheint er nicht noch einmal; ein neuer Start per Knopf zeigt ihn wieder. Meldungen anderer Art (zum Beispiel „Die Vorschau startet wieder, sobald die Box sendet.“) bleiben, solange sie gelten.
   - Tests: `tools/test_ui_layout.py` (Zeitgeber, kein Hinweis bei automatischem Neustart, Aufräumen in `halt()`).
