@@ -2,6 +2,10 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.6
+- **Der Hinweis über der kleinen Vorschau von außen verschwindet nach 15 Sekunden (Wunsch des Nutzers).** „Vorschau von außen: klein, damit der Upload für die Sendung bleibt.“ stand die ganze Zeit über dem Bild. Jetzt erscheint er beim Start der Vorschau und blendet sich nach 15 Sekunden von selbst aus. Startet die Vorschau nach einer Sendepause von selbst neu, erscheint er nicht noch einmal; ein neuer Start per Knopf zeigt ihn wieder. Meldungen anderer Art (zum Beispiel „Die Vorschau startet wieder, sobald die Box sendet.“) bleiben, solange sie gelten.
+  - Tests: `tools/test_ui_layout.py` (Zeitgeber, kein Hinweis bei automatischem Neustart, Aufräumen in `halt()`).
+
 ## 1.0.5
 - **Hinweis oben, wenn noch kein SRTLA-Server eingetragen ist (Wunsch des Nutzers).** Ohne Server war „Live“ grau, und der Grund stand nur klein und grau unter dem Knopf („Kein SRTLA-Server ausgewählt“). Jetzt erscheint in der Live-Karte oben, genau wie beim fehlenden Bildaufbau, ein gelbes Feld: „Live geht erst, wenn ein SRTLA-Server eingetragen ist: Server hinzufügen und auswählen.“ mit dem Knopf „Zum SRTLA-Server“, der die Karte „SRTLA: Server, Bitrate und Latenz“ aufklappt und dorthin springt.
   - Das Feld gilt, solange nicht gesendet wird und kein Server eingetragen **oder** keiner ausgewählt ist. Sobald einer ausgewählt ist, verschwindet es; während der Sendung erscheint es nie. Der Grund steht dann nicht doppelt in der Zeile darunter.
