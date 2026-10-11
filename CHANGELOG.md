@@ -2,6 +2,15 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.10
+- **Eine entfernte DJI-Kamera verschwindet sofort aus der Liste (Nutzermeldung).** Nach „Entfernen“ war die Kamera beim Dienst schon gelöscht, die Karte blieb in der Oberfläche aber stehen, bis man die Seite neu lud. Ursache: `djiRender` baut die Kameraliste nur neu auf, wenn der Tastaturfokus nicht in ihr steht (damit beim Tippen in einem Feld nichts verschwindet), und der gedrückte Knopf „Entfernen“ hatte den Fokus. Jetzt wird der Fokus nach dem Entfernen gelöst und die Liste sofort neu geladen. Das Schutzverhalten beim Tippen bleibt.
+  - Tests: `tools/test_ui_layout.py` (Fokus lösen vor dem Neuaufbau, sofort neu laden, Schutz beim Tippen bleibt).
+- Enthält 1.0.9 (kleinerer Abstand zwischen Verlauf und Megabit-Zahl in der Live-Zeile), das noch nicht einzeln hochgeladen war.
+
+## 1.0.9
+- **Live-Karte am Rechner: weniger Abstand zwischen dem Verlauf und der Megabit-Zahl (Wunsch des Nutzers, am echten Bildschirm gesehen).** Zwischen dem Ende des Graphen und „13,3 Mbit/s ↑“ lagen 40 Pixel (14 Rand rechts am Graphen, 16 Rand links an der Zahl, 12 Zeilenabstand). Jetzt sind es 14 Pixel. Sonst ändert sich nichts an der Zeile.
+  - Tests: `tools/test_ui_layout.py` (Ränder des Graphen und der Zahl).
+
 ## 1.0.8
 - **WLAN-Profile folgen jetzt der Karte, nicht ihrem Namen (Ursache einer nicht mehr funktionierenden DJI Action 4, 11. Oktober 2026).** Die Namen `wlan0`, `wlan1` vergibt der Kernel in der Reihenfolge, in der die Karten beim Start erscheinen. Steckt ein WLAN-Stick, kann der Stick `wlan0` bekommen und die eingebaute Karte `wlan1`. Ein an den Namen gebundenes gespeichertes Netz landete dann auf der falschen Karte: Auf einer ROCK 5B Plus ging die eingebaute Karte nach dem Neustart ins Handy-Netz statt ins Kameranetz, und die Action 4 bekam dessen Adresse als Ziel („Der Stream ist ausgefallen“). Kameras waren schon an die Hardware-Adresse gebunden, die Profile nicht.
   - Profile, die diese Software anlegt oder auswählt (WLAN verbinden, gespeichertes Netz auf einer Karte wählen), werden an die **Hardware-Adresse** der Karte gebunden (`802-11-wireless.mac-address`, die Bindung an den Namen entfällt). Fehlt die Adresse, bleibt es beim Namen wie bisher.
