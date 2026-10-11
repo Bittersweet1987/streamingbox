@@ -726,7 +726,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
     <div id="btdrvprog" class="prog" hidden><div class="bar"><i></i></div><div class="progline"><span><b class="progpct"></b> <span class="progtxt"></span></span><span class="progel muted"></span></div></div>
     <div id="btdrvmsg" class="ph" role="status"></div>
     <div class="actions"><button id="btdrv_go" type="button" disabled>Treiber jetzt einrichten</button></div>
-    <div class="ph" data-hlp>Baut und lädt den Bluetooth-Treiber für Sticks, die der Kernel nicht kennt (zum Beispiel TP-Link UB500 oder UGREEN BT6.0). Das dauert einige Minuten, Bluetooth fehlt dabei kurz. Während einer Übertragung wartet die Box damit bis zum Ende.</div>
+    <div class="ph" data-hlp>Baut und lädt den Bluetooth-Treiber für Sticks, die der Kernel nicht kennt (zum Beispiel TP-Link UB500 oder UGREEN BT6.0). Das dauert einige Minuten, Bluetooth fehlt dabei kurz. Während einer Übertragung wartet die Box damit bis zum Ende. Auf der ROCK 5B Plus richtet der Knopf außerdem den Bluetooth-Chip des Boards ein, wenn er noch nicht läuft.</div>
     <div class="sech">Handyverbindungen</div>
     <div class="ph" data-hlp>Zeigt den Akkustand gekoppelter Handys. Die Box fragt alle 10 Minuten kurz nach und trennt danach wieder, es gibt keine Dauerverbindung. Android meldet den Akku in Schritten von 20 %, ein iPhone in Schritten von etwa 10 %. Das Handy muss in der Nähe sein und Bluetooth an haben.</div>
     <div id="phonecard"></div>
@@ -1583,11 +1583,16 @@ function btRender(d){
 let btdrvTimer=0;
 function btdrvRender(d){
   const msg=$("btdrvmsg"), go=$("btdrv_go"); if(!msg||!go) return;
-  const run=d.state==="working";
+  const run=d.state==="working", ch=d.chip||null;       // ch: eingebauter Bluetooth-Chip der ROCK 5B Plus (nur dort vorhanden)
   progSet("btdrvprog",run,d.steps?Math.round(100*(d.step||0)/d.steps):0,d.step_text||"");
-  go.disabled=!d.helper_installed||run;
-  const bad=d.state==="failed"||d.state==="unsupported";
-  const show=d.helper_installed?(d.manual||bad||run||d.state==="waiting")&&d.message:"Der Treiber-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
+  go.disabled=!d.helper_installed||run||!!(ch&&ch.state==="working");
+  let bad=d.state==="failed"||d.state==="unsupported", show;
+  if(!d.helper_installed) show="Der Treiber-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
+  else if(ch&&(d.state==="none"||!d.state)){            // kein Stick nötig: den Chip des Boards melden statt "kein Stick"
+    bad=ch.state==="failed"||ch.state==="unsupported";
+    show=(d.manual||ch.manual||ch.state!=="ok")&&ch.message;
+  }
+  else show=(d.manual||bad||run||d.state==="waiting")&&d.message;
   msg.textContent=show||"";
   msg.style.color=bad||!d.helper_installed?"var(--crit)":"";
   clearTimeout(btdrvTimer);
