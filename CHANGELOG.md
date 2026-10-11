@@ -2,6 +2,12 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.3
+- **DJI-Kameras: ein laufender Stream wird nicht mehr grundlos unterbrochen (Ursachenforschung vom 11. Oktober 2026).** Eine Kamera wurde zwar per Bluetooth getrennt, ihr Bild lief aber ungestört über das WLAN weiter. Eine einzige nicht lesbare Abfrage der RTMP-Statistik (kurze Last auf der Box, zum Beispiel durch das stündliche `apt-get update` von BELABOX) genügte, damit der Dienst die Sitzung beendete, sich vier Minuten lang neu verband und danach die Kamera mit „Stopp, Vorbereiten, Start“ neu einrichtete: **6 Sekunden Ausfall** und ein kurzer Sprung des Hauptbilds auf HDMI.
+  - Eine nicht lesbare Statistik beendet die Sitzung erst, wenn sie so lange fehlt wie ein ausbleibender Stream (30 Sekunden), und zählt bei bestehender Bluetooth-Verbindung gar nicht mehr als Verlust.
+  - Geht nur Bluetooth verloren und kommt der Stream weiter an, **bleibt er unberührt**: Nach dem Neuverbinden wird nur gekoppelt, nichts neu eingerichtet. Haben sich die Einstellungen geändert, fehlt der Stream, oder wurde getrennt beziehungsweise neu verbunden, richtet der Dienst die Kamera wie bisher von vorn ein.
+  - Tests: `tools/test_dji_service.py` 4 neue; 3 davon scheitern am alten Code und laufen mit der neuen Fassung, der vierte sichert ab, dass geänderte Einstellungen und „Trennen“ weiter von vorn einrichten. Neuer Text nur Deutsch und Englisch.
+
 ## 1.0.2
 - **Bluetooth-Treiber: Reparatur beim Start und Knopf „Treiber jetzt einrichten“.** Ein UGREEN-BT6.0- oder UB500-Stick lief nach einem Update wieder mit dem Standardtreiber (und der UGREEN als kaputter Adapter mit Zeitüberschreitungen), weil das gebaute Modul in `updates/` zwar noch lag, aber nicht in `modules.dep` stand; der Helfer hielt es wegen seiner Merkdatei für eingerichtet. Jetzt prüft er bei jedem Lauf, ob das Modul benutzt wird, trägt es bei Bedarf neu ein und lädt es (nicht während einer Übertragung); nur wenn das nicht geht, wird neu gebaut. Neu unter Verbindungen → Bluetooth: Knopf **Treiber jetzt einrichten** (baut neu, auch nach einem früheren Fehlschlag) mit **Fortschrittsbalken** über fünf Schritte; die Anzeige liest den Stand vom Hauptdienst, weil der Bluetooth-Dienst beim Neuladen kurz fehlt. Der Knopf legt nur das feste Stichwort `install` in `/var/lib/pipbox/btdriver-request` (`pipbox-btdriver.path` startet den Helfer, Root-Rechte unverändert eingeschränkt). Neue Texte in allen 13 Sprachen. Tests: `tools/test_btdriver.py` 59, `tools/test_ui_backend.py` (BtDriverButton).
 
