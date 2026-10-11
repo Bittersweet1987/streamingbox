@@ -3406,7 +3406,7 @@ $("chat_form").addEventListener("submit",async e=>{
   const store=(k,v)=>{ try{ if(v===undefined) return localStorage.getItem(k); if(v===null) localStorage.removeItem(k); else localStorage.setItem(k,v); }catch(e){} return null; };       // nur in diesem Browser (nicht auf der Box)
   const always=()=>keep.checked;
   const keepRow=document.querySelector(".prevkeep"), gear=$("prev_set");
-  let gearOpen=false;
+  let gearOpen=false, hintTimer=0;                                                  // hintTimer: blendet den Hinweis "Vorschau von außen: klein …" nach einer Weile aus
   function syncKeep(){                                                              // mit Haken verschwindet das Feld; das Zahnrad in der Kopfzeile holt es zurück (zum Entfernen des Hakens)
     gear.hidden=!keep.checked; if(!keep.checked) gearOpen=false;
     keepRow.hidden=keep.checked&&!gearOpen; gear.setAttribute("aria-expanded",String(gearOpen));
@@ -3421,7 +3421,7 @@ $("chat_form").addEventListener("submit",async e=>{
     vid.hidden=true;
   }
   function halt(){
-    on=false; gen++; clearTimeout(timer); clearInterval(poll); mode=""; card.classList.remove("prevrun","showctl");
+    on=false; gen++; clearTimeout(timer); clearInterval(poll); clearTimeout(hintTimer); mode=""; card.classList.remove("prevrun","showctl");
     closeVideo(); img.removeAttribute("src"); img.hidden=true; box.hidden=true;    // schließt die Verbindung: der Server beendet die Vorschau sofort
   }
   function stop(text,more){
@@ -3440,7 +3440,12 @@ $("chat_form").addEventListener("submit",async e=>{
     let st; try{ const r=await fetch("/api/preview"); st=await r.json(); }catch(e){ st={available:false,why:"missing"}; }
     if(my!==gen) return;
     if(!st.available){ if(running()&&(st.why==="off"||st.why==="kein-bild")) return waiting(); return stop(WHY[st.why]||WHY.missing); }
-    on=true; btn.disabled=false; btn.textContent="Stop"; msg.textContent=st.origin==="extern"?"Vorschau von außen: klein, damit der Upload für die Sendung bleibt.":""; card.classList.add("prevrun");
+    on=true; btn.disabled=false; btn.textContent="Stop"; msg.textContent=""; card.classList.add("prevrun");
+    clearTimeout(hintTimer);
+    if(st.origin==="extern"&&!auto){                                                // der Hinweis steht nur kurz da (nicht bei jedem automatischen Neustart der Vorschau)
+      const hint="Vorschau von außen: klein, damit der Upload für die Sendung bleibt.";
+      msg.textContent=hint; hintTimer=setTimeout(()=>{ if(msg.textContent===hint) msg.textContent=""; },15000);
+    }
     playStream(my);                                                                // immer volle 30 Bilder pro Sekunde in 640 × 360: auf dem Handy wie am Rechner gleich
     if(!always()) timer=setTimeout(()=>stop("Die Vorschau ist nach 10 Minuten beendet.",true),Math.max(5,(st.max_seconds||600)-3)*1000);
     clearInterval(poll);
