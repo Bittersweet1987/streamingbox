@@ -134,6 +134,11 @@ PY
     install -m 644 "$HERE/install/pipbox-btdriver.timer" /etc/systemd/system/pipbox-btdriver.timer
     install -m 644 "$HERE/install/pipbox-btdriver.path" /etc/systemd/system/pipbox-btdriver.path
     install -m 644 "$HERE/install/80-pipbox-btdriver.rules" /etc/udev/rules.d/80-pipbox-btdriver.rules
+    # Bluetooth-Chip der ROCK 5B Plus (eingebautes Realtek-Modul): Helfer, Dienst, Auslöser und udev-Regel. Der Helfer tut nur auf dem Board "Radxa ROCK 5B Plus" etwas.
+    install -m 755 "$HERE/install/pipbox-btchip.py" /opt/pipbox/pipbox-btchip.py
+    install -m 644 "$HERE/install/pipbox-btchip.service" /etc/systemd/system/pipbox-btchip.service
+    install -m 644 "$HERE/install/pipbox-btchip.path" /etc/systemd/system/pipbox-btchip.path
+    install -m 644 "$HERE/install/81-pipbox-btchip.rules" /etc/udev/rules.d/81-pipbox-btchip.rules
     install -m 755 "$HERE/install/pipbox-wlandriver.py" /opt/pipbox/pipbox-wlandriver.py
     install -m 644 "$HERE/install/pipbox-wlandriver.service" /etc/systemd/system/pipbox-wlandriver.service
     install -m 644 "$HERE/install/pipbox-wlandriver.timer" /etc/systemd/system/pipbox-wlandriver.timer
@@ -243,20 +248,21 @@ PY
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     if [ "$hdmi_changed" = 1 ] || ! systemctl is-active --quiet pipbox-hdmi.service; then systemctl restart pipbox-hdmi.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-btchip.path pipbox-btchip.service
     systemctl enable --now pipbox-preview.socket
     systemctl try-restart pipbox-preview.service 2>/dev/null || true       # neuer Programmstand (der Dienst endet sonst nach einer Minute ohne Zuschauer von selbst)
     systemctl restart pipbox.service
-    systemctl start --no-block pipbox-btdriver.service pipbox-wlandriver.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
+    systemctl start --no-block pipbox-btdriver.service pipbox-wlandriver.service pipbox-btchip.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
     ts_snapshot "nach der Installation"
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
   uninstall)
     [ -x /opt/pipbox/pipbox-netaddr.py ] && python3 /opt/pipbox/pipbox-netaddr.py --remove || true     # feste Zusatzadresse und ihr Skript in if-up.d entfernen
     [ -x /opt/pipbox/pipbox-wlandriver.py ] && python3 /opt/pipbox/pipbox-wlandriver.py uninstall || true     # WLAN-Treiber (AIC8800D80) und seine Firmware entfernen
+    [ -x /opt/pipbox/pipbox-btchip.py ] && python3 /opt/pipbox/pipbox-btchip.py uninstall || true     # Firmware-Verknüpfungen des Bluetooth-Chips der ROCK 5B Plus entfernen
     [ -x /opt/pipbox/pipbox-btdriver.py ] && python3 /opt/pipbox/pipbox-btdriver.py uninstall || true     # eingespieltes Bluetooth-Modul entfernen (Standardmodul gilt nach dem nächsten Neustart)
-    systemctl disable --now pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service || true
-    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-hdmi.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-netaddr.service /etc/systemd/system/pipbox-netaddr.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/systemd/system/pipbox-btdriver.path /etc/udev/rules.d/80-pipbox-btdriver.rules
+    systemctl disable --now pipbox-btchip.path pipbox-btchip.service pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service || true
+    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-hdmi.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-netaddr.service /etc/systemd/system/pipbox-netaddr.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btchip.service /etc/systemd/system/pipbox-btchip.path /etc/udev/rules.d/81-pipbox-btchip.rules /opt/pipbox/pipbox-btchip.py /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/systemd/system/pipbox-btdriver.path /etc/udev/rules.d/80-pipbox-btdriver.rules
     systemctl disable --now pipbox-preview.socket pipbox-preview.service 2>/dev/null || true
     rm -f /etc/systemd/system/pipbox-preview.socket /etc/systemd/system/pipbox-preview.service
     rm -f /etc/apt/apt.conf.d/99pipbox-nginx
