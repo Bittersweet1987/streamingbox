@@ -1975,6 +1975,7 @@ class SendControl:
         if not active and belacoder_running():
             out["reasons"].append("Es läuft schon ein belacoder (z. B. über die BELABOX-Oberfläche)")
         out["no_layout"] = not active and not self.pipeline.cfg.get("main")
+        out["no_server"] = not active and not pub["selected"]            # noch kein SRTLA-Server eingetragen oder ausgewählt: Live ist grau, die Live-Karte sagt es und führt zum Server
         out["can_start"] = not active and not out["reasons"]
         return out
 
