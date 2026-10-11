@@ -2,6 +2,11 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.5
+- **Hinweis oben, wenn noch kein SRTLA-Server eingetragen ist (Wunsch des Nutzers).** Ohne Server war „Live“ grau, und der Grund stand nur klein und grau unter dem Knopf („Kein SRTLA-Server ausgewählt“). Jetzt erscheint in der Live-Karte oben, genau wie beim fehlenden Bildaufbau, ein gelbes Feld: „Live geht erst, wenn ein SRTLA-Server eingetragen ist: Server hinzufügen und auswählen.“ mit dem Knopf „Zum SRTLA-Server“, der die Karte „SRTLA: Server, Bitrate und Latenz“ aufklappt und dorthin springt.
+  - Das Feld gilt, solange nicht gesendet wird und kein Server eingetragen **oder** keiner ausgewählt ist. Sobald einer ausgewählt ist, verschwindet es; während der Sendung erscheint es nie. Der Grund steht dann nicht doppelt in der Zeile darunter.
+  - Tests: `tools/test_view.py` (neuer Verhaltenstest für `no_server`: kein Server, Server ohne Auswahl, Server gewählt, laufende Sendung), `tools/test_ui_layout.py` (Aufbau der Seite), `test_i18n` (Deutsch und Englisch).
+
 ## 1.0.4
 - **Bluetooth auf der ROCK 5B Plus: der Chip auf dem Board läuft jetzt von selbst (Ursachenforschung vom 11. Oktober 2026).** Der Bluetooth-Teil des WLAN-Moduls (Realtek RTL8852BE, USB `13d3:3572`) hing am allgemeinen Kerneltreiber `btusb`, der für diesen Chip keine Firmware lädt. Der Adapter stand auf „bereit“, empfing aber nichts (Suche: 0 Geräte, dazu die Meldung „Antennen am Funkmodul prüfen“). Die Antenne war nicht die Ursache.
   - Neuer Helfer `install/pipbox-btchip.py` (root, eigener Dienst mit strenger Sandbox): legt die zwei Firmware-Verknüpfungen an (`rtl8852bu_fw` und `rtl8852bu_config` auf die Dateien in `rtl_bt/`) und hängt den Chip auf den Realtek-Herstellertreiber `rtk_btusb` um, der im BELABOX-Kernel schon vorhanden ist. Das geschieht beim Start, beim Erkennen des Chips (udev) und per Knopf „Treiber jetzt einrichten“. Danach findet die Suche Kameras und andere Geräte (auf der Testbox 38 bis 43 Geräte in 15 bis 20 Sekunden, davor 0; die Suche der Software erkannte drei DJI-Kameras).
