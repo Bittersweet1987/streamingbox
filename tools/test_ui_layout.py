@@ -288,6 +288,17 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('$("live_topipe").addEventListener("click"', PAGE)
         self.assertIn('out["no_layout"] = not active and not self.pipeline.cfg.get("main")', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
 
+    def test_live_card_hints_missing_srtla_server(self):
+        """Noch kein SRTLA-Server eingetragen: Live ist grau; die Live-Karte sagt es oben wie beim fehlenden Bildaufbau und führt zum Server (Wunsch des Nutzers)."""
+        self.assertIn('<div id="srvhint" class="pending" hidden>', PAGE)
+        self.assertIn("Live geht erst, wenn ein SRTLA-Server eingetragen ist: Server hinzufügen und auswählen.", PAGE)
+        self.assertIn('id="live_tosrv"', PAGE)
+        self.assertIn('$("srvhint").hidden=!(!d.active&&d.no_server);', PAGE)
+        self.assertIn('!(d.no_server&&r==="Kein SRTLA-Server ausgewählt")', PAGE)                   # der Grund steht nicht doppelt in der Zeile darunter
+        self.assertIn('$("live_tosrv").addEventListener("click",()=>{ const c=$("srtlacard"); c.open=true;', PAGE)
+        self.assertIn('out["no_server"] = not active and not pub["selected"]', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
+        self.assertIn('id="srtlacard"', PAGE)                                                      # Ziel des Knopfs
+
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
         self.assertIn('<a id="r_httpslink" class="btnlink" href="https://login.tailscale.com/admin/dns" target="_blank" rel="noopener noreferrer">Tailscale-Einstellungen öffnen</a>', PAGE)

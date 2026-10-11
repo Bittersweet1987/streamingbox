@@ -733,6 +733,28 @@ class Deactivate(unittest.TestCase):
             self.send.cams.listing = lambda host: cam_listing({"cam-a": "offline", "cam-d": "live", "cam-b": "offline", "cam-c": "offline"})
             self.assertEqual(self.send.reasons(), [])
 
+    def test_status_flags_a_missing_srtla_server(self):
+        """Noch kein SRTLA-Server eingetragen oder ausgewählt: status() meldet no_server, die Oberfläche zeigt oben den Hinweis (Wunsch des Nutzers)."""
+        pl = self.make()
+        self.send._active = lambda: False
+        self.send._detail = lambda: {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        with mock.patch.object(server, "belacoder_running", lambda: False), mock.patch.object(server.os.path, "exists", lambda p: True):
+            self.send.srtla.public = lambda: {"servers": [], "selected": ""}
+            st = self.send.status()
+            self.assertTrue(st["no_server"])
+            self.assertIn("Kein SRTLA-Server ausgewählt", st["reasons"])
+            self.assertFalse(st["can_start"])
+            self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": ""}      # eingetragen, aber keiner ausgewählt
+            self.assertTrue(self.send.status()["no_server"])
+            self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+            st = self.send.status()
+            self.assertFalse(st["no_server"])
+            self.assertNotIn("Kein SRTLA-Server ausgewählt", st["reasons"])
+            self.send._active = lambda: True                                                                                      # während der Sendung nie
+            self.send.srtla.public = lambda: {"servers": [], "selected": ""}
+            self.assertFalse(self.send.status()["no_server"])
+
     def test_export_and_import_carry_it(self):
         pl = self.make()
         pl.set_active("cam-c", False)
