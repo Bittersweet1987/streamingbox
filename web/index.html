@@ -438,6 +438,7 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .dcam .flb.crit{color:var(--crit)}
 .dcam .flb:disabled{opacity:.4;cursor:default}
 .dcam .d-nearmsg{font-size:12px;color:var(--warn);margin-top:4px}.dcam .d-nearmsg:empty{display:none}
+.camreconn{margin-left:4px;padding:2px 8px;line-height:1.2}
 .dcam .dnet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px}
 @media (max-width:560px){.dcam .dnet{grid-template-columns:minmax(0,1fr)}}
 .dcam .dnet[hidden],.dcam div.f[hidden],.dcam label.f[hidden]{display:none}
@@ -1200,12 +1201,14 @@ let netOpts=[];                                   // Verbindungen der Box (aus /
 const netLabel=o=>`${o.label}${connNames[o.iface]?" ("+connNames[o.iface]+")":""} · ${o.cam_ip||o.ip}${o.cam_ip&&o.cam_ip!==o.ip?" (feste Adresse)":""}`;
 function camNetHtml(c){
   if(c.via_src==="hdmi") return `<span class="camnet muted" title="Das Bild kommt vom HDMI-Eingang der Box">HDMI-Eingang</span>`;
-  // Die Adresse oben gilt für die Verbindung der Kamera: DJI-Kameras wählen sie in ihrer Karte, andere Kameras (z. B. ein Handy) hier.
+  // Die Adresse oben gilt für die Verbindung der Kamera. Auch DJI-Kameras wählen sie hier in der Zeile (dieselbe Einstellung wie in ihrer Karte, 12. Oktober 2026):
+  // Die Änderung gilt ab der nächsten Verbindung der Kamera, darum steht daneben der Knopf "Neu verbinden".
   if((c.key||"").startsWith("dji-")){
-    const o=netOpts.find(x=>x.iface===c.via);
-    const name=c.via_src==="dji"?(c.via==="manual"?"Manuell":(o?netLabel(o):c.via)):"Hauptverbindung";
-    const full=c.via_src==="dji"?name+" (in der DJI-Karte gewählt)":"Hauptverbindung (in der DJI-Karte wählbar)";
-    return `<span class="camnet muted" title="Verbindung: ${esc(full)}">${esc(name)} · DJI-Karte</span>`;     // kurz, damit die Zeile nicht umbricht; der Hinweis steht im Tooltip
+    const own=c.via_src==="dji";
+    const opts=[`<option value=""${own?"":" selected"}>– wählen –</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${own&&c.via===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
+    if(own&&c.via==="manual") opts.push(`<option value="manual" selected disabled>Manuell (in der DJI-Karte)</option>`);
+    else if(own&&c.via&&!netOpts.some(o=>o.iface===c.via)) opts.push(`<option value="${esc(c.via)}" selected>${esc(c.via)} (nicht verbunden)</option>`);
+    return `<span class="camnet"><select class="camnetsel" data-dji="${esc(c.key)}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz. Eine Änderung gilt ab der nächsten Verbindung der Kamera." aria-label="Verbindung">${opts.join("")}</select><button type="button" class="camreconn sec" data-dji="${esc(c.key)}" title="Neu verbinden: Die geänderte Verbindung gilt erst danach (der Stream der Kamera ist kurz weg)" aria-label="Neu verbinden">↻</button></span>`;
   }
   const opts=[`<option value="">Hauptverbindung (Standard)</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${c.iface===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
   if(c.iface&&!netOpts.some(o=>o.iface===c.iface)) opts.push(`<option value="${esc(c.iface)}" selected>${esc(c.iface)} (nicht verbunden)</option>`);
@@ -1385,12 +1388,22 @@ $("cams").addEventListener("click",async e=>{
   const r=await fetch("/api/cameras/"+b.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({swap_with:b.dataset.with})});
   if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verschieben fehlgeschlagen"); tick();
 });
+const djiAddrOfKey=key=>{ const c=((typeof djiData!=="undefined"&&djiData.cameras)||[]).find(x=>x.rtmp_key===key); return c?c.addr:null; };
 $("cams").addEventListener("change",async e=>{
   if(!e.target.classList.contains("camnetsel")) return;
+  if(e.target.dataset.dji){                              // DJI-Kamera: die Verbindung gehört dem Kamera-Dienst (wie in der DJI-Karte)
+    const addr=djiAddrOfKey(e.target.dataset.dji);
+    if(!addr||!e.target.value){ if(!addr) alert("Die Kamera ist im Kamera-Dienst nicht bekannt."); return; }
+    djiUpdate(addr,{wifi_ifname:e.target.value}); setTimeout(()=>{ tick(); djiLoad(); },900); return;
+  }
   const r=await fetch("/api/cameras/"+e.target.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({iface:e.target.value})});
   if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verbindung konnte nicht gesetzt werden"); tick();
 });
 $("cams").addEventListener("click",async e=>{
+  if(e.target.classList.contains("camreconn")){           // "Neu verbinden" einer DJI-Kamera aus der Kameraliste
+    const addr=djiAddrOfKey(e.target.dataset.dji); if(!addr){ alert("Die Kamera ist im Kamera-Dienst nicht bekannt."); return; }
+    e.target.blur(); await djiCmd({cmd:"reconnect",addr}); setTimeout(()=>{ tick(); djiLoad(); },900); return;
+  }
   if(!e.target.classList.contains("ren")) return; e.preventDefault();
   await renameCam(e.target.dataset.id,e.target.dataset.name);
 });
@@ -1518,7 +1531,7 @@ function djiCardHtml(c){
     <label class="f">Name<input class="d-name" maxlength="40" value="${esc(djiName(c))}"></label>
     <details class="dsec" data-sec="conn"${op("conn")}><summary>Verbindung <span class="muted dsum-conn"></span></summary>
       <label class="f">Verbindung der Kamera<select class="d-wifi"><option value="">– wählen –</option>${netOpts}${missing}<option value="manual"${c.wifi_ifname==="manual"?" selected":""}>Manuell (WLAN-Name, Passwort, Adresse)</option></select></label>
-      <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Kamera ist verbunden. Änderungen an der Verbindung gelten ab der nächsten Verbindung, die laufende bleibt bestehen.</div>
+      <div class="ph d-lockhint" style="margin-top:4px" hidden>Die Kamera ist verbunden. Änderungen an der Verbindung gelten ab der nächsten Verbindung, die laufende bleibt bestehen. <button type="button" class="sec d-reconnect" style="margin-left:6px;padding:3px 10px">Jetzt neu verbinden</button></div>
       <div class="ph" style="margin-top:4px">Ein WLAN-Hotspot oder -Netz der Box: Die Kamera bekommt Name und Passwort selbst. Jede andere Verbindung (Ethernet, USB-Router, Modem): Hier den WLAN-Namen und das Passwort eintragen, dem die Kamera beitreten soll. Die Adresse der Box kommt aus der gewählten Verbindung.</div>
       <div class="d-manual dnet"${djiNeedsNet(c)?"":" hidden"}>
         <div class="f d-savedrow"${(c.saved||[]).length?"":" hidden"}><span class="flh"><span>Gespeicherte Netze</span><button type="button" class="flb crit d-saveddel">Löschen</button></span><select class="d-saved"><option value="">– gespeicherte Netze –</option>${saved}</select></div>
@@ -1705,7 +1718,8 @@ function djiRender(d){
   $("d_scan").disabled=!!d.scanning; $("d_scan").textContent=d.scanning?"Suche läuft …":"Nach DJI-Kameras suchen";
   // Die Karten nur neu aufbauen, wenn sich die Kameras oder Verbindungen ändern (sonst wird das Tippen unterbrochen)
   const sig=JSON.stringify([(d.cameras||[]).map(c=>c.addr+"|"+(c.saved||[]).join(",")+"|"+c.wifi_ifname+"|"+(c.locked?1:0)),(d.wifi_options||[]).map(o=>[o.ifname,o.ssid,o.type,o.ip,o.secret_missing])]);
-  if(sig!==djiStruct&&!box.contains(document.activeElement)){
+  const ae=document.activeElement, typing=box.contains(ae)&&(ae.tagName==="TEXTAREA"||ae.tagName==="SELECT"||(ae.tagName==="INPUT"&&!/^(button|checkbox|radio|submit|reset)$/.test(ae.type)));       // nur ein Feld, in das gerade getippt wird, hält den Neuaufbau an; ein Knopf (z. B. "Neu verbinden") nicht
+  if(sig!==djiStruct&&!typing){
     djiStruct=sig;
     box.innerHTML=(d.cameras||[]).length?d.cameras.map(djiCardHtml).join(""):'<div class="muted" style="margin-top:8px">Noch keine DJI-Kamera eingerichtet. Kamera einschalten, Bluetooth aktivieren, nahe an die Box legen und suchen.</div>';
   }
