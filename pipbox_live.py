@@ -185,6 +185,31 @@ def buffer_ms(c):
     return max(BUFFER_MIN_MS, max(delays_by_key(c).values() or [0]) + 300)
 
 
+LEAD_MAX_MS = 1000                         # so früh vor seinem Termin darf ein Bild höchstens am Mischer ankommen: früher wartet es roh in Warteschlangen von zusammen etwa 2,5 s (45 Bilder + 1 s) und läuft sie über
+BUFFER_LATE_MS = 150                       # nötiger Puffer größer als der laufende um mehr als das: verzögerte Bilder kämen zu spät
+BUFFER_EARLY_MS = 800                      # laufender Puffer größer als der nötige um mehr als das: die Bilder aller Kameras mit kürzerer Verzögerung kommen zu früh am Mischer an, sie werden verworfen (12. Oktober 2026: Hauptbild 3 bis 9 statt 30 Bilder/s)
+
+
+def buffer_mismatch(running, need):
+    """Passt der Puffer der laufenden Sendekette (running, beim Start aus den Verzögerungen berechnet) nicht mehr zu dem, den die gespeicherten Verzögerungen jetzt brauchen (need)?
+    Dann hilft nur ein Neustart der Sendekette: Der Puffer wirkt beim Start, die Verzögerung selbst lässt sich live ändern."""
+    try:
+        running, need = int(running), int(need)
+    except (TypeError, ValueError):
+        return False
+    return need > running + BUFFER_LATE_MS or running > need + BUFFER_EARLY_MS
+
+
+def hold_delays(delays, buffer):
+    """Haltezeit je Kamera auf der komprimierten Seite des Zweigs (set sbf<N>_vq min-threshold-time). Jedes Bild ist beim Verlassen des Dekoders um (Puffer - Haltezeit - Dekodierzeit) früher
+    als sein Termin und wartet bis dahin roh in Warteschlangen; die fassen zusammen nur etwa 2,5 s. Ist der Unterschied der Verzögerungen größer (Puffer = größte Verzögerung + 300 ms),
+    läuft der Zweig mit der kleinsten Verzögerung über, und fast alle seine Bilder werden verworfen (Testbox, 12. Oktober 2026: 2560 ms gegen 450 und 0). Darum wird die Haltezeit
+    mindestens auf (Puffer - LEAD_MAX_MS) angehoben: Das Bild kommt dann höchstens LEAD_MAX_MS vor seinem Termin an. Das ändert nichts daran, wann es gezeigt wird (der Termin steht fest,
+    die Haltezeit bleibt höchstens Puffer - 300 ms), und bei Puffern bis LEAD_MAX_MS nichts an der Einstellung."""
+    floor = max(0, int(buffer) - LEAD_MAX_MS)
+    return {k: max(int(v), floor) for k, v in delays.items()}
+
+
 # ------------------------------------------------------------------------------------------------ Pipeline-Text
 
 def build(c, base=RTMP_BASE):
@@ -501,9 +526,14 @@ class LiveController:
     (6) die geänderten Befehle für Bildflächen, Rahmen, Ton, Stumm und Verzögerung senden."""
 
     def __init__(self, load_json, put_state_file, state_dir, safe_cfg, view_values, log=print, clock=time.monotonic,
-                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE):
+                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE, start_cfg=None):
         self.load_json, self.put, self.state_dir = load_json, put_state_file, state_dir
         self.safe_cfg, self.view_values = safe_cfg, view_values
+        # Einstellung, mit der die Sendekette gestartet wurde: daraus stammt der Ausrichtungspuffer (belacoder -A) und die Verzögerungen, die dazu passen
+        sc = safe_cfg(start_cfg) if start_cfg else None
+        self.running_buffer = buffer_ms(sc) if sc else None
+        self.start_delays = delays_by_key(sc) if sc else {}
+        self.delays_frozen = False
         self.log, self.clock, self.fetch, self.stats, self.control, self.base = log, clock, fetch, stats, control, rtmp_base
         self.binder = pa.Binder()
         self.chooser = pa.Chooser(clock)
@@ -548,6 +578,22 @@ class LiveController:
                 self.cmd_at[s] = 0.0
                 self.log(f"send: Platz {s}: Kamera {before[s] or '-'} -> {self.binder.slot_key[s] or '-'} (ohne Neustart)")
         return True
+
+    def effective_delays(self):
+        """Verzögerung je Kamera, die der Mischer gerade bekommt. Passen die gespeicherten Verzögerungen nicht mehr zum Ausrichtungspuffer, den die Sendekette beim Start
+        berechnet hat (buffer_mismatch), bleibt sie bei den Werten vom Start, bis sie neu gestartet wird: Sonst kämen die Bilder aller Kameras mit kürzerer Verzögerung
+        zu früh am Mischer an und würden verworfen (12. Oktober 2026: Hauptbild 3 bis 9 statt 30 Bilder/s, Durchsatz halbiert). Eine Kamera, die beim Start nicht dabei war,
+        bekommt höchstens, was der laufende Puffer verträgt. Die Oberfläche meldet die Änderung als "noch nicht übernommen" (Verzögerung)."""
+        want = delays_by_key(self.cfg)
+        frozen = self.running_buffer is not None and buffer_mismatch(self.running_buffer, buffer_ms(self.cfg))
+        if frozen != self.delays_frozen:
+            self.delays_frozen = frozen
+            self.log("send: Verzögerung passt nicht zum laufenden Puffer, bleibt bis zum Neustart bei den Werten vom Start" if frozen
+                     else "send: Verzögerung passt wieder zum laufenden Puffer, gilt jetzt")
+        if frozen:
+            cap = max(0, self.running_buffer - 300)
+            want = {k: (self.start_delays[k] if k in self.start_delays else min(v, cap)) for k, v in want.items()}
+        return hold_delays(want, self.running_buffer if self.running_buffer is not None else buffer_ms(self.cfg))
 
     def read_view(self):
         """Ansicht im Betrieb: Datei main-view ("ausgeblendet Ton stumm", schreibt die Oberfläche); fehlt sie, gilt die Einstellung."""
@@ -641,7 +687,7 @@ class LiveController:
         if apos >= 0 and self.desired[apos + 1] in self.inactive:
             apos = -1                                 # deaktivierte Kamera: nie die Tonquelle, es gilt der Ton des Hauptbildes
         if self.cfg:
-            lines += self.layout.commands(self.cfg, slot_key, roles, dims, audio_ok, hide, apos, mute, delays_by_key(self.cfg))
+            lines += self.layout.commands(self.cfg, slot_key, roles, dims, audio_ok, hide, apos, mute, self.effective_delays())
         if lines and os.environ.get("PIPBOX_LIVE_DEBUG"):
             self.log("live: " + " | ".join(lines)[:1500])
         ok = self.control(lines)

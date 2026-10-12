@@ -371,7 +371,8 @@ class Sender:
         if self.live:
             self.always = pipbox_live.LiveController(
                 load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file, state_dir=STATE,
-                safe_cfg=server.PipelineStore._safe_cfg, view_values=server.PipelineStore.view_values, log=lambda m: print(m, flush=True))
+                safe_cfg=server.PipelineStore._safe_cfg, view_values=server.PipelineStore.view_values, log=lambda m: print(m, flush=True),
+                start_cfg=plan["cfg"])                 # Puffer und Verzögerungen vom Start (dieselben Werte wie belacoder -A)
         elif plan.get("always"):
             self.always = pipbox_always.Controller(
                 load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file,
@@ -491,7 +492,8 @@ class Sender:
                     "restarts": dict(self.restarts), "last": self.last, "last_age": int(time.time() - self.last_at) if self.last_at else None, "time": int(time.time()),
                     "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
                     "view_live": VIEW_LIVE, "audio_live": AUDIO_LIVE,
-                    "applied": self.plan.get("sig"), "always_note": self.plan.get("always_note"), "hang_restarts": self.hang_n}
+                    "applied": self.plan.get("sig"), "always_note": self.plan.get("always_note"), "hang_restarts": self.hang_n,
+                    "buffer_ms": pipbox_live.buffer_ms(server.PipelineStore._safe_cfg(self.plan["cfg"])) if self.live else None}      # Ausrichtungspuffer der laufenden Sendekette (belacoder -A)
         if self.always is not None:
             keys = configured_keys(self.plan["cfg"])
             st = self.always_state or {}

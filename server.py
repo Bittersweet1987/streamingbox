@@ -1997,6 +1997,11 @@ class SendControl:
         applied = d.get("applied") if active else None
         cur = srtla_signature(self.srtla.data)
         out["pending"] = [lab for k, lab in PENDING_LABELS if isinstance(applied, dict) and k in applied and applied[k] != cur[k]]
+        running = d.get("buffer_ms") if active else None
+        if isinstance(running, int) and not isinstance(running, bool):                       # Verzögerungen geändert: der Puffer der laufenden Sendekette passt nicht mehr (hilft nur ein Neustart)
+            need = pipbox_live.buffer_ms(PipelineStore._safe_cfg(self.pipeline.cfg))
+            if pipbox_live.buffer_mismatch(running, need):
+                out["pending"].append("Verzögerung")
         out["reasons"] = [] if active else self.reasons()
         if not active and belacoder_running():
             out["reasons"].append("Es läuft schon ein belacoder (z. B. über die BELABOX-Oberfläche)")
@@ -7437,6 +7442,226 @@ class TwitchNotifier:
         return {"ok": ok, "message": msg}
 
 
+class SysAlerts:
+    """Systemwarnungen im Twitch-Chat (Wunsch aus Issue #67, 12. Oktober 2026): meldet über denselben Bot wie die Akku-Warnung, wenn die Temperatur, die CPU-Last oder
+    der Arbeitsspeicher der Box eine Grenze erreicht, und optional, wenn der Wert wieder normal ist. Einstellungen: <state>/sysalerts.json (atomar geschrieben, ohne
+    Geheimnisse; Konto, Kanal und Token gehören zur Twitch-Karte und werden von dort genommen).
+
+    Standard: aus. Alle 10 s werden die Messwerte der Box gelesen (dieselben wie in der Karte "Status", kein zusätzlicher Aufwand). Eine Warnung folgt, wenn der Wert in
+    3 Messungen hintereinander (etwa 30 s) die Grenze erreicht oder überschreitet und die Pause (Cooldown) seit der letzten Meldung dieses Werts vorbei ist; bleibt er darüber,
+    kommt nach jeder Pause eine Erinnerung. "Wieder normal" kommt, wenn er die Grenze um 3 Grad (Temperatur) oder 5 Punkte (CPU, RAM) unterschreitet, nur einmal je Warnung.
+    Höchstens eine Nachricht je 3 s insgesamt (wie bei der Akku-Warnung, über denselben Sendeweg); schlägt das Senden fehl, folgt ein neuer Versuch nach 60 s, dann nach
+    der Pause. Es wird nur gesendet, wenn die Twitch-Angaben vollständig sind (und bei "Nur während der Sendung" gesendet wird). Ein Fehler hier stört nie die Sendung."""
+    METRICS = (("temp", "CPU-Temperatur", "°C", 3, (40, 100), 75), ("cpu", "CPU-Auslastung", "%", 5, (20, 100), 90), ("ram", "RAM-Auslastung", "%", 5, (20, 100), 90))
+    DEFAULT_ALERT = "Warnung: {Name} bei {Wert} (Grenze {Grenze})"
+    DEFAULT_OK = "{Name} wieder normal ({Wert})"
+    DEFAULTS = {"enabled": False, "cooldown": 10, "recover": True, "only_live": True, "msg_alert": DEFAULT_ALERT, "msg_ok": DEFAULT_OK,
+                **{k: {"on": True, "limit": dflt} for k, _n, _u, _h, _r, dflt in METRICS}}
+    POLL_S = 10
+    SUSTAIN = 3                                   # Messungen hintereinander über der Grenze (etwa 30 s)
+    RETRY_S = 60
+    COOLDOWN = (1, 120)                           # Minuten
+
+    def __init__(self, path, notifier, sampler, demo=False, mono=time.monotonic, wall=time.time):
+        self.path, self.notifier, self.sampler, self.demo = path, notifier, sampler, demo
+        self.mono, self.wall = mono, wall
+        self.lock = threading.Lock()
+        self.data = json.loads(json.dumps(self.DEFAULTS))
+        self.state = {k: {"over": 0, "alerting": False, "last": None, "retry": None, "pending_ok": False} for k, *_ in self.METRICS}
+        self.last = None                          # {"ok", "time", "text"}
+        self.stop_ev = threading.Event()
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            saved = None
+        if isinstance(saved, dict):
+            try:
+                self.data = self._merge(self.data, saved, strict=False)
+            except ValueError:
+                pass
+
+    # ---- Prüfung
+    @classmethod
+    def _int(cls, v, lo, hi, error):
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ValueError(error)
+        return v
+
+    @classmethod
+    def _merge(cls, base, req, strict=True):
+        """Neue Werte in die Einstellungen übernehmen. strict: ungültige Angaben werfen ValueError; sonst (gespeicherte Datei) bleibt der Standard."""
+        new = json.loads(json.dumps(base))
+
+        def take(fn):
+            try:
+                fn()
+            except ValueError:
+                if strict:
+                    raise
+        for key in ("enabled", "recover", "only_live"):
+            if key in req:
+                if isinstance(req[key], bool):
+                    new[key] = req[key]
+                elif strict:
+                    raise ValueError("ja oder nein")
+        if "cooldown" in req:
+            def f():
+                new["cooldown"] = cls._int(req["cooldown"], cls.COOLDOWN[0], cls.COOLDOWN[1], "Pause: Zahl von %d bis %d Minuten" % cls.COOLDOWN)
+            take(f)
+        for key, name, unit, _h, (lo, hi), _d in cls.METRICS:
+            sub = req.get(key)
+            if isinstance(sub, dict):
+                if "on" in sub:
+                    if isinstance(sub["on"], bool):
+                        new[key]["on"] = sub["on"]
+                    elif strict:
+                        raise ValueError("ja oder nein")
+                if "limit" in sub:
+                    def g(key=key, sub=sub, name=name, unit=unit, lo=lo, hi=hi):
+                        new[key]["limit"] = cls._int(sub["limit"], lo, hi, "%s: Zahl von %d bis %d" % (name, lo, hi))
+                    take(g)
+            elif sub is not None and strict:
+                raise ValueError("Ungültige Anfrage")
+        for key in ("msg_alert", "msg_ok"):
+            if key in req:
+                def h(key=key):
+                    new[key] = TwitchStore._message(req[key])
+                take(h)
+        return new
+
+    def _write(self, data):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=1)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+    def save(self, req):
+        if not isinstance(req, dict):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            new = self._merge(self.data, req, strict=True)
+            try:
+                self._write(new)
+            except OSError:
+                raise RuntimeError("Die Einstellungen konnten nicht gespeichert werden")
+            self.data = new
+            for st in self.state.values():
+                st.update(over=0, retry=None)
+        return self.status()
+
+    # ---- Bausteine
+    @staticmethod
+    def render(template, name, value, limit):
+        """{Name}, {Wert} und {Grenze} ersetzen (in einem Durchgang)."""
+        vals = {"Name": name, "Wert": value, "Grenze": limit}
+        return re.sub(r"\{(Name|Wert|Grenze)\}", lambda m: vals[m.group(1)], template)
+
+    @staticmethod
+    def fmt(v, unit):
+        return "%d %s" % (round(v), unit)
+
+    def values(self):
+        """Aktuelle Messwerte {temp, cpu, ram} (None, wenn nicht messbar)."""
+        try:
+            s = self.sampler.sample() or {}
+        except Exception:
+            return {"temp": None, "cpu": None, "ram": None}
+
+        def num(v):
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+        return {"temp": num(s.get("temp_c")), "cpu": num((s.get("cpu") or {}).get("avg")), "ram": num((s.get("mem") or {}).get("used_pct"))}
+
+    def _creds(self):
+        cfg = self.notifier.store.notify_settings()
+        return cfg if (cfg.get("login") and cfg.get("channel") and cfg.get("token")) else None
+
+    def _live(self):
+        return self.notifier._live()
+
+    def _send(self, cfg, text):
+        ok, msg = self.notifier._deliver(cfg, text, wait=True)
+        with self.lock:
+            self.last = {"ok": ok, "time": int(self.wall()), "text": text if ok else msg}
+        return ok
+
+    # ---- Dienst
+    def tick(self):
+        with self.lock:
+            data = json.loads(json.dumps(self.data))
+        if not data["enabled"]:
+            self._reset()
+            return
+        cfg = self._creds()
+        if cfg is None:
+            self._reset()
+            return
+        if data["only_live"] and not self._live():
+            self._reset(keep_alert=True)               # ohne Sendung nichts melden; eine laufende Warnung bleibt vermerkt
+            return
+        vals = self.values()
+        now = self.mono()
+        pause = data["cooldown"] * 60
+        for key, name, unit, hyst, _r, _d in self.METRICS:
+            m, v = data[key], vals[key]
+            st = self.state[key]
+            if not m["on"] or v is None:
+                st.update(over=0)
+                continue
+            limit = m["limit"]
+            st["over"] = st["over"] + 1 if v >= limit else 0
+            if st["retry"] is not None and now < st["retry"]:
+                continue                                  # wartet auf den nächsten Versuch
+            if st["over"] >= self.SUSTAIN and (st["last"] is None or now - st["last"] >= pause):
+                text = self.render(data["msg_alert"], name, self.fmt(v, unit), self.fmt(limit, unit))
+                if self._send(cfg, text):
+                    st.update(alerting=True, last=now, retry=None, pending_ok=data["recover"])
+                else:
+                    st["retry"] = now + self.RETRY_S
+            elif st["alerting"] and v < limit - hyst:
+                st["alerting"] = False
+                if st["pending_ok"] and data["recover"]:
+                    text = self.render(data["msg_ok"], name, self.fmt(v, unit), self.fmt(limit, unit))
+                    if not self._send(cfg, text):
+                        st["alerting"], st["retry"] = True, now + self.RETRY_S      # nicht gesendet: beim nächsten Versuch noch einmal
+                        continue
+                st["pending_ok"] = False
+
+    def _reset(self, keep_alert=False):
+        for st in self.state.values():
+            st.update(over=0, retry=None)
+            if not keep_alert:
+                st.update(alerting=False, pending_ok=False)
+
+    def run(self):
+        while not self.stop_ev.is_set():
+            try:
+                self.tick()
+            except Exception as e:                  # nie den Dienst beenden; vom Text der Ausnahme nur den Typ ausgeben
+                print("sysalerts:", type(e).__name__)
+            self.stop_ev.wait(self.POLL_S)
+
+    # ---- für die Oberfläche
+    def status(self):
+        with self.lock:
+            d = json.loads(json.dumps(self.data))
+            last = dict(self.last) if self.last else None
+        vals = self.values()
+        return dict(d, ready=self._creds() is not None,
+                    values={k: (None if vals[k] is None else round(vals[k], 1)) for k in vals},
+                    alerting=[k for k, st in self.state.items() if st["alerting"]], last=last)
+
+
 class Vault:
     """Einstellungen mit einem Passwort verschlüsseln und prüfen (Issue #20). Nur die Standardbibliothek:
       * Schlüssel aus dem Passwort: PBKDF2-HMAC-SHA256, 600000 Runden, 16 Byte Salz, 64 Byte Ergebnis (32 für AES, 32 für die Prüfsumme).
@@ -9093,6 +9318,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.netaddr.status())
         if path == "/api/twitch":
             return self.reply(200, self.twitch.status())
+        if path == "/api/sysalerts":
+            return self.reply(200, self.sysalerts.status())
         if path == "/api/twitch/login":
             return self.reply(200, self.twitchaccounts.status(self.headers.get("x-pb-owner", "")))
         if path == "/api/twitch/bot":
@@ -9357,6 +9584,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, self.chatsender.say_as(mv, HelixChat(acct, mv), d.get("text"), key, commands=role == "mod"))
             if path == "/api/twitch":
                 return self.reply(200, self.twitch.save(d))
+            if path == "/api/sysalerts":
+                return self.reply(200, self.sysalerts.save(d))
             if path == "/api/twitch/test":
                 return self.reply(200, self.twitch.test())
             if path == "/api/hdmi":
@@ -9478,6 +9707,7 @@ def main():
             print("iface_macs:", type(e).__name__, flush=True)
         threading.Thread(target=mem.run, args=(Handler.srtla, Handler.netchoice, Handler.cams, Handler.wifi, Handler.names), daemon=True).start()
     Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, chat=TwitchChat(paths=Handler.chatpaths), demo=args.demo)
+    Handler.sysalerts = SysAlerts(os.path.join(args.state, "sysalerts.json"), Handler.twitch, Handler.sampler, demo=args.demo)       # Systemwarnungen im Twitch-Chat (gleicher Bot wie die Akku-Warnung)
     Handler.twitchlogin = TwitchLogin(os.path.join(args.state, "twitch-login.json"), demo=args.demo, paths=Handler.chatpaths)
     Handler.twitch.store.account = Handler.twitchlogin                                # angemeldetes Konto ersetzt Bot-Konto und Token von Hand
     Handler.twitchbot = TwitchBotLogin(os.path.join(args.state, "twitch-bot-login.json"), demo=args.demo, paths=Handler.chatpaths)
@@ -9499,6 +9729,7 @@ def main():
     Handler.transfer.hdmi, Handler.transfer.twitch = Handler.hdmi, Handler.twitch.store
     if not args.demo:
         threading.Thread(target=Handler.twitch.run, daemon=True).start()
+        threading.Thread(target=Handler.sysalerts.run, daemon=True).start()
 
     def watcher():
         while True:
