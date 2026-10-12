@@ -938,7 +938,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
         <details class="pvs" data-k="3"></details>
       </div>
     </div>
-    <div id="dl_warn" class="ph" role="note" hidden style="color:var(--warn)">Die Verzögerungen der Kameras unterscheiden sich um mehr als 2000 ms. Das kann dazu führen, dass einzelne Bilder ruckeln. Besser den Unterschied klein halten.</div>
+    <div id="dl_warn" class="ph" role="note" hidden style="color:var(--warn)">Mit „Alle Kameras immer bereit“ werden Verzögerungen über 750 ms auf 750 ms begrenzt. Größere Werte ließen das Hauptbild ruckeln.</div>
     <div class="piponly pvwrap"><div class="sech">Vorschau: kleine Bilder verschieben</div><div id="pvbox" class="pvbox"></div><div id="pvnote" class="ph"></div></div>
     <label class="muted" style="display:block;margin-top:12px"><input type="checkbox" id="p_auto" checked> Automatisch umschalten, wenn eine Kamera ausfällt (nach 5 s ohne Signal; zurück nach 60 s stabilem Signal)</label>
     <label class="muted piponly" style="display:block;margin-top:12px">Hauptbild tauschen ohne Unterbrechung (experimentell)
@@ -2390,12 +2390,12 @@ function setDelays(vals){
 }
 function delayBody(){ const o={}; DL.forEach(([r,n,v,k])=>{ o[k]=+($(n).value||0); }); return o; }
 const isDelayCtl=id=>DL.some(([r,n])=>id===r||id===n);
-const DL_SPREAD_WARN=2000;               // Unterschied zwischen der größten und kleinsten Verzögerung (ms), ab dem gewarnt wird (12. Oktober 2026: 2560 gegen 450 und 0 ließ zwei von drei Zweigen ruckeln; die Sendekette hebt die Haltezeit inzwischen selbst an, die Warnung ist die zweite Sicherung)
+const DL_ENGINE_MAX=750;                  // größte Verzögerung der Engine "Alle Kameras immer bereit" (pipbox_live.MAX_DELAY_MS): mehr wird dort begrenzt (12. Oktober 2026: 2560 ms ließen das Hauptbild ruckeln)
 function dlWarn(){
   const el=$("dl_warn"); if(!el) return;
-  const pip=$("p_type").value==="pip", vals=[+$("n_delay").value||0];       // Hauptbild immer, kleine Bilder nur mit gewählter Kamera
+  const pip=$("p_type").value==="pip", always=!!($("p_always")&&$("p_always").checked), vals=[+$("n_delay").value||0];       // Hauptbild immer, kleine Bilder nur mit gewählter Kamera
   if(pip) [["p_pip","n_delay1"],["p_pip2","n_delay2"],["p_pip3","n_delay3"]].forEach(([s,n])=>{ if($(s).value) vals.push(+$(n).value||0); });
-  el.hidden=!(pip&&vals.length>1&&Math.max(...vals)-Math.min(...vals)>DL_SPREAD_WARN);
+  el.hidden=!(pip&&always&&Math.max(...vals)>DL_ENGINE_MAX);
 }
 // Der Schlüssel in Klammern erscheint nur, wenn zwei Kameras denselben Namen tragen (sonst reicht der Name)
 const pipOpt=(k,sel)=>`<option value="${esc(k.key)}"${k.key===sel?" selected":""}>${esc(k.name)}${pipCams.filter(x=>x.name===k.name).length>1?" ("+esc(k.key)+")":""}${k.state==="live"?" · sendet":""}</option>`;
