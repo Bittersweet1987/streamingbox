@@ -438,7 +438,9 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 .dcam .flb.crit{color:var(--crit)}
 .dcam .flb:disabled{opacity:.4;cursor:default}
 .dcam .d-nearmsg{font-size:12px;color:var(--warn);margin-top:4px}.dcam .d-nearmsg:empty{display:none}
-.camreconn{margin-left:4px;padding:2px 8px;line-height:1.2}
+.camreconn{flex:none;padding:2px 8px;line-height:1.2}
+.cam .camnet.withbtn{display:flex;align-items:center;gap:4px;overflow:visible}
+.cam .camnet.withbtn select{flex:1 1 0;min-width:0;width:auto}
 .dcam .dnet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px}
 @media (max-width:560px){.dcam .dnet{grid-template-columns:minmax(0,1fr)}}
 .dcam .dnet[hidden],.dcam div.f[hidden],.dcam label.f[hidden]{display:none}
@@ -1208,7 +1210,7 @@ function camNetHtml(c){
     const opts=[`<option value=""${own?"":" selected"}>– wählen –</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${own&&c.via===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
     if(own&&c.via==="manual") opts.push(`<option value="manual" selected disabled>Manuell (in der DJI-Karte)</option>`);
     else if(own&&c.via&&!netOpts.some(o=>o.iface===c.via)) opts.push(`<option value="${esc(c.via)}" selected>${esc(c.via)} (nicht verbunden)</option>`);
-    return `<span class="camnet"><select class="camnetsel" data-dji="${esc(c.key)}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz. Eine Änderung gilt ab der nächsten Verbindung der Kamera." aria-label="Verbindung">${opts.join("")}</select><button type="button" class="camreconn sec" data-dji="${esc(c.key)}" title="Neu verbinden: Die geänderte Verbindung gilt erst danach (der Stream der Kamera ist kurz weg)" aria-label="Neu verbinden">↻</button></span>`;
+    return `<span class="camnet withbtn"><select class="camnetsel" data-dji="${esc(c.key)}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz. Eine Änderung gilt ab der nächsten Verbindung der Kamera." aria-label="Verbindung">${opts.join("")}</select><button type="button" class="camreconn sec" data-dji="${esc(c.key)}" title="Neu verbinden: Die geänderte Verbindung gilt erst danach (der Stream der Kamera ist kurz weg)" aria-label="Neu verbinden">↻</button></span>`;
   }
   const opts=[`<option value="">Hauptverbindung (Standard)</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${c.iface===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
   if(c.iface&&!netOpts.some(o=>o.iface===c.iface)) opts.push(`<option value="${esc(c.iface)}" selected>${esc(c.iface)} (nicht verbunden)</option>`);
