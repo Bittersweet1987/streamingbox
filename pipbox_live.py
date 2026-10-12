@@ -171,7 +171,8 @@ def slot_keys(c):
     return list(b.slot_key)
 
 
-MAX_DELAY_MS = 750                         # größte Verzögerung, die diese Engine verarbeitet (Einstellung bis 3000 ms bleibt für die älteren Engines gültig)
+MAX_DELAY_MS = 750
+HOLD_FILE = "feed-hold.json"       # {"keys": {Schlüssel: Ablaufzeit (Unix-Sekunden)}}: der Kamera-Dienst bittet, den Zweig dieser Kamera zu stoppen, bevor er ihren Stream beendet                         # größte Verzögerung, die diese Engine verarbeitet (Einstellung bis 3000 ms bleibt für die älteren Engines gültig)
 
 
 def delays_by_key(c):
@@ -537,8 +538,10 @@ class LiveController:
     (6) die geänderten Befehle für Bildflächen, Rahmen, Ton, Stumm und Verzögerung senden."""
 
     def __init__(self, load_json, put_state_file, state_dir, safe_cfg, view_values, log=print, clock=time.monotonic,
-                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE, start_cfg=None):
+                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE, start_cfg=None, wall=time.time):
         self.load_json, self.put, self.state_dir = load_json, put_state_file, state_dir
+        self.wall = wall                           # Uhrzeit für die Ablaufzeiten in feed-hold.json (der Kamera-Dienst schreibt Unix-Sekunden)
+        self.held = set()
         self.safe_cfg, self.view_values = safe_cfg, view_values
         # Einstellung, mit der die Sendekette gestartet wurde: daraus stammt der Ausrichtungspuffer (belacoder -A) und die Verzögerungen, die dazu passen
         sc = safe_cfg(start_cfg) if start_cfg else None
@@ -645,12 +648,22 @@ class LiveController:
         self._view_pending = True
         self.reassign_lines = [f"set sbf{s}_src location {self.base}/{self.binder.slot_key[s] or PLACEHOLDER % s}" for s in range(SLOTS)]
 
+    def read_hold(self):
+        """Kameras, deren Zweig gerade gestoppt bleiben soll (Datei feed-hold.json, vom Kamera-Dienst geschrieben): Bevor eine Kamera beim Wechsel ihres Netzes oder beim
+        Trennen ihren Stream beendet, nimmt der Regler ihren Zweig aus der Sendekette. Ein Zweig, dessen Quelle mitten im Bild abbricht, hielt sonst (12. Oktober 2026,
+        Testbox) alle Eingänge der Sendekette bis zu 25 s an und endete mit einem Neustart. Abgelaufene Einträge zählen nicht."""
+        d = self.load_json(HOLD_FILE)
+        keys = d.get("keys") if isinstance(d, dict) else None
+        now = self.wall()
+        self.held = {k for k, t in keys.items() if isinstance(k, str) and isinstance(t, (int, float)) and not isinstance(t, bool) and t > now} if isinstance(keys, dict) else set()
+
     def _cooldown_ok(self, s, now):
         return now - self.cmd_at.get(s, -100.0) > FEED_COOLDOWN_S
 
     def tick(self):
         now = self.clock()
         self.reload()
+        self.read_hold()
         view_changed = self.read_view()
         reassign = self.reassign_lines
         self.reassign_lines = []
@@ -667,7 +680,7 @@ class LiveController:
             if st is None or not self.pub_known:
                 continue
             # eine deaktivierte Kamera (Doppelklick) ist nicht im Stream: ihr Zweig läuft gar nicht (Hauptbild ist nie deaktiviert)
-            want_on = bool(key) and key in self.pub and not (key in self.inactive and key != self.desired[0])
+            want_on = bool(key) and key in self.pub and key not in self.held and not (key in self.inactive and key != self.desired[0])
             cmd = None
             if want_on and st == 1:
                 cmd = "on"
@@ -678,7 +691,7 @@ class LiveController:
                 lines.append(f"feed sbf{s} {cmd}")
                 self.log(f"send: Kamera {key or '-'} (Platz {s}): {cmd}")
         self.alive = {slot_key[s] for s in range(SLOTS) if slot_key[s] and self.states.get(s) == 3 and slot_key[s] in self.pub
-                      and not (slot_key[s] in self.inactive and slot_key[s] != self.desired[0])}
+                      and slot_key[s] not in self.held and not (slot_key[s] in self.inactive and slot_key[s] != self.desired[0])}
         slot_of = {k: i for i, k in enumerate(slot_key) if k}
         line, main = self.chooser.line(self.desired, slot_of, self.alive, self.inactive)
         if line != self.last_line:
