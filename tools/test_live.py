@@ -169,6 +169,25 @@ class Commands(unittest.TestCase):
         self.assertIn("set sbf1_vq min-threshold-time 0", lines)
 
 
+class AudioQueues(unittest.TestCase):
+    """Die Warteschlangen des Tons wachsen mit dem Puffer (Ton wartet bis zum Termin; fest 2 s + 1 s lief bei Puffern über 2,5 s über)."""
+
+    def text(self, **cfg):
+        return L.build(safe(cfg))
+
+    def test_normal_buffer_keeps_two_seconds_at_least(self):
+        t = self.text()                                                     # Puffer 750
+        self.assertIn("sbf0_aq max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0", t)
+        self.assertIn("sbf0_aq2 max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0", t)
+
+    def test_large_buffer_gets_larger_queues_on_every_branch(self):
+        t = self.text(pip_delay_ms=2560)                                    # Puffer 2860
+        for n in range(4):
+            self.assertIn(f"sbf{n}_aq max-size-time=3860000000 max-size-buffers=0 max-size-bytes=0", t)
+            self.assertIn(f"sbf{n}_aq2 max-size-time=3860000000 max-size-buffers=0 max-size-bytes=0", t)
+        self.assertNotIn("max-size-time=2000000000 !", t.replace("max-size-time=2000000000 max-size-buffers", ""))
+
+
 class BufferMismatch(unittest.TestCase):
     """Passt der Ausrichtungspuffer der laufenden Sendekette noch zu den gespeicherten Verzögerungen? (12. Oktober 2026)"""
 
@@ -204,7 +223,9 @@ class HoldDelays(unittest.TestCase):
 
     def test_the_case_from_the_test_box(self):
         d = {"hauptbild": 450, "usb": 2560, "pocket": 0}                    # Puffer 2860
-        self.assertEqual(L.hold_delays(d, 2860), {"hauptbild": 1860, "usb": 2560, "pocket": 1860})
+        self.assertEqual(L.hold_delays(d, 2860), {"hauptbild": 1860, "usb": 2560, "pocket": 1860})              # ohne Angabe des Hauptbilds: alle 1000 ms
+        self.assertEqual(L.hold_delays(d, 2860, "hauptbild"), {"hauptbild": 2260, "usb": 2560, "pocket": 1860})     # das ganzflächige Hauptbild: 600 ms
+        self.assertEqual(L.hold_delays(d, 2860, "unbekannt"), {"hauptbild": 1860, "usb": 2560, "pocket": 1860})     # unbekannter Schlüssel ändert nichts
 
     def test_a_larger_delay_than_the_floor_is_never_lowered(self):
         self.assertEqual(L.hold_delays({"a": 3000, "b": 2000, "c": 100}, 3300), {"a": 3000, "b": 2300, "c": 2300})
@@ -223,6 +244,30 @@ class HoldDelays(unittest.TestCase):
                     self.assertLessEqual(buf - out[k], L.LEAD_MAX_MS, (combo, k))
                 self.assertLessEqual(out[k], buf - 300, (combo, k))           # nie später als Termin minus 300 ms: es kommt nie zu spät
                 self.assertLessEqual(out[k], 3000, (combo, k))                # nie über die größte erlaubte Verzögerung
+
+    def test_the_big_picture_never_gets_more_than_600_ms_lead_and_normal_setups_stay_untouched(self):
+        for buf, d, big in ((600, {"a": 0, "b": 0, "c": 0}, "a"),                      # alles 0: der gemessene gesunde Fall der Testbox
+                            (750, {"a": 450, "b": 0, "c": 0}, "a"),                    # Standard: Hauptbild mit 450 ms
+                            (600, {"a": 0, "b": 0, "c": 0}, None), (750, {"a": 450, "b": 0, "c": 0}, None)):
+            self.assertEqual(L.hold_delays(d, buf, big), d, (buf, d, big))             # nichts ändert sich
+        # Ist das große Bild eine Kamera mit kleinerer Verzögerung als der Puffer erlaubt, bekommt sie die Untergrenze (Puffer - 600):
+        self.assertEqual(L.hold_delays({"a": 0, "b": 450, "c": 0}, 750, "a"), {"a": 150, "b": 450, "c": 0})
+        self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1000, "a"), {"a": 400, "b": 0})  # die kleinen Bilder erst ab Puffer über 1000
+
+    def test_invariants_with_a_big_picture(self):
+        import itertools
+        vals = (0, 450, 1000, 2560, 3000)
+        for combo in itertools.product(vals, repeat=3):
+            d = {"a": combo[0], "b": combo[1], "c": combo[2]}
+            buf = max(L.BUFFER_MIN_MS, max(combo) + 300)
+            for big in ("a", "b", "c", None):
+                out = L.hold_delays(d, buf, big)
+                for k in d:
+                    lim = L.LEAD_MAX_BIG_MS if k == big else L.LEAD_MAX_MS
+                    self.assertGreaterEqual(out[k], d[k], (combo, big, k))
+                    self.assertLessEqual(out[k], buf - 300, (combo, big, k))
+                    if d[k] <= buf - lim:
+                        self.assertLessEqual(buf - out[k], lim, (combo, big, k))
 
     def test_effective_delays_apply_the_floor_on_top_of_the_freeze(self):
         # Start mit 2560 ms bei einem kleinen Bild (Puffer 2860). Alles auf 0 gesetzt: eingefroren auf die Werte vom Start, davon wird die Haltezeit gebildet.
@@ -290,14 +335,15 @@ class FrozenDelays(unittest.TestCase):
         """Hauptbild 450, kleines Bild 1 mit 2560, die übrigen 0, Puffer 2860: Kein Zweig darf mehr als 1000 ms früh am Mischer ankommen (vorher: 3 bis 9 statt 30 Bilder/s)."""
         self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})
         d = self.delays(self.tick())
-        self.assertEqual(d, {"sbf0": 1893, "sbf1": 2593, "sbf2": 1893, "sbf3": 1893})
-        for slot, hold in d.items():
-            self.assertLessEqual(2860 - (hold - 33), 1000 if hold != 2593 else 2860)     # früher als 1000 ms vor dem Termin kommt nur ein Bild an, dessen eingestellte Haltezeit schon größer war
+        self.assertEqual(d, {"sbf0": 2293, "sbf1": 2593, "sbf2": 1893, "sbf3": 1893})      # Hauptbild: Vorlauf 600 ms, kleine Bilder: 1000 ms, das mit 2560 bleibt
+        self.assertLessEqual(2860 - (d["sbf0"] - 33), 600)                    # das ganzflächige Hauptbild kommt höchstens 600 ms vor seinem Termin an
+        for slot in ("sbf2", "sbf3"):
+            self.assertLessEqual(2860 - (d[slot] - 33), 1000)                 # kleine Bilder höchstens 1000 ms
 
     def test_a_change_that_does_not_fit_the_buffer_is_not_applied(self):
         self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})              # Puffer 2860, wie bei der Testbox
         first = self.delays(self.tick())
-        self.assertEqual(first["sbf0"], 1893)                                # Hauptbild 450 ms wird auf 1860 ms angehoben (Puffer 2860 - 1000), plus ein Bild
+        self.assertEqual(first["sbf0"], 2293)                                # Hauptbild 450 ms wird auf 2260 ms angehoben (Puffer 2860 - 600), plus ein Bild
         self.assertEqual(first["sbf1"], 2593)                                # die große Verzögerung bleibt, wie sie ist
         self.f.cfg.update(main_delay_ms=0, pip_delay_ms=0)                   # alles auf 0: bräuchte 600, der Puffer steht bei 2860
         self.assertEqual(self.delays(self.tick()), {})                       # nichts geändert: die Sendung bleibt im Takt
