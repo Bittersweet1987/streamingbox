@@ -289,15 +289,16 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('$("live_topipe").addEventListener("click"', PAGE)
         self.assertIn('out["no_layout"] = not active and not self.pipeline.cfg.get("main")', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
 
-    def test_live_card_warns_about_two_connections_to_one_network(self):
-        """Zwei Karten im selben Netz (WLAN und LAN oder zweimal WLAN): kleine Warnung in der Live-Karte mit den Kartennamen, auch während der Sendung (Wunsch des Nutzers)."""
+    def test_live_card_warns_about_one_address_range_at_two_devices(self):
+        """Derselbe Adressbereich bei zwei verschiedenen Geräten (zum Beispiel zwei Modems mit 192.168.8.x): kleine Warnung in der Live-Karte mit Kartennamen und Netz, auch während der Sendung. LAN und WLAN am selben Router warnt nicht (Wunsch des Nutzers, 12. Oktober 2026)."""
         self.assertIn('<div id="nethint" class="pending" hidden>', PAGE)
-        self.assertIn("Zwei Verbindungen zum selben Netzwerk sind nicht sinnvoll: Meist gibt es Adresskonflikte, und Kameras können ausfallen. Bitte eine davon trennen:", PAGE)
+        self.assertIn("Zwei Verbindungen nutzen denselben Adressbereich bei verschiedenen Geräten (zum Beispiel zwei Modems oder Hotspots mit 192.168.8.x): Das führt zu Adresskonflikten, und Kameras können ausfallen. Bitte eine davon trennen:", PAGE)
         self.assertIn('id="nethint_cards"', PAGE)
-        self.assertIn('$("nethint").hidden=ov.length<2; $("nethint_cards").textContent=ov.join(", ");', PAGE)            # textContent: Kartennamen nie als HTML
+        self.assertIn('$("nethint").hidden=cards.length<2; $("nethint_cards").textContent=cards.join(", ")+(nets.length?" ("+nets.join(", ")+")":"");', PAGE)    # textContent: nie als HTML
         self.assertNotIn("nethint_cards\").innerHTML", PAGE)
+        self.assertNotIn("net_overlap", PAGE)                                                                                  # nicht mehr an jede Überschneidung gebunden
         self.assertNotIn('$("nethint").hidden=!(!d.active', PAGE)                                                       # nicht an "keine Sendung" gebunden
-        self.assertIn('out["net_overlap"] = net_overlap()', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
+        self.assertIn('out["net_conflict"] = net_conflict()', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
 
     def test_live_card_hints_missing_srtla_server(self):
         """Noch kein SRTLA-Server eingetragen: Live ist grau; die Live-Karte sagt es oben wie beim fehlenden Bildaufbau und führt zum Server (Wunsch des Nutzers)."""

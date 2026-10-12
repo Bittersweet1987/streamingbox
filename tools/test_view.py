@@ -756,8 +756,8 @@ class Deactivate(unittest.TestCase):
             self.send.srtla.public = lambda: {"servers": [], "selected": ""}
             self.assertFalse(self.send.status()["no_server"])
 
-    def test_status_reports_cards_in_the_same_network(self):
-        """Zwei Karten im selben Netz (Stand des Adress-Wächters): status() meldet net_overlap, auch während der Sendung (Wunsch des Nutzers, 12. Oktober 2026)."""
+    def test_status_reports_a_clash_of_address_ranges(self):
+        """Derselbe Adressbereich bei zwei verschiedenen Geräten (Stand des Adress-Wächters): status() meldet net_conflict, auch während der Sendung. LAN und WLAN am selben Router ist keiner."""
         pl = self.make()
         self.send._active = lambda: False
         self.send._detail = lambda: {}
@@ -766,13 +766,15 @@ class Deactivate(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         path = os.path.join(tmp, "status.json")
         with mock.patch.object(server, "belacoder_running", lambda: False), mock.patch.object(server, "ARP_STATUS", path):
-            self.assertEqual(self.send.status()["net_overlap"], [])                                            # Wächter läuft nicht (keine Datei)
-            json.dump({"overlap": ["eth1", "wlan0"], "fixed": [], "time": int(time.time())}, open(path, "w"))
-            self.assertEqual(self.send.status()["net_overlap"], ["eth1", "wlan0"])
+            self.assertIsNone(self.send.status()["net_conflict"])                                              # Wächter läuft nicht (keine Datei)
+            json.dump({"overlap": ["eth1", "wlan0"], "conflict": [], "nets": [], "fixed": [], "time": int(time.time())}, open(path, "w"))
+            self.assertIsNone(self.send.status()["net_conflict"])                                              # nur überschneidend, derselbe Router: keine Warnung
+            json.dump({"overlap": ["wlan0", "wlan1"], "conflict": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"], "fixed": [], "time": int(time.time())}, open(path, "w"))
+            self.assertEqual(self.send.status()["net_conflict"], {"cards": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"]})
             self.send._active = lambda: True
-            self.assertEqual(self.send.status()["net_overlap"], ["eth1", "wlan0"])                             # auch während der Sendung
+            self.assertEqual(self.send.status()["net_conflict"]["cards"], ["wlan0", "wlan1"])                  # auch während der Sendung
 
-    def test_net_overlap_reads_the_state_strictly(self):
+    def test_net_conflict_reads_the_state_strictly(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
         path = os.path.join(tmp, "s.json")
@@ -780,17 +782,22 @@ class Deactivate(unittest.TestCase):
         def put(obj, raw=None):
             with open(path, "w") as f:
                 f.write(raw if raw is not None else json.dumps(obj))
-            return server.net_overlap(path)
+            return server.net_conflict(path)
         now = int(time.time())
-        self.assertEqual(put({"overlap": ["eth1", "wlan0"], "time": now}), ["eth1", "wlan0"])
-        self.assertEqual(put({"overlap": ["eth1", "wlan0"], "time": now - 600}), [])                           # veraltet: der Wächter läuft nicht mehr
-        self.assertEqual(put({"overlap": ["eth1", "wlan0"]}), [])                                              # ohne Zeit
-        self.assertEqual(put({"overlap": ["eth1", "<b>x</b>", 5, "a" * 40, "wlan0"], "time": now}), ["eth1", "wlan0"])      # nur Kartennamen
-        self.assertEqual(put({"overlap": ["eth%d" % i for i in range(20)], "time": now}), ["eth%d" % i for i in range(8)])
-        self.assertEqual(put(None, raw="{kaputt"), [])
-        self.assertEqual(put(None, raw="[1,2]"), [])
-        self.assertEqual(put({"overlap": "eth1", "time": now}), [])
-        self.assertEqual(server.net_overlap(os.path.join(tmp, "gibts-nicht.json")), [])
+        ok = {"conflict": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"], "time": now}
+        self.assertEqual(put(ok), {"cards": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"]})
+        self.assertIsNone(put(dict(ok, time=now - 600)))                                                       # veraltet: der Wächter läuft nicht mehr
+        self.assertIsNone(put({k: v for k, v in ok.items() if k != "time"}))                                   # ohne Zeit
+        self.assertIsNone(put(dict(ok, conflict=["wlan0"])))                                                   # eine Karte ist kein Konflikt
+        self.assertIsNone(put(dict(ok, conflict=[])))
+        self.assertEqual(put(dict(ok, conflict=["wlan0", "<b>x</b>", 5, "a" * 40, "wlan1"]))["cards"], ["wlan0", "wlan1"])     # nur Kartennamen
+        self.assertEqual(put(dict(ok, conflict=["eth%d" % i for i in range(20)]))["cards"], ["eth%d" % i for i in range(8)])
+        self.assertEqual(put(dict(ok, nets=["192.168.8.0/24", "<script>", 5, "999999999999999/1"]))["nets"], ["192.168.8.0/24"])
+        self.assertEqual(put(dict(ok, nets="x"))["nets"], [])
+        self.assertIsNone(put(None, raw="{kaputt"))
+        self.assertIsNone(put(None, raw="[1,2]"))
+        self.assertIsNone(put(dict(ok, conflict="wlan0")))
+        self.assertIsNone(server.net_conflict(os.path.join(tmp, "gibts-nicht.json")))
 
     def test_export_and_import_carry_it(self):
         pl = self.make()

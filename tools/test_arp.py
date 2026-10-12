@@ -37,6 +37,7 @@ class Env:
         for name in self.cards:
             self.mk(name)
         self.lines = None                             # eigene `ip`-Ausgabe (statt aus cards)
+        self.gateways = {}                            # Karte -> (Gateway-Adresse, Hardware-Adresse des Routers oder None = noch nicht bekannt)
         self.ip_fails = False
         self.patches = [mock.patch.object(arp, "CONF", self.conf), mock.patch.object(arp, "RUN", self.run),
                         mock.patch.object(arp, "STATE", f"{self.run}/state.json"), mock.patch.object(arp, "STATUS", f"{self.run}/status.json"),
@@ -63,6 +64,14 @@ class Env:
         assert cmd[:2] == ["ip", "-4"], cmd
         if self.ip_fails:
             return subprocess.CompletedProcess(cmd, 1, "", "kaputt")
+        if "route" in cmd:                                                   # ip -4 -o route show default dev X
+            gw = self.gateways.get(cmd[-1])
+            out = f"default via {gw[0]} dev {cmd[-1]} proto dhcp metric 600" if gw else ""
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        if "neigh" in cmd:                                                   # ip -4 -o neigh show dev X
+            gw = self.gateways.get(cmd[-1])
+            out = f"{gw[0]} dev {cmd[-1]} lladdr {gw[1]} REACHABLE" if gw and gw[1] else ""
+            return subprocess.CompletedProcess(cmd, 0, out, "")
         if self.lines is not None:
             return subprocess.CompletedProcess(cmd, 0, "\n".join(self.lines), "")
         out = [line(i + 2, n, c) for i, (n, c) in enumerate(self.cards.items())]
@@ -204,6 +213,62 @@ class Apply(unittest.TestCase):
             self.skipTest("als Root nicht nachstellbar")
         arp.step()                                                          # darf nicht abstürzen
         self.assertEqual(e.get("eth1", "arp_ignore"), 0)
+
+
+class Conflict(unittest.TestCase):
+    """Warnung nur dort, wo derselbe Adressbereich bei verschiedenen Geräten benutzt wird (12. Oktober 2026): gleiche Hardware-Adresse des Routers = ein Gerät = kein Konflikt."""
+    R1, R2 = "94:83:c4:d5:9d:bb", "00:11:22:33:44:55"
+
+    def status(self, e):
+        arp.step()
+        return json.load(open(f"{e.run}/status.json"))
+
+    def test_lan_and_wlan_at_the_same_router_are_no_conflict(self):
+        e = Env(self, {"eth1": "192.168.80.197/24", "wlan0": "192.168.80.135/24"})
+        e.gateways = {"eth1": ("192.168.80.1", self.R1), "wlan0": ("192.168.80.1", self.R1.upper())}       # auch Großbuchstaben
+        st = self.status(e)
+        self.assertEqual(st["overlap"], ["eth1", "wlan0"])                                                 # die ARP-Einstellung greift trotzdem
+        self.assertEqual((st["conflict"], st["nets"]), ([], []))
+        self.assertEqual(e.get("eth1", "arp_ignore"), 1)
+
+    def test_two_different_routers_with_the_same_range_are_a_conflict(self):
+        e = Env(self, {"wlan0": "192.168.8.100/24", "wlan1": "192.168.8.101/24"})
+        e.gateways = {"wlan0": ("192.168.8.1", self.R1), "wlan1": ("192.168.8.1", self.R2)}               # beide 192.168.8.1, aber zwei Geräte
+        st = self.status(e)
+        self.assertEqual(st["conflict"], ["wlan0", "wlan1"])
+        self.assertEqual(st["nets"], ["192.168.8.0/24"])
+
+    def test_unknown_router_address_stays_quiet(self):
+        e = Env(self, {"wlan0": "192.168.8.100/24", "wlan1": "192.168.8.101/24"})
+        e.gateways = {"wlan0": ("192.168.8.1", self.R1), "wlan1": ("192.168.8.1", None)}                 # eine Hardware-Adresse (noch) nicht bekannt
+        self.assertEqual(self.status(e)["conflict"], [])
+        e.gateways = {"wlan0": ("192.168.8.1", self.R1)}                                                  # die andere Karte hat gar keinen Router
+        self.assertEqual(self.status(e)["conflict"], [])
+        e.gateways = {}
+        self.assertEqual(self.status(e)["conflict"], [])
+
+    def test_three_cards_two_at_one_router_and_one_at_another(self):
+        e = Env(self, {"eth1": "192.168.80.197/24", "wlan0": "192.168.80.135/24", "wlan1": "192.168.80.50/24"})
+        e.gateways = {"eth1": ("192.168.80.1", self.R1), "wlan0": ("192.168.80.1", self.R1), "wlan1": ("192.168.80.1", self.R2)}
+        self.assertEqual(self.status(e)["conflict"], ["eth1", "wlan0", "wlan1"])
+
+    def test_no_overlap_means_no_lookup_and_no_conflict(self):
+        e = Env(self, {"eth0": "192.168.178.118/24", "wlan0": "192.168.80.135/24"})
+        e.gateways = {"eth0": ("192.168.178.1", self.R1), "wlan0": ("192.168.80.1", self.R2)}               # verschiedene Geräte, aber verschiedene Bereiche: in Ordnung
+        st = self.status(e)
+        self.assertEqual((st["overlap"], st["conflict"], st["nets"]), ([], [], []))
+
+    def test_the_conflict_goes_away_when_one_card_leaves(self):
+        e = Env(self, {"wlan0": "192.168.8.100/24", "wlan1": "192.168.8.101/24"})
+        e.gateways = {"wlan0": ("192.168.8.1", self.R1), "wlan1": ("192.168.8.1", self.R2)}
+        self.assertEqual(self.status(e)["conflict"], ["wlan0", "wlan1"])
+        e.cards["wlan1"] = "10.5.5.5/24"
+        self.assertEqual(self.status(e)["conflict"], [])
+
+    def test_a_broken_neighbour_line_is_ignored(self):
+        e = Env(self, {"wlan0": "192.168.8.100/24", "wlan1": "192.168.8.101/24"})
+        e.gateways = {"wlan0": ("192.168.8.1", self.R1), "wlan1": ("192.168.8.1", "nicht-eine-mac")}
+        self.assertEqual(self.status(e)["conflict"], [])
 
 
 class Uninstall(unittest.TestCase):
