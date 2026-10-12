@@ -222,7 +222,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .bkwhat{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 28px;margin:6px 0 2px}.bkwhat .bkwh{font-weight:650;margin:8px 0 2px}.bkwhat ul{margin:0;padding-left:20px}.bkwhat li{margin:3px 0}.bkwhat .bkno li::marker{color:var(--crit)}.bkwhat .bkyes li::marker{color:var(--ok)}
 .bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
 /* Hilfetexte (Issue #21): hinter dem runden "i", auf dem Handy und am Rechner gleich */
-.ibtn,.swinfo{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+.ibtn{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+.swinfo{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
 .ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
 .ibrow{display:block;margin:0 0 4px}.ibrow .ibtn{margin-left:0}
 details:not([open])>summary .ibtn{display:none}
@@ -624,8 +625,10 @@ html[data-design="kompakt"][data-theme="light"]{--bg:#e9edf2;--card:#ffffff;--te
 @media(max-width:620px){:where(html[data-design="kompakt"]) main{padding:6px 6px 14px;gap:8px}:where(html[data-design="kompakt"]) .card{padding:9px 10px}:where(html[data-design="kompakt"]) :is(button,input,select){min-height:40px}}
 
 /* die runden Hilfeknöpfe "i" behalten ihre Form (die Mindesthöhe der Knöpfe gilt für sie nicht) */
-html[data-design] :is(.ibtn,.helpbtn,.swinfo){min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}
-html[data-design="kompakt"] :is(.ibtn,.helpbtn,.swinfo){width:22px;height:22px;font-size:13px;line-height:20px}
+html[data-design] :is(.ibtn,.helpbtn){min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}
+html[data-design="kompakt"] :is(.ibtn,.helpbtn){width:22px;height:22px;font-size:13px;line-height:20px}
+html[data-design] .swinfo{min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}     /* "i" bei der installierten Version: wie die anderen "i"-Knöpfe */
+html[data-design="kompakt"] .swinfo{width:22px;height:22px;font-size:13px;line-height:20px}
 /* Kästchen und Auswahlkreise: groß genug zum Antippen */
 html[data-design="klar"] :is(input[type=checkbox],input[type=radio]){width:22px;height:22px;min-height:0;padding:0;accent-color:var(--accent)}
 html[data-design="kompakt"] :is(input[type=checkbox],input[type=radio]){width:16px;height:16px;min-height:0;padding:0;accent-color:var(--accent)}
@@ -1193,6 +1196,8 @@ function paintCamDots(list){
   setHtml(el,l.map(c=>`<span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>`).join(""));
   el.setAttribute("aria-label",l.length?l.map(c=>c.name).join(", "):"");
 }
+const camSeenLive={};                                  // Kamera-Nummer -> Zeitpunkt (ms), zu dem sie zuletzt sendete (nur im Browser, für die Reihenfolge der Liste)
+const CAM_HOLD_TOP_MS=120000;                          // so lange bleibt eine Kamera, die nicht mehr sendet, oben in der Liste
 function renderCamLights(list){
   // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt
   // (Auslassungspunkte), statt die Spalten zu verschieben. Ohne Akkustand bleibt es bei Name und Datenrate.
@@ -1328,7 +1333,10 @@ function renderCams(list){
   lastCams=list;
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
   // Kameras ohne Signal stehen unten; sonst bleibt die Reihenfolge der Anlage (Array.sort ist stabil)
-  const quiet=c=>c.state==="live"||c.state==="unknown"?0:1;
+  // Eine Kamera, die nicht mehr sendet (zum Beispiel beim Wechsel des Netzes), bleibt noch zwei Minuten oben und rutscht erst dann nach unten (Wunsch des Nutzers, 12. Oktober 2026)
+  const nowMs=Date.now();
+  for(const c of list) if(c.state==="live"||c.state==="unknown") camSeenLive[c.id]=nowMs;
+  const quiet=c=>c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1;
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
   const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts,qrOut,[...qrHelp],connNames]);
@@ -1356,8 +1364,9 @@ function renderCams(list){
 const netChg={};                                         // Schlüssel der Kamera -> {iface, reconn, busy, okAt}
 const NET_BUSY=["searching","connecting","pairing","preparing","wifi","configuring","starting"];
 function netNoteOf(key){
-  const ch=netChg[key]; if(!ch) return null;
   const d=((typeof djiData!=="undefined"&&djiData.cameras)||[]).find(x=>x.rtmp_key===key); if(!d) return null;
+  const ch=netChg[key];
+  if(!ch) return d.switch_wait>0?{cls:"",t:`Wechsel gesperrt: noch ${d.switch_wait} s.`}:null;
   const st=d.state; if(NET_BUSY.includes(st)) ch.busy=true;
   if(st==="error"){
     const det=String(d.detail||"");
@@ -1376,7 +1385,9 @@ function netNoteOf(key){
   return {cls:"",t:"Netz gewählt. Gilt beim nächsten Verbinden."};
 }
 function paintNetNotes(){
-  document.querySelectorAll("#cams .netnote").forEach(el=>{ const n=netNoteOf(el.dataset.key);
+  document.querySelectorAll("#cams .netnote").forEach(el=>{ const key=el.dataset.key, n=netNoteOf(key);
+    const d=((typeof djiData!=="undefined"&&djiData.cameras)||[]).find(x=>x.rtmp_key===key), lock=!!(d&&d.switch_wait>0);   // nach einem Wechsel zwei Minuten kein weiterer (der Kamera-Dienst lehnt ihn ebenfalls ab)
+    document.querySelectorAll(`#cams [data-dji="${key}"]`).forEach(b=>{ if((b.classList.contains("camnetsel")||b.classList.contains("camreconn"))&&b.disabled!==lock) b.disabled=lock; });
     el.hidden=!n; if(!n) return; if(el.textContent!==n.t) el.textContent=n.t; el.className="netnote"+(n.cls?" "+n.cls:""); });
 }
 setInterval(()=>{ if(!document.hidden) paintNetNotes(); },1000);
