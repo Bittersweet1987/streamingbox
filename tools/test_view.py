@@ -3,6 +3,7 @@ Prüft die Seite des Servers und des Senders; der Baustein selbst (gst/gstpbpip.
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -754,6 +755,42 @@ class Deactivate(unittest.TestCase):
             self.send._active = lambda: True                                                                                      # während der Sendung nie
             self.send.srtla.public = lambda: {"servers": [], "selected": ""}
             self.assertFalse(self.send.status()["no_server"])
+
+    def test_status_reports_cards_in_the_same_network(self):
+        """Zwei Karten im selben Netz (Stand des Adress-Wächters): status() meldet net_overlap, auch während der Sendung (Wunsch des Nutzers, 12. Oktober 2026)."""
+        pl = self.make()
+        self.send._active = lambda: False
+        self.send._detail = lambda: {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "status.json")
+        with mock.patch.object(server, "belacoder_running", lambda: False), mock.patch.object(server, "ARP_STATUS", path):
+            self.assertEqual(self.send.status()["net_overlap"], [])                                            # Wächter läuft nicht (keine Datei)
+            json.dump({"overlap": ["eth1", "wlan0"], "fixed": [], "time": int(time.time())}, open(path, "w"))
+            self.assertEqual(self.send.status()["net_overlap"], ["eth1", "wlan0"])
+            self.send._active = lambda: True
+            self.assertEqual(self.send.status()["net_overlap"], ["eth1", "wlan0"])                             # auch während der Sendung
+
+    def test_net_overlap_reads_the_state_strictly(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "s.json")
+
+        def put(obj, raw=None):
+            with open(path, "w") as f:
+                f.write(raw if raw is not None else json.dumps(obj))
+            return server.net_overlap(path)
+        now = int(time.time())
+        self.assertEqual(put({"overlap": ["eth1", "wlan0"], "time": now}), ["eth1", "wlan0"])
+        self.assertEqual(put({"overlap": ["eth1", "wlan0"], "time": now - 600}), [])                           # veraltet: der Wächter läuft nicht mehr
+        self.assertEqual(put({"overlap": ["eth1", "wlan0"]}), [])                                              # ohne Zeit
+        self.assertEqual(put({"overlap": ["eth1", "<b>x</b>", 5, "a" * 40, "wlan0"], "time": now}), ["eth1", "wlan0"])      # nur Kartennamen
+        self.assertEqual(put({"overlap": ["eth%d" % i for i in range(20)], "time": now}), ["eth%d" % i for i in range(8)])
+        self.assertEqual(put(None, raw="{kaputt"), [])
+        self.assertEqual(put(None, raw="[1,2]"), [])
+        self.assertEqual(put({"overlap": "eth1", "time": now}), [])
+        self.assertEqual(server.net_overlap(os.path.join(tmp, "gibts-nicht.json")), [])
 
     def test_export_and_import_carry_it(self):
         pl = self.make()

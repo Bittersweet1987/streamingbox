@@ -289,6 +289,16 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('$("live_topipe").addEventListener("click"', PAGE)
         self.assertIn('out["no_layout"] = not active and not self.pipeline.cfg.get("main")', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
 
+    def test_live_card_warns_about_two_connections_to_one_network(self):
+        """Zwei Karten im selben Netz (WLAN und LAN oder zweimal WLAN): kleine Warnung in der Live-Karte mit den Kartennamen, auch während der Sendung (Wunsch des Nutzers)."""
+        self.assertIn('<div id="nethint" class="pending" hidden>', PAGE)
+        self.assertIn("Zwei Verbindungen zum selben Netzwerk sind nicht sinnvoll: Meist gibt es Adresskonflikte, und Kameras können ausfallen. Bitte eine davon trennen:", PAGE)
+        self.assertIn('id="nethint_cards"', PAGE)
+        self.assertIn('$("nethint").hidden=ov.length<2; $("nethint_cards").textContent=ov.join(", ");', PAGE)            # textContent: Kartennamen nie als HTML
+        self.assertNotIn("nethint_cards\").innerHTML", PAGE)
+        self.assertNotIn('$("nethint").hidden=!(!d.active', PAGE)                                                       # nicht an "keine Sendung" gebunden
+        self.assertIn('out["net_overlap"] = net_overlap()', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
+
     def test_live_card_hints_missing_srtla_server(self):
         """Noch kein SRTLA-Server eingetragen: Live ist grau; die Live-Karte sagt es oben wie beim fehlenden Bildaufbau und führt zum Server (Wunsch des Nutzers)."""
         self.assertIn('<div id="srvhint" class="pending" hidden>', PAGE)

@@ -379,6 +379,22 @@ class Commands(unittest.TestCase):
             self.assertEqual(dm.cameras[ADDR2].cfg["ssid"], "KameraNetz")
         arun(go())
 
+    def test_remove_also_drops_the_bluez_pairing(self):
+        # 1.0.11: "Entfernen" hob bei DJI-Kameras die Kopplung in BlueZ nicht auf (bei Handys und Controllern schon): nach einem Zurücksetzen der Kamera blieb ein alter Eintrag stehen
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            calls = []
+
+            async def rec(addr, remove=True):
+                calls.append((addr, remove))
+            with mock.patch.object(dd, "bluez_cleanup", rec):
+                self.assertEqual(await dm.handle({"cmd": "remove", "addr": ADDR}), {"ok": True})
+                self.assertEqual(calls, [(ADDR, True)])
+                self.assertIn("error", await dm.handle({"cmd": "remove", "addr": ADDR}))
+                self.assertEqual(len(calls), 1)                          # unbekannte Kamera: nichts aufräumen
+        arun(go())
+
     def test_remove_and_unknown_things(self):
         async def go():
             d, dm = self.daemon()
