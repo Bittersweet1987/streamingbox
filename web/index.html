@@ -632,7 +632,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
       <div id="livewhy" class="ph"></div>
       <div id="livehint" class="pending" hidden><span>Live geht erst, wenn der Bildaufbau fertig ist: Hauptkamera wählen und „Bildaufbau speichern“.</span><button type="button" id="live_topipe" class="warnbtn">Zum Bildaufbau</button></div>
       <div id="srvhint" class="pending" hidden><span>Live geht erst, wenn ein SRTLA-Server eingetragen ist: Server hinzufügen und auswählen.</span><button type="button" id="live_tosrv" class="warnbtn">Zum SRTLA-Server</button></div>
-      <div id="nethint" class="pending" hidden><span>Zwei Verbindungen zum selben Netzwerk sind nicht sinnvoll: Meist gibt es Adresskonflikte, und Kameras können ausfallen. Bitte eine davon trennen:</span> <b id="nethint_cards"></b></div>
+      <div id="nethint" class="pending" hidden><span>Zwei Verbindungen nutzen denselben Adressbereich bei verschiedenen Geräten (zum Beispiel zwei Modems oder Hotspots mit 192.168.8.x): Das führt zu Adresskonflikten, und Kameras können ausfallen. Bitte eine davon trennen:</span> <b id="nethint_cards"></b></div>
       <div id="livepending" class="pending" hidden><span id="livepending_t"></span> <button type="button" id="live_restart" class="warnbtn">Stream neu starten</button><button type="button" id="live_ignore" class="sec">Später</button></div>
       <div id="liveerr" class="err"></div>
       <div id="livehealth" class="livehealth"></div>
@@ -2513,7 +2513,7 @@ async function sendLoad(){
     else st.hidden=true;
   }
   const why=[]; if(d.state==="refused"&&d.message) why.push(d.message);
-  { const ov=Array.isArray(d.net_overlap)?d.net_overlap:[]; $("nethint").hidden=ov.length<2; $("nethint_cards").textContent=ov.join(", "); }                     // zwei Karten im selben Netz: Warnung mit den Kartennamen
+  { const nc=d.net_conflict, cards=nc&&Array.isArray(nc.cards)?nc.cards:[], nets=nc&&Array.isArray(nc.nets)?nc.nets:[]; $("nethint").hidden=cards.length<2; $("nethint_cards").textContent=cards.join(", ")+(nets.length?" ("+nets.join(", ")+")":""); }                     // gleicher Adressbereich bei zwei verschiedenen Geräten: Warnung mit Kartennamen und Netz
   $("srvhint").hidden=!(!d.active&&d.no_server);                                    // kein SRTLA-Server eingetragen: Live ist grau, hier steht der Grund mit Weg dorthin
   $("livehint").hidden=!(!d.active&&d.no_layout);                                  // Kamera hinzugefügt, aber noch kein Bildaufbau gespeichert: Live ist grau, hier steht der Grund mit Weg dorthin
   if(!d.active) why.push(...d.reasons.filter(r=>!(d.no_layout&&r==="Kein Bildaufbau gespeichert")&&!(d.no_server&&r==="Kein SRTLA-Server ausgewählt")));
