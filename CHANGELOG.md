@@ -2,6 +2,11 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.21
+- **Software-Update: „i“ bei der installierten Version (Wunsch des Nutzers, 12. Oktober 2026).** In der Karte „Software-Update“ steht rechts neben „Installiert“ ein kleines „i“. Ein Tippen öffnet den Änderungsverlauf und zeigt **nur die Änderungen der installierten Version** (die Überschrift genau dieser Version, nicht jede Erwähnung der Nummer in anderen Versionen). Ein Stichwort im Suchfeld oder der Knopf „Alle Änderungen“ zeigt wieder alle Versionen. Steht die Version nicht in der Änderungsliste, sagt der Text es. Der Knopf bleibt auch mit „Hilfe ausblenden“ sichtbar (er öffnet keinen Hilfetext) und fehlt, solange die Version nicht bekannt ist. Der Verlauf kommt wie bisher von GitHub und wird nur auf Wunsch geladen.
+  - Am echten Seitencode geprüft (Demo): nur die gewählte Version, Suche zeigt Treffer aller Versionen, leeres Suchfeld alle, zweites Tippen auf „i“ wieder nur die eine; Größe 22 px, im Design „kompakt“ und „klar“ wie die anderen „i“-Knöpfe.
+  - Tests: `tools/test_ui_layout.py` (Knopf, Filter, Zurücksetzen; Gegenversuch ohne Filter schlägt fehl), `test_i18n` (Deutsch und Englisch; die anderen Sprachen folgen am Schluss).
+
 ## 1.0.20
 - **Kameraliste: DJI-Kameras zeigen in der Verbindungs-Auswahl nur noch WLAN-Schnittstellen (Wunsch des Nutzers, 12. Oktober 2026).** Eine DJI-Kamera tritt immer einem WLAN bei, nie einem Kabel; `eth0`, `eth1` und USB-Tether in der Auswahl führten nur zu Fehlern (ohne WLAN-Name und Passwort der Kamera). Der Server meldet dafür je Schnittstelle `wifi` (`/api/network`, aus `/sys/class/net/<name>/wireless`). Eine in der DJI-Karte schon gewählte Kabel-Schnittstelle bleibt in der Liste sichtbar und gewählt; ohne Angabe `wifi` (ältere Box) bleibt alles wie vorher. Normale (Telefon-)Kameras und die DJI-Karte zeigen weiter alle Verbindungen (ein Router am Kabel, dessen WLAN die Kamera nutzt, ist dort mit Namen und Passwort von Hand weiter möglich).
   - Am echten Seitencode geprüft: gewählt `wlan1` → nur wlan0 und wlan1; gewählt `eth1` → eth1 bleibt gewählt; ohne `wifi`-Angabe alle; normale Kamera alle vier.
