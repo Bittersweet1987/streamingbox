@@ -266,7 +266,7 @@ class SeamlessSwapSender(PrepareWithFailover):
             s.write_status()
             st = json.load(open(os.path.join(run_dir, "status.json")))
         args = s.args("belacoder")
-        self.assertEqual(st["buffer_ms"], 2860)                                    # 2560 ms + 300 ms
+        self.assertEqual(st["buffer_ms"], 1050)                                    # 2560 ms werden auf 750 begrenzt, plus 300 ms
         self.assertEqual(str(st["buffer_ms"]), args[args.index("-A") + 1])
         self.assertEqual(s.always.running_buffer, st["buffer_ms"])                 # der Regler benutzt denselben Startwert
 

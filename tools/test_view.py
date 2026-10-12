@@ -772,9 +772,11 @@ class Deactivate(unittest.TestCase):
         self.assertEqual(self._pending_status(2860, z), ["Verzögerung"])         # lief mit 2560 ms Verzögerung, jetzt alles 0
         self.assertEqual(self._pending_status(600, z), [])                       # passt
         self.assertEqual(self._pending_status(750, z), [])                       # etwas Überschuss ist in Ordnung
-        d = dict(z, pip_delay_ms=2000)                                           # braucht 2300
+        d = dict(z, pip_delay_ms=750)                                            # braucht 1050 (größte Verzögerung der Engine plus 300)
         self.assertEqual(self._pending_status(600, d), ["Verzögerung"])          # neue hohe Verzögerung ohne Neustart
-        self.assertEqual(self._pending_status(2300, d), [])
+        self.assertEqual(self._pending_status(1050, d), [])
+        self.assertEqual(self._pending_status(600, dict(z, pip_delay_ms=3000)), ["Verzögerung"])     # gespeicherte 3000 zählen wie 750
+        self.assertEqual(self._pending_status(1050, dict(z, pip_delay_ms=3000)), [])
         self.assertEqual(self._pending_status(750, dict(z, main_delay_ms=450)), [])    # Standard: Hauptbild 450 ms
 
     def test_pending_ignores_missing_or_odd_buffer_values_and_a_stopped_chain(self):

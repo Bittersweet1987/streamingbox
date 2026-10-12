@@ -300,6 +300,16 @@ class ImportProgress(unittest.TestCase):
         self.assertNotIn('$("nethint").hidden=!(!d.active', PAGE)                                                       # nicht an "keine Sendung" gebunden
         self.assertIn('out["net_conflict"] = net_conflict()', open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())
 
+    def test_delay_warning_names_the_engine_limit_only_for_always_ready(self):
+        """Verzögerungen über 750 ms werden von der Engine "Alle Kameras immer bereit" begrenzt: Hinweis nur dort, nur bei Bild-in-Bild, nur für gewählte Kameras."""
+        self.assertIn('<div id="dl_warn" class="ph" role="note" hidden', PAGE)
+        self.assertIn("Mit „Alle Kameras immer bereit“ werden Verzögerungen über 750 ms auf 750 ms begrenzt. Größere Werte ließen das Hauptbild ruckeln.", PAGE)
+        self.assertIn("const DL_ENGINE_MAX=750;", PAGE)
+        self.assertIn('el.hidden=!(pip&&always&&Math.max(...vals)>DL_ENGINE_MAX);', PAGE)
+        self.assertIn('always=!!($("p_always")&&$("p_always").checked)', PAGE)
+        self.assertNotIn("DL_SPREAD_WARN", PAGE)
+        self.assertIn("MAX_DELAY_MS = 750", open(os.path.join(ROOT, "pipbox_live.py"), encoding="utf-8").read())      # dieselbe Zahl wie in der Sendekette
+
     def test_live_card_hints_missing_srtla_server(self):
         """Noch kein SRTLA-Server eingetragen: Live ist grau; die Live-Karte sagt es oben wie beim fehlenden Bildaufbau und führt zum Server (Wunsch des Nutzers)."""
         self.assertIn('<div id="srvhint" class="pending" hidden>', PAGE)
