@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.24
+- **Netzwechsel-Hinweis: der Erfolg verschwindet nach 15 Sekunden (vorher 45), Fehler bleiben stehen (Wunsch des Nutzers, 12. Oktober 2026).** Die grüne Zeile „Netzwechsel erfolgreich (…)“ unter der Kamerazeile geht nach 15 Sekunden von selbst weg. Die roten Texte („Bitte WLAN-Name und Passwort …“, „Netzwechsel fehlgeschlagen …“) und die Zwischenzustände bleiben unbegrenzt stehen, bis sich der Zustand ändert (neuer Verbindungsaufbau, Erfolg, neue Wahl) oder die Seite neu geladen wird. Test: `tools/test_ui_layout.py` (15 s, nur der Erfolg löscht den Hinweis).
+
 ## 1.0.23
 - **Kameraliste: kleiner Hinweis zum Netzwechsel unter der Zeile einer DJI-Kamera (Wunsch des Nutzers, 12. Oktober 2026).** Wählt man in der Auswahl ein anderes Netz oder drückt ↻ „Neu verbinden“, steht direkt unter der Kamerazeile in kleiner Schrift, was passiert: „Netz gewählt. Gilt nach „Neu verbinden“ (↻).“ (Kamera sendet noch über das alte Netz), „Netz gewählt. Gilt beim nächsten Verbinden.“ (Kamera getrennt), „Wechsle Netz …“ (Verbindungsaufbau läuft), **„Netzwechsel erfolgreich (wlan1)“** (grün, nur wenn die Kamera nach einem neuen Verbindungsaufbau wirklich über die gewählte Verbindung sendet; verschwindet nach 45 Sekunden) oder, rot, „Bitte WLAN-Name und Passwort in der DJI-Karte eintragen.“ (Passwort des gewählten Netzes unbekannt) beziehungsweise „Netzwechsel fehlgeschlagen. Die Meldung steht in der DJI-Karte.“. Der Hinweis wird nur im Browser gemerkt und erscheint nur nach einer Wahl oder einem Druck auf ↻; ohne beides bleibt die Zeile unverändert.
   - Am echten Seitencode geprüft (Demo, simulierte Zustände): alle Texte und Farben in der richtigen Reihenfolge, der Erfolg verschwindet nach 45 s, Größe 11 px, steht links unter dem Namen.
