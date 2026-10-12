@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.14
+- **Bluetooth-Treiber: Realtek-Sticks wie der RTL8761B (0bda:8771) werden nicht mehr von `rtk_btusb` festgehalten.** Bei einem Nutzer blieb der Stick trotz neu gebautem Treiber ohne Firmware, im Kernelprotokoll stand nach dem Laden nur „registered new interface driver btusb“. Auf der Box liegt das Hersteller-Modul `rtk_btusb`, das auf alle Produkte von Realtek (und einigen anderen Herstellern) reagiert und den Stick vor `btusb` übernimmt. Jetzt sperrt der Helfer bei solchen Sticks `rtk_btusb` (`/etc/modprobe.d/pipbox-btdriver.conf`) und entlädt es vor dem Laden von `btusb`; bei einem Fehlschlag und beim Entfernen des Treibers wird die Sperre wieder aufgehoben. Die Dienstdatei darf dafür zusätzlich in `/etc/modprobe.d` schreiben. Neue Tests in `tools/test_btdriver.py` (63).
+
 ## 1.0.13
 - **Bluetooth-Treiber: wartet auf die Meldung der Firmware (Realtek RTL8761B, 0bda:8771).** Bei einem Nutzer hieß es „Der Treiber hat keine Firmware für den Stick geladen“, obwohl der Treiber vermutlich lief: Der Adapter erscheint, bevor sein Start und das Laden der Firmware laufen, die Prüfung las das Kernelprotokoll aber sofort. Jetzt wartet der Helfer bis zu 25 Sekunden auf die Meldung des Realtek-Teils; ein echter Firmware-Fehler bricht weiterhin sofort ab. Schlägt es trotzdem fehl, steht die letzte Bluetooth-Zeile des Kernels in der Meldung. Neuer Test in `tools/test_btdriver.py`.
 
