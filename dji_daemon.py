@@ -443,6 +443,7 @@ class Camera:
     """Zustand und BLE-Sitzung einer eingerichteten Kamera."""
 
     AFTER_LINK_SECONDS = 90     # so lange nach dem Ende einer Verbindung gilt ein Fehlschlag beim Verbinden als "die Kamera erholt sich noch"
+    OLD_STREAM_WAIT_S = 25            # so lange wartet die Kamera vor "Start", bis nginx den alten Stream mit demselben Namen beendet hat (sonst: "already publishing", nginx hält ihn bis zu 15 s)
     RETRY_SCHEDULE = (8, 8, 15, 30)   # Sekunden bis zum nächsten Versuch nach dem 1., 2., 3. ... Fehlversuch (Suchen stört die stehenden Verbindungen)
     SEARCH_SECONDS = 15
     STREAM_CHECK_SECONDS = 5    # so oft wird geprüft, ob der Stream noch ankommt
@@ -468,6 +469,7 @@ class Camera:
         self.fail_count = 0
         self.retry_at = 0
         self.wake = asyncio.Event()
+        self.switch_until = 0.0      # monotonic: bis dahin ist kein weiterer Wechsel möglich (SWITCH_LOCK_S)
         self.publishing = False      # die Kamera liefert ihren Stream (der Dienst prüft das), auch ohne Bluetooth
         self.force_cleanup = False   # "Verbinden" von Hand: erst einen hängenden BlueZ-Eintrag verwerfen
         self.typed_network = True
@@ -490,6 +492,11 @@ class Camera:
         """Die Art (Stream oder nur Akku) lässt sich nur ändern, solange keine Sitzung läuft: die Sitzung hat sie beim Start gelesen."""
         return self.state not in ("idle", "error") or self.publishing
 
+    def switch_wait(self):
+        """Sekunden bis zum nächsten möglichen Wechsel (0 = jetzt). Ein Fehler hebt die Sperre auf: Eine Kamera, die nicht zurückgekommen ist, darf sofort erneut versucht werden."""
+        left = self.switch_until - time.monotonic()
+        return 0 if left <= 0 or self.state == "error" else int(left) + 1
+
     def set_state(self, state, detail=""):
         if state != self.state or detail != self.detail:
             log.info("%s: %s %s", self.addr, state, detail)
@@ -511,7 +518,8 @@ class Camera:
                   "battery": self.battery, "charging": self.charging,
                   "battery_age": int(time.time() - self.battery_at) if self.battery_at else None,
                   "in_range": time.time() - self.last_seen < 30,
-                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked()})
+                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked(),
+                  "switch_wait": self.switch_wait()})
         return c
 
     def network_for_unreadable(self, o):
@@ -800,6 +808,14 @@ class Camera:
                     return False
 
                 # 4. den RTMP-Stream starten
+                # Der alte Stream mit demselben Namen (die Kamera hat ihn beim Wechsel des Netzes nie geschlossen) bleibt bei nginx bis zu 15 s als "idle publisher" stehen; ein neuer
+                # Start in dieser Zeit wird mit "already publishing" abgelehnt und die Kamera kommt nicht zurück (12. Oktober 2026, Testbox). Darum erst starten, wenn er weg ist.
+                end = time.monotonic() + self.OLD_STREAM_WAIT_S
+                while time.monotonic() < end and not self.stop_requested:
+                    if (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is not True:
+                        break
+                    self.set_state("starting", "Wartet, bis der alte Stream beendet ist")
+                    await asyncio.sleep(1)
                 self.set_state("starting", "Stream wird gestartet")
                 payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
                                               int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
@@ -1024,6 +1040,7 @@ class Camera:
 
 FEED_HOLD_FILE = "feed-hold.json"      # {"keys": {Schlüssel: Ablaufzeit}}: der Regler der Sendekette (pipbox_live) nimmt den Zweig dieser Kamera aus der Sendekette
 FEED_HOLD_S = 45                        # so lange gilt die Bitte höchstens (die Kamera meldet sich vorher mit "streaming" wieder und gibt sie frei)
+SWITCH_LOCK_S = 120                     # nach einem Wechsel (Neu verbinden einer laufenden Kamera) ist für diese Kamera zwei Minuten lang kein weiterer Wechsel möglich (Nutzerwunsch, 12. Oktober 2026)
 FEED_HOLD_WAIT_S = 4.5                  # Zeit für den Regler (Takt 1 s, 3 s Abkühlzeit je Zweig), den Zweig zu stoppen, bevor die Kamera ihren Stream beendet
 
 SETTINGS_ALLOWED = {"name": str, "wifi_ifname": str, "ssid": str, "password": str, "ip": str,
@@ -1382,6 +1399,8 @@ class Daemon:
         if cam is None:
             return {"error": "Unbekannte Kamera"}
         if cmd == "update":
+            if "wifi_ifname" in req and req.get("wifi_ifname") != cam.cfg.get("wifi_ifname") and cam.switch_wait():
+                return {"error": "Die Kamera wechselt gerade. Der nächste Wechsel ist in %d Sekunden möglich." % cam.switch_wait()}
             if cam.mode_locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
                 return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
             prev_if = cam.cfg.get("wifi_ifname")
@@ -1433,6 +1452,11 @@ class Daemon:
             self.save()
             return {"ok": True}
         if cmd == "reconnect":
+            w = cam.switch_wait()
+            if w:
+                return {"error": "Die Kamera wechselt gerade. Der nächste Wechsel ist in %d Sekunden möglich." % w}
+            if cam.locked():                        # ein richtiger Wechsel (die Kamera sendet): ab jetzt zwei Minuten Ruhe
+                cam.switch_until = time.monotonic() + SWITCH_LOCK_S
             asyncio.ensure_future(cam.restart())    # sofort neu verbinden, ohne den Schalter anzufassen
             return {"ok": True}
         return {"error": "Unbekannter Befehl"}

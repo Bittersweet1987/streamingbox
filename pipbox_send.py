@@ -680,7 +680,10 @@ class Sender:
             if info and info.get("w", 0) > 0 and a.states.get(slot) == 3 and not (key in a.inactive and key != a.desired[0]):
                 expected[slot] = True
         hit = self.watch.check(mt, text.split("\n", 1)[0], expected, pipbox_watch.d_state_threads(p.pid))
-        if hit is None or not self.watch.allow():
+        if hit is None:
+            return
+        soft = self.watch.soft_ok(hit)
+        if not soft and not self.watch.allow():
             return
         slots = []
         for slot, key in enumerate(a.binder.slot_key):
@@ -689,6 +692,15 @@ class Sender:
         report = pipbox_watch.build_report(hit, p.pid, time.monotonic() - (self.watch.started or time.monotonic()), text,
                                            [f"{t} {e}" for t, e in list(self.events)], slots)
         saved = pipbox_watch.write_report(STATE, report)
+        if soft:
+            # Ein einzelner Zweig ohne Bilder, die anderen laufen: nur seinen Zweig zurücksetzen. Der Regler startet ihn wieder, sobald er gestoppt ist und nginx die Kamera zeigt.
+            self.watch.soft_done(hit["slot"])
+            print(f"send: Hänger erkannt ({hit['text']}); Diagnosepaket {'gesichert (hang-diagnose.txt)' if saved else 'nicht speicherbar'}, nur dieser Zweig wird zurückgesetzt", flush=True)
+            try:
+                a.control([" ".join(("feed", "sbf%d", "off")) % hit["slot"]])      # Steuerbefehl an belacoder (kein Anzeigetext)
+            except OSError as e:
+                print(f"send: Zweig konnte nicht zurückgesetzt werden ({type(e).__name__})", flush=True)
+            return
         self.watch.acted_now()
         self.hang_n += 1
         print(f"send: Hänger erkannt ({hit['text']}); Diagnosepaket {'gesichert (hang-diagnose.txt)' if saved else 'nicht speicherbar'}, belacoder wird neu gestartet", flush=True)

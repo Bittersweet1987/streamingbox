@@ -20,6 +20,7 @@ STALE_S = 15.0           # so lange darf die Statistikdatei von belacoder alt se
 START_GRACE_S = 30.0     # nach dem Start von belacoder: so lange wird nichts bewertet (die Zweige laufen erst an)
 DSTATE_S = 12.0          # so lange darf ein Thread von belacoder im Zustand D (Kernel, nicht unterbrechbar) bleiben
 FEED_DEAD_S = 25.0       # so lange darf ein Zweig, dessen Kamera mit Bild sendet, ohne Bilder bleiben
+SOFT_WINDOW_S = 300.0    # hängt derselbe Zweig innerhalb dieser Zeit nach dem Zurücksetzen noch einmal, wird belacoder neu gestartet
 COOLDOWN_S = 90.0        # nach einem Eingriff mindestens so lange Ruhe
 MAX_PER_HOUR = 4         # mehr Eingriffe je Stunde macht der Wächter nicht (ein Dauerfehler wäre sonst eine Neustartschleife)
 REPORT_KEEP = 6          # so viele Pakete bleiben
@@ -49,10 +50,12 @@ class HangWatch:
         self.dead = {}
         self.dstate_since = None
         self.acted = collections.deque()          # Zeiten (monotonic) der Eingriffe
+        self.soft = {}                            # Platz -> Zeit, zu der nur sein Zweig zurückgesetzt wurde
 
     def started_now(self):
         """belacoder wurde (neu) gestartet."""
         self.started = self.clock()
+        self.soft = {}
         self.dead = {}
         self.dstate_since = None
 
@@ -87,6 +90,18 @@ class HangWatch:
             if now - since >= FEED_DEAD_S:
                 return {"kind": "feed", "slot": slot, "text": "Platz %d: Kamera sendet, aber seit %d s kommen keine Bilder im Mischer an" % (slot, int(now - since))}
         return None
+
+    def soft_ok(self, hit):
+        """Hängt genau EIN Zweig (alle anderen liefern Bilder), wird zuerst nur dieser Zweig zurückgesetzt (`feed sbfN off`, der Regler startet ihn wieder), statt belacoder und damit
+        die Sendung für alle neu zu starten. Hängen mehrere Zweige oder derselbe noch einmal innerhalb von SOFT_WINDOW_S, bleibt es beim Neustart von belacoder."""
+        if hit.get("kind") != "feed" or hit.get("slot") is None or set(self.dead) != {hit["slot"]}:
+            return False
+        t = self.soft.get(hit["slot"])
+        return t is None or self.clock() - t > SOFT_WINDOW_S
+
+    def soft_done(self, slot):
+        self.soft[slot] = self.clock()
+        self.dead.pop(slot, None)
 
     def allow(self):
         """Darf jetzt eingegriffen werden (Ruhezeit, höchstens MAX_PER_HOUR je Stunde)?"""
