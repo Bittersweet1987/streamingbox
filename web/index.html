@@ -1352,7 +1352,7 @@ function renderCams(list){
   paintNetNotes();
 }
 // Kleiner Hinweis unter der Zeile einer DJI-Kamera: was beim Wechsel des Netzes passiert (Wunsch des Nutzers, 12. Oktober 2026).
-// Gemerkt wird nur im Browser: Wahl in der Auswahl oder Knopf "Neu verbinden" starten die Anzeige; nach einem Erfolg verschwindet sie nach 45 s.
+// Gemerkt wird nur im Browser: Wahl in der Auswahl oder Knopf "Neu verbinden" starten die Anzeige; nach einem Erfolg verschwindet sie nach 15 s (Fehler bleiben stehen, bis sich der Zustand ändert).
 const netChg={};                                         // Schlüssel der Kamera -> {iface, reconn, busy, okAt}
 const NET_BUSY=["searching","connecting","pairing","preparing","wifi","configuring","starting"];
 function netNoteOf(key){
@@ -1368,7 +1368,7 @@ function netNoteOf(key){
   if(st==="streaming"){
     if(ch.busy&&d.wifi_ifname===ch.iface){
       if(!ch.okAt) ch.okAt=Date.now();
-      if(Date.now()-ch.okAt>45000){ delete netChg[key]; return null; }
+      if(Date.now()-ch.okAt>15000){ delete netChg[key]; return null; }
       return {cls:"ok",t:`Netzwechsel erfolgreich (${ch.iface})`};
     }
     return {cls:"",t:"Netz gewählt. Gilt nach „Neu verbinden“ (↻)."};
