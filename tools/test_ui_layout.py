@@ -411,7 +411,7 @@ class ImportProgress(unittest.TestCase):
     def test_dji_camera_row_shows_a_small_network_change_note(self):
         """Unter der Zeile einer DJI-Kamera steht klein, was beim Netzwechsel passiert (Wunsch des Nutzers, 12. Oktober 2026)."""
         self.assertIn('<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div>', PAGE)   # nur für DJI-Kameras, zunächst leer
-        self.assertIn(".cam .netnote{margin:3px 0 0;font-size:11px;", PAGE)                               # klein
+        self.assertIn(".cam .netnote,.cam .netlock{margin:3px 0 0;font-size:11px;", PAGE)                               # klein
         i = PAGE.index("function netNoteOf(key){")
         fn = PAGE[i:PAGE.index("function paintNetNotes(){", i)]
         for text in ("Bitte WLAN-Name und Passwort in der DJI-Karte eintragen.", "Wechsle Netz …", "Netzwechsel erfolgreich (${ch.iface})",
@@ -437,7 +437,9 @@ class ImportProgress(unittest.TestCase):
 
     def test_switch_lock_is_shown_and_disables_the_controls(self):
         """Nach einem Wechsel sind Auswahl und Knopf der Kamera zwei Minuten gesperrt (der Kamera-Dienst lehnt ihn ebenfalls ab); eine kleine Zeile nennt die Restzeit."""
-        self.assertIn("Wechsel gesperrt: noch ${d.switch_wait} s.", PAGE)
+        self.assertIn("Wechsel für zwei Minuten gesperrt: noch ${d.switch_wait} s.", PAGE)
+        self.assertIn('<div class="netlock" data-lockkey="${esc(c.key)}" hidden></div>', PAGE)               # eigene Zeile
+        self.assertIn("const show=lock&&!n,", PAGE)                                                       # erst der Hinweis zum Wechsel (grün), danach erst die Sperre
         self.assertIn("b.disabled!==lock) b.disabled=lock;", PAGE)
         self.assertIn("d.switch_wait>0", PAGE)
 

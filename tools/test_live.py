@@ -417,6 +417,7 @@ class Fakes:
         self.ok = True
         self.t = 100.0
         self.hold = {}                       # Inhalt von feed-hold.json
+        self.lags = {}                       # mittlerer Zeitversatz je Platz (in_f<N>_lag), ms
         self.wall = 1_000_000.0              # Unix-Zeit für die Ablaufzeiten darin
 
     def load(self, name):
@@ -433,7 +434,7 @@ class Fakes:
     def controller(self, tmp):
         c = L.LiveController(load_json=self.load, put_state_file=lambda *a: None, state_dir=tmp, safe_cfg=server.PipelineStore._safe_cfg,
                              view_values=server.PipelineStore.view_values, log=lambda m: None, clock=lambda: self.t,
-                             fetch=lambda: dict(self.pub), stats=lambda: dict(self.states), control=self.control, wall=lambda: self.wall)
+                             fetch=lambda: dict(self.pub), stats=lambda: dict(self.states), control=self.control, wall=lambda: self.wall, lags=lambda: dict(self.lags))
         return c
 
     def take(self):
@@ -539,6 +540,93 @@ class ControllerTests(unittest.TestCase):
         self.f.hold = {}                                                 # der Dienst gibt frei (Kamera sendet neu)
         self.tick(4.0)
         self.assertIn("feed sbf1 on", self.f.take())
+
+    def lag_setup(self, two=False):
+        pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.pub = dict(pub)
+        self.f.states = {0: 3, 1: 3, 2: 1, 3: 1}
+        self.f.lags = {0: -100, 1: -100}
+        for _ in range(int(L.LAG_GRACE_S) + 3):                           # Zweige laufen schon länger (keine Schonzeit mehr)
+            self.tick(1.0)
+        self.f.take()
+
+    def test_a_feed_that_stays_too_late_is_taken_out_and_comes_back(self):
+        """Verzugs-Schutz (12. Oktober 2026): über 1,5 s zu spät, länger als 6 s -> Zweig aus der Sendekette, nach 15 s wieder dazu."""
+        self.lag_setup()
+        self.f.lags[1] = 3000
+        for _ in range(4):
+            self.tick(1.0)
+        self.assertFalse(any(l.startswith("feed sbf1") for l in self.f.take()))          # noch nicht lange genug
+        for _ in range(4):
+            self.tick(1.0)
+        lines = self.f.take()
+        self.assertIn("feed sbf1 off", lines)
+        self.assertNotIn("feed sbf0 off", lines)                                         # die anderen Zweige bleiben unberührt
+        self.f.states[1] = 1
+        self.f.lags[1] = -100
+        for _ in range(10):
+            self.tick(1.0)
+        self.assertNotIn("feed sbf1 on", self.f.take())                                   # solange er draußen sein soll
+        for _ in range(8):
+            self.tick(1.0)
+        self.assertIn("feed sbf1 on", self.f.take())                                      # danach wieder
+
+    def test_a_feed_that_stays_too_early_is_taken_out_too(self):
+        self.lag_setup()
+        self.f.lags[1] = -4000                                                            # Ausrichtung auf einen alten ersten Frame
+        for _ in range(8):
+            self.tick(1.0)
+        self.assertIn("feed sbf1 off", self.f.take())
+
+    def test_normal_and_short_deviations_are_left_alone(self):
+        self.lag_setup()
+        for v in (-742, -100, 108, 1400, -2400):                                          # gesunde Werte aus den Messungen und knapp innerhalb der Grenzen
+            self.f.lags[1] = v
+            for _ in range(10):
+                self.tick(1.0)
+            self.assertFalse(any(l.startswith("feed sbf") for l in self.f.take()), v)
+        self.f.lags[1] = 5000                                                             # kurzer Ausreißer
+        for _ in range(4):
+            self.tick(1.0)
+        self.f.lags[1] = -100
+        for _ in range(10):
+            self.tick(1.0)
+        self.assertFalse(any(l.startswith("feed sbf") for l in self.f.take()))
+
+    def test_read_lags_takes_the_mean_of_every_branch_from_the_statistics_line(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "live.txt")
+        with open(path, "w") as f:
+            f.write("t=1 br=1 in_f0=29.8/0/50 in_f0_lag=-122/-13/70 in_f1=3.0/0/9 in_f1_lag=-2198/-1364/-130 dec_f3_lag=-4796/-4769/-4738 in_f3_lag=300/4510/9000 feed_sbf0=3\nwarn x\n")
+        self.assertEqual(L.read_lags(path, now=os.stat(path).st_mtime), {0: -13, 1: -1364, 3: 4510})     # nur in_f<N>_lag, nicht dec_ oder dmx_
+        self.assertEqual(L.read_lags(os.path.join(d, "fehlt.txt")), {})
+        self.assertEqual(L.read_lags(path, now=os.stat(path).st_mtime + 3600), {})                        # alte Datei: leer
+
+    def test_a_branch_that_just_started_gets_a_grace_time(self):
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+        self.tick(5)
+        self.f.states[0] = 3
+        self.f.lags = {0: 4000}                                                           # direkt nach dem Start ist der Versatz noch nicht eingeschwungen
+        for _ in range(int(L.LAG_GRACE_S) + 2):
+            self.tick(1.0)
+        self.assertFalse(any(l == "feed sbf0 off" for l in self.f.take()))
+
+    def test_the_guard_gives_up_after_three_tries_in_three_minutes(self):
+        self.lag_setup()
+        offs = 0
+        for _ in range(4):
+            self.f.states[1] = 3
+            self.f.lags[1] = 3000
+            self.c.up_at.clear()
+            for _ in range(int(L.LAG_GRACE_S) + int(L.LAG_SUSTAIN_S) + 3):
+                self.tick(1.0)
+            offs += sum(1 for l in self.f.take() if l == "feed sbf1 off")
+            self.f.states[1] = 1
+            for _ in range(int(L.LAG_HOLD_S) + 4):
+                self.tick(1.0)
+            self.f.take()
+        self.assertEqual(offs, 3)
 
     def test_expired_or_broken_hold_entries_are_ignored(self):
         self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}}
