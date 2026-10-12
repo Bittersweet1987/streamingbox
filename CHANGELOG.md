@@ -2,6 +2,10 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.19
+- **Kameraliste: Der Knopf „Neu verbinden“ (↻) war bei DJI-Kameras nicht zu sehen (Nutzermeldung auf der Testbox, 12. Oktober 2026).** Er war in 1.0.18 vorhanden, aber das Auswahlfeld füllte die ganze Zeile und `.camnet` schneidet Überlauf ab, sodass der Knopf dahinter verschwand. Jetzt ist die Zeile eine Flex-Zeile (Auswahl nimmt den Rest, Knopf feste Breite). Am echten Layout gemessen (Desktop und 375 px Breite): Knopf 28 px breit, vollständig innerhalb der Zeile, kein seitliches Scrollen. Der Test prüft jetzt auch die Layout-Regeln (Gegenversuch ohne Flex schlägt fehl).
+  - Ohne den Knopf bleibt ein Wechsel der Verbindung bei einer verbundenen Kamera wirkungslos bis zur nächsten Verbindung; mit ↻ (oder „Jetzt neu verbinden“ in der DJI-Karte) greift er sofort.
+
 ## 1.0.18
 - **DJI-Kameras: Netzwechsel und Liste der gespeicherten Netze (Nutzermeldungen, 12. Oktober 2026).** Gemessen mit einer zweiten Action 4: Wählt man bei einer DJI-Kamera eine andere Verbindung (hier `wlan1`, ein Handy-Hotspot) und drückt „Neu verbinden“, nimmt die Kamera das neue Netz **und** die neue Ziel-Adresse an (Protokoll: `wifi S23`, danach `streaming rtmp://10.53.136.72:1935/…`; die Kamera hat im neuen Netz die Adresse `10.53.136.178` und verbindet genau dorthin). Dass die Adresse „nicht wechselt“, lag daran, dass die Änderung der Verbindung bei einer verbundenen Kamera erst ab der **nächsten Verbindung** gilt (gewollt, damit eine laufende Sendung nicht abreißt) und dies nur als kleiner Satz in der Karte stand.
   - **Kameraliste:** Die Verbindung ist jetzt auch **dort** wählbar, bei DJI-Kameras mit einem Auswahlfeld (vorher nur der Text „… · DJI-Karte“), daneben ein kleiner Knopf **↻ „Neu verbinden“**. Es ist dieselbe Einstellung wie in der DJI-Karte (`wifi_ifname` im Kamera-Dienst, nicht `/api/cameras`, das DJI-Kameras weiter ablehnt). Eine von Hand eingetragene Verbindung („Manuell“) bleibt sichtbar und wird nicht überschrieben.
