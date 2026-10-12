@@ -698,7 +698,8 @@ def _iface_ips_raw():
             sk.close()
         except OSError:
             continue
-        out.append({"iface": name, "ip": ip, "cam_ip": fixed_ip(name) or ip, "label": NET_LABELS.get(name) or net_label(name)})
+        out.append({"iface": name, "ip": ip, "cam_ip": fixed_ip(name) or ip, "label": NET_LABELS.get(name) or net_label(name),
+                    "wifi": os.path.isdir(f"/sys/class/net/{name}/wireless")})     # eine DJI-Kamera verbindet sich nur per WLAN (Kameraliste zeigt nur diese)
     return out
 
 
