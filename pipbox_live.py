@@ -171,12 +171,18 @@ def slot_keys(c):
     return list(b.slot_key)
 
 
+MAX_DELAY_MS = 750                         # größte Verzögerung, die diese Engine verarbeitet (Einstellung bis 3000 ms bleibt für die älteren Engines gültig)
+
+
 def delays_by_key(c):
-    """Verzögerung in ms je Kamera (sie gehört zur Kamera, nicht zum Platz)."""
+    """Verzögerung in ms je Kamera (sie gehört zur Kamera, nicht zum Platz), höchstens MAX_DELAY_MS. Die Haltezeit auf der komprimierten Seite (queue min-threshold-time) gibt ihre Bilder
+    erst frei, wenn sie die Haltezeit gefüllt ist; bricht der Zulauf kurz ab (WLAN-Kamera), steht die Ausgabe bis zur nächsten Füllung still (gemessen: Pausen bis 1,3 s). Hinter dem
+    Zweig fängt das nur ein Vorlauf auf: 1 s bei kleinen Bildern, beim ganzflächigen Hauptbild weniger als 0,6 s. Bei großen Verzögerungen und dem daraus folgenden großen Puffer reicht
+    das nicht (Testbox, 12. Oktober 2026: Hauptbild 3 bis 9 Bilder/s, später mit angehobener Haltezeit weiter Aussetzer bis auf 1 Bild/s). Größere Werte werden deshalb begrenzt."""
     out = {}
     for pos, dk in (("main", "main_delay_ms"), ("pip", "pip_delay_ms"), ("pip2", "pip2_delay_ms"), ("pip3", "pip3_delay_ms")):
         if c.get(pos):
-            out[c[pos]] = max(0, min(3000, int(c.get(dk, 0) or 0)))
+            out[c[pos]] = max(0, min(MAX_DELAY_MS, int(c.get(dk, 0) or 0)))
     return out
 
 
