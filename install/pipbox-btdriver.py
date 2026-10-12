@@ -49,6 +49,9 @@ FW_WAIT = 25                                  # so lange (Sekunden) auf die Meld
 MODPROBE_CONF = "/etc/modprobe.d/pipbox-btdriver.conf"       # sperrt rtk_btusb, damit es den Stick nicht vor btusb übernimmt
 # Hersteller, deren Sticks das mitgelieferte Realtek-Modul rtk_btusb (Alias auf alle Produkte des Herstellers) vor btusb übernimmt
 RTK_VENDORS = {"0bda", "0b05", "0489", "04ca", "04c5", "0930", "0cb5", "0cb8", "10ec", "1358", "13d3", "2ff8"}
+MODPROBE_TEXT = b"# IRL4YOU BOX: let btusb (with extra IDs) take Realtek sticks, not rtk_btusb
+blacklist rtk_btusb
+".decode("ascii")      # Konfigurationsdatei, kein Oberflächentext
 STEPS = 5                                     # Schritte der Anzeige beim Einrichten
 PERSIST = "/var/lib/pipbox-btdriver"         # gehört root: Merkzettel "hat nicht geklappt" und "eingespielt"
 SYSFS_USB = "/sys/bus/usb/devices"
@@ -435,7 +438,7 @@ def rtk_conflict(ids):
 def set_rtk_blacklist(on):
     """rtk_btusb sperren (kein Laden mehr über die Kennung des Sticks) oder die Sperre wieder aufheben."""
     if on:
-        write_text(MODPROBE_CONF, "# IRL4YOU BOX: let btusb (with extra IDs) take Realtek sticks, not rtk_btusb\nblacklist rtk_btusb\n")
+        write_text(MODPROBE_CONF, MODPROBE_TEXT)
     else:
         try:
             os.remove(MODPROBE_CONF)
