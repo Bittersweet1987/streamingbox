@@ -172,6 +172,16 @@ def slot_keys(c):
 
 
 MAX_DELAY_MS = 750
+# Verzugs-Schutz (12. Oktober 2026, Testbox): Liefert ein Kamerabild dauerhaft zu spät oder zu früh (in_f<N>_lag in der Statistik von belacoder), nimmt der Regler diesen Zweig kurz aus der Sendekette
+# und startet ihn neu (neue Ausrichtung). Gesunde Werte lagen zwischen -742 und +108 ms. Ein Bild über +1500 ms im Rückstand ließ 10 s später den Encoder stehen (Neustart der
+# Sendekette), ein Bild über 2,5 s zu früh blieb bei 3 Bildern/s hängen (Ausrichtung auf einen alten ersten Frame).
+LAG_LATE_MS = 1500
+LAG_EARLY_MS = -2500
+LAG_SUSTAIN_S = 6.0       # so lange muss es dauern
+LAG_GRACE_S = 8.0         # nach dem Start eines Zweigs (Zustand 3) wird so lange nichts bewertet
+LAG_HOLD_S = 15.0         # so lange bleibt der Zweig draußen
+LAG_MAX_TRIES = 3         # je Kamera höchstens so oft ...
+LAG_WINDOW_S = 180.0      # ... in dieser Zeit; danach lässt der Regler das Bild in Ruhe (der Wächter greift bei einem echten Hänger)
 HOLD_FILE = "feed-hold.json"       # {"keys": {Schlüssel: Ablaufzeit (Unix-Sekunden)}}: der Kamera-Dienst bittet, den Zweig dieser Kamera zu stoppen, bevor er ihren Stream beendet                         # größte Verzögerung, die diese Engine verarbeitet (Einstellung bis 3000 ms bleibt für die älteren Engines gültig)
 
 
@@ -407,6 +417,19 @@ def read_stats(path=LIVE_STATS, now=None):
     return {int(m.group(1)): int(m.group(2)) for m in re.finditer(r" feed_sbf(\d)=(\d)", text)}
 
 
+def read_lags(path=LIVE_STATS, now=None):
+    """Mittlerer Zeitversatz jedes Zweigs am Mischer in ms aus der Statistik von belacoder (in_f<N>_lag=min/mittel/max): {Platz: ms}. Positiv = zu spät, negativ = zu früh.
+    Leer, wenn die Datei fehlt oder alt ist."""
+    try:
+        if (now if now is not None else time.time()) - os.stat(path).st_mtime > STATS_MAX_AGE_S:
+            return {}
+        with open(path) as f:
+            text = f.readline()
+    except OSError:
+        return {}
+    return {int(m.group(1)): int(m.group(3)) for m in re.finditer(r" in_f(\d)_lag=(-?\d+)/(-?\d+)/(-?\d+)", text)}
+
+
 def parse_rtmp_stats(xml):
     """Aus der nginx-Statistik: {Schlüssel: {"w":…, "h":…, "audio": bool}} der Kameras, die gerade senden."""
     out = {}
@@ -538,10 +561,13 @@ class LiveController:
     (6) die geänderten Befehle für Bildflächen, Rahmen, Ton, Stumm und Verzögerung senden."""
 
     def __init__(self, load_json, put_state_file, state_dir, safe_cfg, view_values, log=print, clock=time.monotonic,
-                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE, start_cfg=None, wall=time.time):
+                 fetch=fetch_publishing, stats=read_stats, control=send_control, rtmp_base=RTMP_BASE, start_cfg=None, wall=time.time, lags=read_lags):
         self.load_json, self.put, self.state_dir = load_json, put_state_file, state_dir
         self.wall = wall                           # Uhrzeit für die Ablaufzeiten in feed-hold.json (der Kamera-Dienst schreibt Unix-Sekunden)
         self.held = set()
+        self.lags_fn = lags
+        self.lag_hold = {}                         # Schlüssel -> monotone Zeit, bis zu der der Verzugs-Schutz den Zweig draußen hält
+        self.lag_since, self.up_at, self.lag_tries = {}, {}, {}
         self.safe_cfg, self.view_values = safe_cfg, view_values
         # Einstellung, mit der die Sendekette gestartet wurde: daraus stammt der Ausrichtungspuffer (belacoder -A) und die Verzögerungen, die dazu passen
         sc = safe_cfg(start_cfg) if start_cfg else None
@@ -656,6 +682,38 @@ class LiveController:
         keys = d.get("keys") if isinstance(d, dict) else None
         now = self.wall()
         self.held = {k for k, t in keys.items() if isinstance(k, str) and isinstance(t, (int, float)) and not isinstance(t, bool) and t > now} if isinstance(keys, dict) else set()
+        mono = self.clock()
+        self.lag_hold = {k: t for k, t in self.lag_hold.items() if t > mono}
+        self.held |= set(self.lag_hold)            # auch der Verzugs-Schutz hält Zweige draußen
+
+    def check_lag(self, now, slot_key):
+        """Verzugs-Schutz: ein Bild, das länger als LAG_SUSTAIN_S zu spät (über LAG_LATE_MS) oder zu früh (unter LAG_EARLY_MS) am Mischer ankommt, wird für LAG_HOLD_S aus der
+        Sendekette genommen und dann neu gestartet. Der Zweig bekommt dabei eine neue Ausrichtung; die anderen Bilder und der Ausgang laufen weiter."""
+        lags = self.lags_fn() or {}
+        for s in range(SLOTS):
+            key = slot_key[s]
+            if not key or self.states.get(s) != 3 or key in self.held:
+                self.lag_since.pop(s, None)
+                self.up_at.pop(s, None)
+                continue
+            up = self.up_at.setdefault(s, now)
+            v = lags.get(s)
+            if v is None or now - up < LAG_GRACE_S or not (v > LAG_LATE_MS or v < LAG_EARLY_MS):
+                self.lag_since.pop(s, None)
+                continue
+            since = self.lag_since.setdefault(s, now)
+            if now - since < LAG_SUSTAIN_S:
+                continue
+            self.lag_since.pop(s, None)
+            tries = [t for t in self.lag_tries.get(key, []) if now - t < LAG_WINDOW_S]
+            self.lag_tries[key] = tries
+            if len(tries) >= LAG_MAX_TRIES:
+                continue                                   # es hilft nicht: das Bild bleibt, wie es ist
+            tries.append(now)
+            self.lag_hold[key] = now + LAG_HOLD_S
+            self.held.add(key)
+            self.up_at.pop(s, None)
+            self.log(f"send: Kamera {key} (Platz {s}): Bild {abs(v) / 1000:.1f} s {'zu spät' if v > 0 else 'zu früh'}, der Zweig wird {int(LAG_HOLD_S)} s ausgesetzt und neu ausgerichtet")
 
     def _cooldown_ok(self, s, now):
         return now - self.cmd_at.get(s, -100.0) > FEED_COOLDOWN_S
@@ -675,6 +733,7 @@ class LiveController:
                 self.pub, self.pub_known = got, True
         self.states = self.stats()
         slot_key = self.binder.slot_key
+        self.check_lag(now, slot_key)
         for s in range(SLOTS):
             key, st = slot_key[s], self.states.get(s)
             if st is None or not self.pub_known:
