@@ -408,6 +408,24 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('"wifi": os.path.isdir(f"/sys/class/net/{name}/wireless")', src)                    # der Server meldet, welche Schnittstelle ein WLAN ist
         self.assertIn("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt", open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())      # der Server lehnt den alten Weg weiter ab
 
+    def test_dji_camera_row_shows_a_small_network_change_note(self):
+        """Unter der Zeile einer DJI-Kamera steht klein, was beim Netzwechsel passiert (Wunsch des Nutzers, 12. Oktober 2026)."""
+        self.assertIn('<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div>', PAGE)   # nur für DJI-Kameras, zunächst leer
+        self.assertIn(".cam .netnote{margin:3px 0 0;font-size:11px;", PAGE)                               # klein
+        i = PAGE.index("function netNoteOf(key){")
+        fn = PAGE[i:PAGE.index("function paintNetNotes(){", i)]
+        for text in ("Bitte WLAN-Name und Passwort in der DJI-Karte eintragen.", "Wechsle Netz …", "Netzwechsel erfolgreich (${ch.iface})",
+                     "Netzwechsel fehlgeschlagen. Die Meldung steht in der DJI-Karte.", "Netz gewählt. Gilt nach „Neu verbinden“ (↻).",
+                     "Netz gewählt. Gilt beim nächsten Verbinden."):
+            self.assertIn(text, fn)
+        self.assertIn("/von Hand|Passwort/i", fn)                                                         # fehlendes Passwort: Hinweis auf die DJI-Karte
+        self.assertIn('d.wifi_ifname===ch.iface', fn)                                                     # Erfolg nur, wenn die Kamera wirklich über die gewählte Verbindung sendet
+        self.assertIn("ch.busy", fn)                                                                      # und nur nach einem neuen Verbindungsaufbau, nicht aus dem alten Zustand
+        self.assertIn("45000", fn)                                                                        # der Erfolg verschwindet wieder
+        self.assertIn("netChg[e.target.dataset.dji]={iface:e.target.value,reconn:false,busy:false,okAt:0}", PAGE)   # Auswahl startet die Anzeige
+        self.assertIn("{reconn:true,busy:false,okAt:0}", PAGE)                                            # Knopf "Neu verbinden" ebenso
+        self.assertIn("setInterval(()=>{ if(!document.hidden) paintNetNotes(); },1000);", PAGE)
+
     def test_installed_version_has_an_info_button_that_shows_only_its_changes(self):
         """Bei der installierten Version steht ein "i" (Wunsch des Nutzers, 12. Oktober 2026): öffnet den Änderungsverlauf und zeigt nur diese Version."""
         i = PAGE.index('<span>Installiert</span>')
