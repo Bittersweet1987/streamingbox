@@ -45,6 +45,7 @@ RUN = "/run/pipbox-btdriver"
 STATUS = f"{RUN}/status.json"
 LOCK = "/run/pipbox-btdriver.lock"
 REQ = "/var/lib/pipbox/btdriver-request"      # legt der Dienst pipbox (ohne Root) per Knopf in der Oberfläche an; Inhalt nur "install"
+FW_WAIT = 25                                  # so lange (Sekunden) auf die Meldung des Realtek-Teils warten: der Adapter erscheint, bevor der Start läuft
 STEPS = 5                                     # Schritte der Anzeige beim Einrichten
 PERSIST = "/var/lib/pipbox-btdriver"         # gehört root: Merkzettel "hat nicht geklappt" und "eingespielt"
 SYSFS_USB = "/sys/bus/usb/devices"
@@ -520,11 +521,16 @@ def do_auto(force=False):
         step(5, "Stick wird geprüft", manual=bool(force))
         new = dmesg_lines()[before:]
         if any(i not in BARROT for i in need):
+            end = time.time() + FW_WAIT
+            while not (any("RTL" in x for x in new) or firmware_errors("\n".join(new))) and time.time() < end:
+                time.sleep(1)                                              # der Adapter ist da, sein Start (und die Firmware) läuft noch
+                new = dmesg_lines()[before:]
             bad = firmware_errors("\n".join(new))
             if bad:
                 raise RuntimeError("Firmware des Sticks ließ sich nicht laden: " + bad[-1])
             if not any("RTL" in x for x in new):
-                raise RuntimeError("Der Treiber hat keine Firmware für den Stick geladen (keine Meldung des Realtek-Teils)")
+                last = [x.strip()[-90:] for x in new if "Bluetooth" in x or "btusb" in x][-1:]
+                raise RuntimeError("Der Treiber hat keine Firmware für den Stick geladen (keine Meldung des Realtek-Teils)" + (f", zuletzt: {last[0]}" if last else ""))
         barrot = [i for i in need if i in BARROT]
         if barrot:
             bad = barrot_errors(barrot, lines=lambda: dmesg_lines()[before:])

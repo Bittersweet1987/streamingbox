@@ -165,6 +165,9 @@ class Flow(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.reload_ok = True
+        mp0 = mock.patch.object(bt, "FW_WAIT", 0)
+        mp0.start()
+        self.addCleanup(mp0.stop)
         self.new_dmesg = ["Bluetooth: hci0: RTL: loading rtl_bt/rtl8761bu_fw.bin"]
 
     def fake_build(self, rel=None, ids=None):
@@ -260,6 +263,19 @@ class Flow(unittest.TestCase):
         bt.do_auto()
         self.assertIn("rollback", self.calls)
         self.assertIn("keine Firmware", self.status["message"])
+
+    def test_the_firmware_message_that_comes_late_is_waited_for(self):
+        """Der Adapter erscheint, bevor sein Start läuft: die Meldung des Realtek-Teils kommt erst einige Sekunden später."""
+        self.new_dmesg = []
+        late = ["Bluetooth: hci0: RTL: loading rtl_bt/rtl8761b_fw.bin"]
+        n = [0]
+
+        def lines():
+            n[0] += 1
+            return list(self.dmesg) + (late if n[0] > 4 else [])
+        with mock.patch.object(bt, "FW_WAIT", 30), mock.patch.object(bt.time, "sleep", lambda s: None), mock.patch.object(bt, "dmesg_lines", lines):
+            bt.do_auto()
+        self.assertEqual(self.status["state"], "ok")
 
     def test_old_module_still_loaded_rolls_back(self):
         self.loaded = "ALT999"

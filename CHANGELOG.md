@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.13
+- **Bluetooth-Treiber: wartet auf die Meldung der Firmware (Realtek RTL8761B, 0bda:8771).** Bei einem Nutzer hieß es „Der Treiber hat keine Firmware für den Stick geladen“, obwohl der Treiber vermutlich lief: Der Adapter erscheint, bevor sein Start und das Laden der Firmware laufen, die Prüfung las das Kernelprotokoll aber sofort. Jetzt wartet der Helfer bis zu 25 Sekunden auf die Meldung des Realtek-Teils; ein echter Firmware-Fehler bricht weiterhin sofort ab. Schlägt es trotzdem fehl, steht die letzte Bluetooth-Zeile des Kernels in der Meldung. Neuer Test in `tools/test_btdriver.py`.
+
 ## 1.0.12
 - **Die Warnung „zwei Verbindungen zum selben Netzwerk“ kam zu oft (Nutzermeldung, 12. Oktober 2026).** Hängt die Box über LAN *und* WLAN am selben Router, ist das derselbe Anschluss und kein Konflikt; die ARP-Einstellung aus 1.0.11 genügt dort, und die Warnung war unberechtigt. Jetzt warnt die Live-Karte nur noch, wenn **derselbe Adressbereich bei zwei verschiedenen Geräten** benutzt wird (zum Beispiel zwei Modems oder Hotspots, die beide 192.168.8.x vergeben): Der Adress-Wächter vergleicht dafür die **Hardware-Adresse des Routers** (Standardgateway) an den beiden Karten. Gleich = ein Gerät = keine Warnung; verschieden = zwei Geräte = Warnung mit Kartennamen und Netz („wlan0, wlan1 (192.168.8.0/24)“). Lässt sich eine der beiden Adressen nicht ermitteln, bleibt es still.
   - Die ARP-Einstellung selbst gilt weiter für jede Überschneidung zweier Karten (auch am selben Router).
