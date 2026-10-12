@@ -46,6 +46,9 @@ STATUS = f"{RUN}/status.json"
 LOCK = "/run/pipbox-btdriver.lock"
 REQ = "/var/lib/pipbox/btdriver-request"      # legt der Dienst pipbox (ohne Root) per Knopf in der Oberfläche an; Inhalt nur "install"
 FW_WAIT = 25                                  # so lange (Sekunden) auf die Meldung des Realtek-Teils warten: der Adapter erscheint, bevor der Start läuft
+MODPROBE_CONF = "/etc/modprobe.d/pipbox-btdriver.conf"       # sperrt rtk_btusb, damit es den Stick nicht vor btusb übernimmt
+# Hersteller, deren Sticks das mitgelieferte Realtek-Modul rtk_btusb (Alias auf alle Produkte des Herstellers) vor btusb übernimmt
+RTK_VENDORS = {"0bda", "0b05", "0489", "04ca", "04c5", "0930", "0cb5", "0cb8", "10ec", "1358", "13d3", "2ff8"}
 STEPS = 5                                     # Schritte der Anzeige beim Einrichten
 PERSIST = "/var/lib/pipbox-btdriver"         # gehört root: Merkzettel "hat nicht geklappt" und "eingespielt"
 SYSFS_USB = "/sys/bus/usb/devices"
@@ -424,12 +427,39 @@ def active_units(units):
     return [u for u in units if run(["systemctl", "is-active", "--quiet", u]).returncode == 0]
 
 
+def rtk_conflict(ids):
+    """Gibt es unter den Sticks einen, den rtk_btusb (Hersteller-Modul der Box) vor btusb übernehmen würde?"""
+    return any(i.split(":")[0] in RTK_VENDORS and i in ALL_IDS and i not in BARROT for i in ids)
+
+
+def set_rtk_blacklist(on):
+    """rtk_btusb sperren (kein Laden mehr über die Kennung des Sticks) oder die Sperre wieder aufheben."""
+    if on:
+        write_text(MODPROBE_CONF, "# IRL4YOU BOX: let btusb (with extra IDs) take Realtek sticks, not rtk_btusb\nblacklist rtk_btusb\n")
+    else:
+        try:
+            os.remove(MODPROBE_CONF)
+        except OSError:
+            pass
+
+
+def write_text(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
 def reload_bluetooth():
     """Treiber neu laden: Dienste anhalten, btusb entladen und laden, Dienste wieder starten. Gibt zurück, ob ein Adapter da ist."""
     units = active_units(("pipbox-dji.service", "bluetooth.service"))
     for u in units:
         run(["systemctl", "stop", u], timeout=60)
     unloaded = run(["modprobe", "-r", "btusb"], timeout=60).returncode == 0
+    if os.path.exists(MODPROBE_CONF):
+        run(["modprobe", "-r", "rtk_btusb"], timeout=60)                 # sonst hält es den Stick weiter fest
     r = run(["modprobe", "btusb"], timeout=60)
     ok = unloaded and r.returncode == 0 and adapter_present()
     for u in ("bluetooth.service", "pipbox-dji.service"):                  # Reihenfolge: erst bluetooth
@@ -465,6 +495,7 @@ def rollback(backup, rel=None):
     except OSError as e:
         log(f"Rückbau: {e}")
     run(["depmod", "-a", rel], timeout=120)
+    set_rtk_blacklist(False)
     reload_bluetooth()
 
 
@@ -483,7 +514,7 @@ def do_auto(force=False):
     if not kernel_supported(rel):
         st(state="unsupported", ids=sorted(need), message=f"Für den Kernel {rel} gibt es keinen vorbereiteten Treiber ({names}). Dieser Stick läuft dort möglicherweise nicht richtig.")
         return 0
-    if not force and installed_ok(rel, need):
+    if not force and installed_ok(rel, need) and not (rtk_conflict(need) and not os.path.exists(MODPROBE_CONF)):
         h = heal(rel)
         if h == "ok":
             st(state="ok", ids=sorted(need), message=f"Treiber für {names} ist eingerichtet.")
@@ -514,6 +545,8 @@ def do_auto(force=False):
         step(3, "Treiber wird eingespielt", manual=bool(force))
         backup = install_module(ko, rel)
         step(4, "Bluetooth wird neu geladen", manual=bool(force))
+        if rtk_conflict(need):
+            set_rtk_blacklist(True)
         if not reload_bluetooth():
             raise RuntimeError("Nach dem Laden des Treibers gibt es keinen Bluetooth-Adapter (oder das alte Modul ließ sich nicht entladen)")
         if want_src and loaded_srcversion() != want_src:
@@ -566,6 +599,7 @@ def do_uninstall():
         except OSError:
             pass
     run(["depmod", "-a", rel], timeout=120)
+    set_rtk_blacklist(False)
     for m in ("installed.json", "failed.json"):
         try:
             os.remove(marker(m))

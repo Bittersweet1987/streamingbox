@@ -130,6 +130,9 @@ class Detection(unittest.TestCase):
         self.assertEqual(len(bt.firmware_errors("\n".join(bad))), 2)
 
 
+bt_real_reload = bt.reload_bluetooth
+
+
 class Flow(unittest.TestCase):
     """do_auto mit nachgestellten Bausteinen."""
 
@@ -276,6 +279,39 @@ class Flow(unittest.TestCase):
         with mock.patch.object(bt, "FW_WAIT", 30), mock.patch.object(bt.time, "sleep", lambda s: None), mock.patch.object(bt, "dmesg_lines", lines):
             bt.do_auto()
         self.assertEqual(self.status["state"], "ok")
+
+    def test_rtk_btusb_is_blacklisted_for_realtek_vendor_sticks(self):
+        """rtk_btusb hat einen Alias auf alle Produkte von Realtek (0bda) und hält den Stick sonst vor btusb fest."""
+        self.assertTrue(bt.rtk_conflict(["0bda:8771"]))
+        self.assertFalse(bt.rtk_conflict(["2357:0604"]))
+        self.assertFalse(bt.rtk_conflict(["33fa:0012"]))
+        conf = os.path.join(self.d, "modprobe.conf")
+        with mock.patch.object(bt, "MODPROBE_CONF", conf), mock.patch.object(bt, "wanted", lambda present=None: {"0bda:8771": bt.CANDIDATES["0bda:8771"]}):
+            bt.do_auto()
+            self.assertIn("blacklist rtk_btusb", open(conf).read())
+            self.assertEqual(self.status["state"], "ok")
+            bt.set_rtk_blacklist(False)
+            self.assertFalse(os.path.exists(conf))
+
+    def test_failure_removes_the_blacklist_again(self):
+        conf = os.path.join(self.d, "modprobe.conf")
+        self.reload_ok = False
+        with mock.patch.object(bt, "MODPROBE_CONF", conf), mock.patch.object(bt, "wanted", lambda present=None: {"0bda:8771": bt.CANDIDATES["0bda:8771"]}), \
+                mock.patch.object(bt, "rollback", lambda b, rel=None: bt.set_rtk_blacklist(False) or self.calls.append("rollback")):
+            bt.do_auto()
+        self.assertEqual(self.status["state"], "failed")
+        self.assertFalse(os.path.exists(conf))
+
+    def test_reload_also_unloads_rtk_btusb_when_blacklisted(self):
+        conf = os.path.join(self.d, "modprobe.conf")
+        open(conf, "w").close()
+        seen = []
+        with mock.patch.object(bt, "MODPROBE_CONF", conf), mock.patch.object(bt, "reload_bluetooth", bt_real_reload), \
+                mock.patch.object(bt, "active_units", lambda u: []), mock.patch.object(bt, "adapter_present", lambda timeout=15: True), \
+                mock.patch.object(bt, "run", lambda args, **kw: seen.append(args) or mock.Mock(returncode=0, stdout="", stderr="")):
+            self.assertTrue(bt.reload_bluetooth())
+        self.assertIn(["modprobe", "-r", "rtk_btusb"], seen)
+        self.assertLess(seen.index(["modprobe", "-r", "rtk_btusb"]), seen.index(["modprobe", "btusb"]))
 
     def test_old_module_still_loaded_rolls_back(self):
         self.loaded = "ALT999"
@@ -722,7 +758,7 @@ class Wiring(unittest.TestCase):
         for k, v in want.items():
             self.assertEqual(got.get(k), v, k)
         self.assertEqual(set(got["CapabilityBoundingSet"].split()), {"CAP_SYS_MODULE", "CAP_SYSLOG", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_CHOWN"})
-        self.assertEqual(got["ReadWritePaths"].split(), ["/lib/modules", "/run", "/var/lib/pipbox"])    # dazu die Auslösedatei der Oberfläche
+        self.assertEqual(got["ReadWritePaths"].split(), ["/lib/modules", "/run", "/var/lib/pipbox", "/etc/modprobe.d"])    # dazu die Auslösedatei der Oberfläche
         self.assertEqual(got["StateDirectory"], "pipbox-btdriver")                         # legt /var/lib/pipbox-btdriver an (Merkzettel des Helfers)
         self.assertNotIn("User=", unit)                                                    # Root bleibt nötig (Module laden), aber nur mit diesen Einschränkungen
         self.assertEqual(got["ExecStart"].split()[-1], "auto")                             # fester Aufruf, keine Eingabe
