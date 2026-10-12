@@ -200,7 +200,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .qrbox.big{flex-direction:column;gap:16px}
 .qrbox.big .qri svg{width:340px}
 @media(max-width:620px){.qrbox{flex-direction:column;gap:18px}.qri{font-size:14px;gap:4px}.qri svg{width:min(100%,340px)}}   /* Handy: Codes untereinander und groß genug zum Abfotografieren (GoPro) */
-.cam .netnote{margin:3px 0 0;font-size:11px;line-height:1.3;color:var(--muted)}
+.cam .netnote,.cam .netlock{margin:3px 0 0;font-size:11px;line-height:1.3;color:var(--muted)}
 .cam .netnote.ok{color:var(--ok)}.cam .netnote.bad{color:var(--crit)}
 .cam code{display:block;margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
 .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);margin-left:6px}
@@ -1347,7 +1347,7 @@ function renderCams(list){
     box.innerHTML=list.length?list.map((c,i)=>
       `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
-      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${(c.key||"").startsWith("dji-")?`<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div>`:""}${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro: zuerst den Hotspot der Box einrichten und die GoPro damit verbinden (GoPro-App), dann bei Labs-Firmware die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
+      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${(c.key||"").startsWith("dji-")?`<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div><div class="netlock" data-lockkey="${esc(c.key)}" hidden></div>`:""}${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro: zuerst den Hotspot der Box einrichten und die GoPro damit verbinden (GoPro-App), dann bei Labs-Firmware die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
@@ -1365,8 +1365,7 @@ const netChg={};                                         // Schlüssel der Kamer
 const NET_BUSY=["searching","connecting","pairing","preparing","wifi","configuring","starting"];
 function netNoteOf(key){
   const d=((typeof djiData!=="undefined"&&djiData.cameras)||[]).find(x=>x.rtmp_key===key); if(!d) return null;
-  const ch=netChg[key];
-  if(!ch) return d.switch_wait>0?{cls:"",t:`Wechsel gesperrt: noch ${d.switch_wait} s.`}:null;
+  const ch=netChg[key]; if(!ch) return null;
   const st=d.state; if(NET_BUSY.includes(st)) ch.busy=true;
   if(st==="error"){
     const det=String(d.detail||"");
@@ -1387,7 +1386,12 @@ function netNoteOf(key){
 function paintNetNotes(){
   document.querySelectorAll("#cams .netnote").forEach(el=>{ const key=el.dataset.key, n=netNoteOf(key);
     const d=((typeof djiData!=="undefined"&&djiData.cameras)||[]).find(x=>x.rtmp_key===key), lock=!!(d&&d.switch_wait>0);   // nach einem Wechsel zwei Minuten kein weiterer (der Kamera-Dienst lehnt ihn ebenfalls ab)
-    document.querySelectorAll(`#cams [data-dji="${key}"]`).forEach(b=>{ if((b.classList.contains("camnetsel")||b.classList.contains("camreconn"))&&b.disabled!==lock) b.disabled=lock; });
+    document.querySelectorAll(`#cams [data-dji="${key}"]`).forEach(b=>{ if(!(b.classList.contains("camnetsel")||b.classList.contains("camreconn"))) return;
+      if(b.disabled!==lock) b.disabled=lock;
+      if(lock){ if(b.dataset.ot===undefined) b.dataset.ot=b.title; const t=`Wechsel für zwei Minuten gesperrt: noch ${d.switch_wait} s.`; if(b.title!==t) b.title=t; }
+      else if(b.dataset.ot!==undefined){ b.title=b.dataset.ot; delete b.dataset.ot; } });                    // frei: der ursprüngliche Tipp kommt zurück
+    const lk=document.querySelector(`#cams .netlock[data-lockkey="${key}"]`);                                     // eigene Zeile: "Wechsel für zwei Minuten gesperrt: noch N s."
+    if(lk){ const show=lock&&!n, t=show?`Wechsel für zwei Minuten gesperrt: noch ${d.switch_wait} s.`:""; lk.hidden=!show; if(lk.textContent!==t) lk.textContent=t; }   // erst der Hinweis zum Wechsel (grün), danach die Sperre
     el.hidden=!n; if(!n) return; if(el.textContent!==n.t) el.textContent=n.t; el.className="netnote"+(n.cls?" "+n.cls:""); });
 }
 setInterval(()=>{ if(!document.hidden) paintNetNotes(); },1000);
