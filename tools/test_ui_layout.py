@@ -395,6 +395,11 @@ class ImportProgress(unittest.TestCase):
         click = PAGE[PAGE.index('$("cams").addEventListener("click"', ci):PAGE.index("async function renameCam")]
         self.assertIn('djiCmd({cmd:"reconnect",addr})', click)
         self.assertIn("x.rtmp_key===key", PAGE)                                                           # Schlüssel der Kamera -> Adresse im Kamera-Dienst
+        # Der Knopf muss sichtbar bleiben: .camnet schneidet Überlauf ab und das Auswahlfeld füllt 100 %, ohne eigene Flex-Zeile verschwand der Knopf (1.0.18, gemessen auf der Box)
+        self.assertIn('<span class="camnet withbtn">', fn)
+        self.assertIn(".cam .camnet.withbtn{display:flex;", PAGE)
+        self.assertIn(".cam .camnet.withbtn select{flex:1 1 0;min-width:0;width:auto}", PAGE)
+        self.assertIn(".camreconn{flex:none;", PAGE)
         self.assertIn("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt", open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())      # der Server lehnt den alten Weg weiter ab
 
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
