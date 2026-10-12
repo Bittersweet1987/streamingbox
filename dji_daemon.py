@@ -1348,6 +1348,7 @@ class Daemon:
             await cam.stop()
             del self.cameras[addr]
             self.save()
+            await bluez_cleanup(addr, remove=True)           # wie bei Handys und Controllern: auch die Kopplung in BlueZ aufheben (sonst bleibt nach "Entfernen" und Zurücksetzen der Kamera ein alter Eintrag)
             return {"ok": True}
         if cmd == "connect":
             cam.start()                 # eine Verbindung jetzt; der Schalter "automatisch verbinden" bleibt unberührt
