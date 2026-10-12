@@ -1168,6 +1168,99 @@ class Session(unittest.TestCase):
             await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
+    # -- Wechsel der Verbindung bei Client-WLANs, deren Passwort der Dienst nicht lesen kann (Testbox 12. Oktober 2026): die Kamera bekam den Namen des alten Netzes
+    #    und die Adresse des neuen ("wifi S23" mit Ziel 192.168.80.135)
+    OPTS2 = [{"ifname": "wlan0", "ssid": "GL-Netz", "password": "", "ip": "192.168.80.135", "type": "client", "secret_missing": True},
+             {"ifname": "wlan1", "ssid": "S23", "password": "", "ip": "10.53.136.72", "type": "client", "secret_missing": True}]
+
+    async def connect_and_read(self, dm, sim, opts=None):
+        with mock.patch.object(dd, "nm_wifi_options", lambda: opts or self.OPTS2):
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            ok = await self.wait_state(cam, ("streaming", "error"))
+            self.assertTrue(ok)
+            res = (cam.state, cam.detail)
+            if cam.state == "streaming":
+                wifi = [m for m in sim.sent if m.id == dd.ID_WIFI][-1]
+                start = [m for m in sim.sent if m.id == dd.ID_START][-1]
+                res = (wifi.payload, start.payload)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            return res
+
+    def test_switching_the_connection_uses_the_wlan_of_that_connection(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="wlan1", ssid="S23", password="pwS23")      # Kamera lief über wlan1
+            cam = dm.cameras[ADDR]
+            cam.cfg["saved"] = [{"ssid": "GL-Netz", "password": "pwGL"}, {"ssid": "S23", "password": "pwS23"}]
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("S23") + dd.pack_string("pwS23"))
+            self.assertIn(b"10.53.136.72:1935", start)
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "wlan0"})             # Auswahl in der Kameraliste
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("GL-Netz") + dd.pack_string("pwGL"))            # Name UND Adresse vom neuen Netz
+            self.assertIn(b"192.168.80.135:1935", start)
+            self.assertEqual(cam.cfg["ssid"], "GL-Netz")
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "wlan1"})             # und zurück
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("S23") + dd.pack_string("pwS23"))
+            self.assertIn(b"10.53.136.72:1935", start)
+        arun(go())
+
+    def test_stale_wlan_without_marker_is_replaced_by_the_saved_network_of_the_connection(self):
+        """Der Fall der Testbox: Einstellung aus einer älteren Version (ohne Merker), Name S23 stand noch drin, gewählt war schon wlan0."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="wlan0", ssid="S23", password="pwS23")
+            cam = dm.cameras[ADDR]
+            cam.cfg.pop("ssid_if", None)
+            cam.cfg["saved"] = [{"ssid": "GL-Netz", "password": "pwGL"}, {"ssid": "S23", "password": "pwS23"}]
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("GL-Netz") + dd.pack_string("pwGL"))
+            self.assertIn(b"192.168.80.135:1935", start)
+        arun(go())
+
+    def test_unknown_password_of_the_new_connection_gives_a_clear_message_and_sends_nothing(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="wlan1", ssid="S23", password="pwS23")
+            await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "wlan0"})             # kein gespeichertes Netz für GL-Netz
+            state, detail = await self.connect_and_read(dm, sim)
+            self.assertEqual(state, "error")
+            self.assertIn("GL-Netz", detail)
+            self.assertIn("von Hand", detail)
+            self.assertEqual([m for m in sim.sent if m.id in (dd.ID_WIFI, dd.ID_START)], [])      # nicht das falsche Netz schicken
+        arun(go())
+
+    def test_name_typed_for_this_connection_is_kept(self):
+        """Ein für diese Verbindung gewählter Name (zum Beispiel der 2,4-GHz-Name desselben Routers) bleibt gültig."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="wlan0", ssid="GL-Netz-2G", password="pw2G")    # von Hand für wlan0 eingetragen
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("GL-Netz-2G") + dd.pack_string("pw2G"))
+            self.assertIn(b"192.168.80.135:1935", start)
+        arun(go())
+
+    def test_legacy_setting_without_saved_network_keeps_the_old_behaviour(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="wlan0", ssid="Router2G", password="pw2G")
+            dm.cameras[ADDR].cfg.pop("ssid_if", None)
+            wifi, start = await self.connect_and_read(dm, sim)
+            self.assertEqual(wifi, dd.pack_string("Router2G") + dd.pack_string("pw2G"))
+        arun(go())
+
     def test_cameras_connect_one_after_the_other(self):
         """Gleichzeitiges Verbinden bricht auf dem Funkchip ab (le-connection-abort-by-local): immer nur eine Kamera verbindet."""
         async def go():
