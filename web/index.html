@@ -1207,7 +1207,10 @@ function camNetHtml(c){
   // Die Änderung gilt ab der nächsten Verbindung der Kamera, darum steht daneben der Knopf "Neu verbinden".
   if((c.key||"").startsWith("dji-")){
     const own=c.via_src==="dji";
-    const opts=[`<option value=""${own?"":" selected"}>– wählen –</option>`].concat(netOpts.map(o=>`<option value="${esc(o.iface)}"${own&&c.via===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
+    // Eine DJI-Kamera tritt immer einem WLAN bei: Kabel-Schnittstellen (eth, USB-Tether) stehen hier nicht zur Wahl (in der DJI-Karte weiterhin). Eine dort
+    // schon gewählte bleibt sichtbar. Ohne Angabe "wifi" (ältere Box) bleibt alles wie vorher.
+    const nets=netOpts.filter(o=>o.wifi!==false||(own&&c.via===o.iface));
+    const opts=[`<option value=""${own?"":" selected"}>– wählen –</option>`].concat(nets.map(o=>`<option value="${esc(o.iface)}"${own&&c.via===o.iface?" selected":""}>${esc(netLabel(o))}</option>`));
     if(own&&c.via==="manual") opts.push(`<option value="manual" selected disabled>Manuell (in der DJI-Karte)</option>`);
     else if(own&&c.via&&!netOpts.some(o=>o.iface===c.via)) opts.push(`<option value="${esc(c.via)}" selected>${esc(c.via)} (nicht verbunden)</option>`);
     return `<span class="camnet withbtn"><select class="camnetsel" data-dji="${esc(c.key)}" title="Verbindung dieser Kamera: Ihre Adresse gilt für dieses Netz. Eine Änderung gilt ab der nächsten Verbindung der Kamera." aria-label="Verbindung">${opts.join("")}</select><button type="button" class="camreconn sec" data-dji="${esc(c.key)}" title="Neu verbinden: Die geänderte Verbindung gilt erst danach (der Stream der Kamera ist kurz weg)" aria-label="Neu verbinden">↻</button></span>`;
