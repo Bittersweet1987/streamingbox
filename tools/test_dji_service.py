@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.modules.setdefault("dbus", types.ModuleType("dbus"))
 import dji  # noqa: E402
 import dji_daemon as dd  # noqa: E402
+
+dd.FEED_HOLD_WAIT_S = 0.05            # die Wartezeit auf den Regler der Sendekette gilt nur im Betrieb; die Tests brauchen sie nicht (eigener Test unten)
 import server  # noqa: E402
 
 with open(os.path.join(HERE, "dji_golden.json")) as _f:
@@ -1259,6 +1261,62 @@ class Session(unittest.TestCase):
             dm.cameras[ADDR].cfg.pop("ssid_if", None)
             wifi, start = await self.connect_and_read(dm, sim)
             self.assertEqual(wifi, dd.pack_string("Router2G") + dd.pack_string("pw2G"))
+        arun(go())
+
+    def test_branch_is_taken_out_of_the_send_chain_before_the_stream_is_stopped(self):
+        """Beim Trennen, Neu verbinden und Wechsel des Netzes steht die Sperre für den Zweig in feed-hold.json, BEVOR die Kamera den Stream beendet (12. Oktober 2026)."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            tmp = tempfile.mkdtemp()
+            dm = dd.Daemon(tmp)
+            await self.setup_cam(dm)
+            hold_path = os.path.join(tmp, dd.FEED_HOLD_FILE)
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            self.assertFalse(os.path.exists(hold_path))                                          # laufender Betrieb: keine Sperre
+            seen = {}
+            stops_before = len([m for m in sim.sent if m.id == dd.ID_STOP])
+            key = cam.cfg["rtmp_key"]
+            real_release = cam.release_feed
+            async def spy():
+                await real_release()
+                d = json.load(open(hold_path)) if os.path.exists(hold_path) else {}
+                seen["hold"] = key in (d.get("keys") or {})
+                seen["stops"] = len([m for m in sim.sent if m.id == dd.ID_STOP])
+            cam.release_feed = spy
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            self.assertTrue(seen["hold"])                                                        # die Sperre stand schon
+            self.assertEqual(seen["stops"], stops_before)                                        # und die Kamera hatte noch nichts beendet
+            self.assertGreater(len([m for m in sim.sent if m.id == dd.ID_STOP]), stops_before)   # danach wurde der Stream beendet
+            d = json.load(open(hold_path))
+            self.assertGreater(d["keys"][key], time.time())                                      # mit Ablaufzeit
+            # neuer Stream: die Sperre wird freigegeben
+            cam.release_feed = real_release
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            self.assertNotIn(key, json.load(open(hold_path)).get("keys", {}))
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_hold_is_only_written_for_a_camera_that_delivers_a_stream(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            tmp = tempfile.mkdtemp()
+            dm = dd.Daemon(tmp)
+            await self.setup_cam(dm)
+            cam = dm.cameras[ADDR]
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})                                 # nichts verbunden: nichts zu stoppen
+            self.assertFalse(os.path.exists(os.path.join(tmp, dd.FEED_HOLD_FILE)))
+            self.assertFalse(dm.feed_hold("dji-000001", 0))                                      # Freigeben ohne Eintrag lässt die Datei in Ruhe
+            self.assertTrue(dm.feed_hold("dji-000001", 30))
+            self.assertTrue(dm.feed_hold("dji-000002", 30))
+            self.assertTrue(dm.feed_hold("dji-000001", 0))
+            keys = json.load(open(os.path.join(tmp, dd.FEED_HOLD_FILE)))["keys"]
+            self.assertEqual(sorted(keys), ["dji-000002"])                                       # nur der freigegebene Eintrag verschwindet
+            self.assertEqual(oct(os.stat(os.path.join(tmp, dd.FEED_HOLD_FILE)).st_mode & 0o777), "0o644")   # der Regler (root) liest sie
         arun(go())
 
     def test_cameras_connect_one_after_the_other(self):

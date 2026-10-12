@@ -416,8 +416,12 @@ class Fakes:
         self.sent = []
         self.ok = True
         self.t = 100.0
+        self.hold = {}                       # Inhalt von feed-hold.json
+        self.wall = 1_000_000.0              # Unix-Zeit für die Ablaufzeiten darin
 
     def load(self, name):
+        if name == L.HOLD_FILE:
+            return dict(self.hold)
         return dict(self.cfg)
 
     def control(self, lines):
@@ -429,7 +433,7 @@ class Fakes:
     def controller(self, tmp):
         c = L.LiveController(load_json=self.load, put_state_file=lambda *a: None, state_dir=tmp, safe_cfg=server.PipelineStore._safe_cfg,
                              view_values=server.PipelineStore.view_values, log=lambda m: None, clock=lambda: self.t,
-                             fetch=lambda: dict(self.pub), stats=lambda: dict(self.states), control=self.control)
+                             fetch=lambda: dict(self.pub), stats=lambda: dict(self.states), control=self.control, wall=lambda: self.wall)
         return c
 
     def take(self):
@@ -513,6 +517,53 @@ class ControllerTests(unittest.TestCase):
         lines = self.f.take()
         self.assertIn("feed sbf0 off", lines)
         self.assertIn("pad pipcomp sink_0 alpha 0", lines)
+
+    def test_held_camera_branch_is_stopped_while_it_still_publishes_and_comes_back_afterwards(self):
+        """Der Kamera-Dienst bittet vor dem Beenden des Streams (Wechsel des Netzes, Trennen), den Zweig zu stoppen (feed-hold.json)."""
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 3, 1: 3, 2: 1, 3: 1}
+        st = self.tick()
+        self.assertEqual(st["alive"], ["cam2", "dji-a"])
+        self.f.take()
+        self.f.hold = {"keys": {"cam2": self.f.wall + 45}}                # cam2 sendet noch, soll aber aus der Sendekette
+        st = self.tick(4.0)
+        lines = self.f.take()
+        self.assertIn("feed sbf1 off", lines)
+        self.assertNotIn("feed sbf0 off", lines)                         # die anderen Zweige bleiben unberührt
+        self.f.states[1] = 1
+        st = self.tick(4.0)
+        self.assertNotIn("cam2", self.c.alive)                           # nicht mehr im Stream, auch wenn nginx die Kamera noch zeigt
+        self.assertIn("cam2", st["alive"])                               # die Anzeige (Knopf in der Fußleiste) behält sie
+        self.assertIn("cam2", st["slots"])                               # der Platz bleibt
+        self.assertFalse(any(l == "feed sbf1 on" for l in self.f.take()))      # solange der Eintrag gilt, startet er nicht
+        self.f.hold = {}                                                 # der Dienst gibt frei (Kamera sendet neu)
+        self.tick(4.0)
+        self.assertIn("feed sbf1 on", self.f.take())
+
+    def test_expired_or_broken_hold_entries_are_ignored(self):
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+        for bad in ({"keys": {"dji-a": self.f.wall - 1}}, {"keys": {"dji-a": "x"}}, {"keys": {"dji-a": True}}, {"keys": [1]}, {"keys": None}, {"x": 1}, {}):
+            self.f.hold = bad
+            self.f.states[0] = 1
+            self.c.cmd_at.clear()
+            self.tick(4.0)
+            self.assertIn("feed sbf0 on", self.f.take(), bad)
+
+    def test_held_main_camera_hands_the_big_picture_to_the_next_one(self):
+        pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.pub = dict(pub)
+        self.f.states = {0: 3, 1: 3, 2: 1, 3: 1}
+        self.tick()
+        self.assertEqual(self.c.main_key, "dji-a")
+        self.f.hold = {"keys": {"dji-a": self.f.wall + 45}}
+        self.tick(4.0)
+        self.assertEqual(self.c.main_key, "cam2")                        # wie bei einem Ausfall, ohne Unterbrechung des Ausgangs
+        self.f.hold = {}
+        self.f.states[0] = 3
+        self.tick(1.0)
+        self.tick(4.0)
+        self.assertEqual(self.tick(1.0)["main"], "dji-a")                  # nach der Wartezeit (BACK_S) wieder die eigentliche Hauptkamera
 
     def test_main_camera_gone_the_next_one_becomes_big_and_comes_back(self):
         pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
