@@ -400,6 +400,12 @@ class ImportProgress(unittest.TestCase):
         self.assertIn(".cam .camnet.withbtn{display:flex;", PAGE)
         self.assertIn(".cam .camnet.withbtn select{flex:1 1 0;min-width:0;width:auto}", PAGE)
         self.assertIn(".camreconn{flex:none;", PAGE)
+        # Nur WLAN-Schnittstellen zur Wahl (eine DJI-Kamera tritt immer einem WLAN bei); eine schon gewählte Kabel-Schnittstelle bleibt sichtbar; normale Kameras unverändert
+        self.assertIn("netOpts.filter(o=>o.wifi!==false||(own&&c.via===o.iface))", fn)
+        self.assertIn("nets.map(o=>", fn)
+        self.assertEqual(fn.count("netOpts.map(o=>"), 1)                                                  # der Zweig der normalen Kameras behält alle Verbindungen
+        src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
+        self.assertIn('"wifi": os.path.isdir(f"/sys/class/net/{name}/wireless")', src)                    # der Server meldet, welche Schnittstelle ein WLAN ist
         self.assertIn("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt", open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())      # der Server lehnt den alten Weg weiter ab
 
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
