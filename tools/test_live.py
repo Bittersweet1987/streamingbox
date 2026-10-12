@@ -169,6 +169,188 @@ class Commands(unittest.TestCase):
         self.assertIn("set sbf1_vq min-threshold-time 0", lines)
 
 
+class BufferMismatch(unittest.TestCase):
+    """Passt der Ausrichtungspuffer der laufenden Sendekette noch zu den gespeicherten Verzögerungen? (12. Oktober 2026)"""
+
+    def test_table(self):
+        mm = L.buffer_mismatch
+        self.assertFalse(mm(750, 750))                      # unverändert
+        self.assertFalse(mm(750, 600))                      # kleinere Verzögerung, Puffer nur etwas größer als nötig: gut
+        self.assertFalse(mm(600, 750))                      # 150 ms knapper als empfohlen: noch in Ordnung
+        self.assertTrue(mm(600, 751))                       # mehr als 150 ms zu knapp: verzögerte Bilder kämen zu spät
+        self.assertFalse(mm(1400, 600))                     # genau 800 ms Überschuss
+        self.assertTrue(mm(1401, 600))                      # mehr als 800 ms Überschuss: Bilder kürzerer Verzögerung kommen zu früh
+        self.assertTrue(mm(2860, 600))                      # der Fall vom 12. Oktober: 2560 ms Verzögerung entfernt
+        self.assertTrue(mm(600, 2860))                      # und der umgekehrte: neue hohe Verzögerung ohne Neustart
+
+    def test_bad_values_never_raise_and_never_flag(self):
+        for a, b in ((None, 600), (600, None), ("x", 600), ({}, []), (None, None)):
+            self.assertFalse(L.buffer_mismatch(a, b), (a, b))
+
+    def test_need_comes_from_the_largest_delay_plus_300_with_a_floor_of_600(self):
+        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 0})), 600)
+        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 450})), 750)
+        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 450, "pip_delay_ms": 2560})), 2860)
+
+
+class HoldDelays(unittest.TestCase):
+    """Haltezeit auf der komprimierten Seite: kein Bild darf mehr als LEAD_MAX_MS vor seinem Termin am Mischer ankommen (Testbox, 12. Oktober 2026)."""
+
+    def test_normal_settings_are_untouched(self):
+        self.assertEqual(L.hold_delays({"a": 450, "b": 0, "c": 0}, 750), {"a": 450, "b": 0, "c": 0})        # Standard
+        self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 600), {"a": 0, "b": 0})
+        self.assertEqual(L.hold_delays({"a": 700, "b": 0}, 1000), {"a": 700, "b": 0})                      # Puffer genau LEAD_MAX_MS: nichts
+        self.assertEqual(L.hold_delays({}, 2860), {})
+
+    def test_the_case_from_the_test_box(self):
+        d = {"hauptbild": 450, "usb": 2560, "pocket": 0}                    # Puffer 2860
+        self.assertEqual(L.hold_delays(d, 2860), {"hauptbild": 1860, "usb": 2560, "pocket": 1860})
+
+    def test_a_larger_delay_than_the_floor_is_never_lowered(self):
+        self.assertEqual(L.hold_delays({"a": 3000, "b": 2000, "c": 100}, 3300), {"a": 3000, "b": 2300, "c": 2300})
+
+    def test_invariants_for_many_combinations(self):
+        import itertools
+        vals = (0, 100, 300, 450, 700, 1000, 1500, 2000, 2560, 3000)
+        for combo in itertools.product(vals, repeat=3):
+            d = {"a": combo[0], "b": combo[1], "c": combo[2]}
+            buf = max(L.BUFFER_MIN_MS, max(combo) + 300)                     # so rechnet buffer_ms
+            out = L.hold_delays(d, buf)
+            for k in d:
+                self.assertGreaterEqual(out[k], d[k], (combo, k))             # nie weniger als eingestellt
+                self.assertLessEqual(buf - out[k], max(L.LEAD_MAX_MS, buf - d[k]), (combo, k))   # kein Bild früher als LEAD_MAX_MS, es sei denn, so war es schon eingestellt
+                if d[k] <= buf - L.LEAD_MAX_MS:
+                    self.assertLessEqual(buf - out[k], L.LEAD_MAX_MS, (combo, k))
+                self.assertLessEqual(out[k], buf - 300, (combo, k))           # nie später als Termin minus 300 ms: es kommt nie zu spät
+                self.assertLessEqual(out[k], 3000, (combo, k))                # nie über die größte erlaubte Verzögerung
+
+    def test_effective_delays_apply_the_floor_on_top_of_the_freeze(self):
+        # Start mit 2560 ms bei einem kleinen Bild (Puffer 2860). Alles auf 0 gesetzt: eingefroren auf die Werte vom Start, davon wird die Haltezeit gebildet.
+        tmp = tempfile.mkdtemp()
+        f = Fakes({"main_delay_ms": 450, "pip_delay_ms": 2560})
+        logs = []
+        c = L.LiveController(load_json=f.load, put_state_file=lambda *a: None, state_dir=tmp, safe_cfg=server.PipelineStore._safe_cfg,
+                             view_values=server.PipelineStore.view_values, log=logs.append, clock=lambda: f.t, fetch=lambda: {}, stats=lambda: {}, control=f.control,
+                             start_cfg=dict(CFG, main_delay_ms=450, pip_delay_ms=2560))
+        c.cfg = safe({"main_delay_ms": 0, "pip_delay_ms": 0})
+        self.assertEqual(c.effective_delays(), {"dji-a": 1860, "cam2": 2560, "cam3": 1860, "cam4": 1860})        # Hauptbild: Startwert 450 angehoben, kleines Bild 2560 wie beim Start, die übrigen auf die Untergrenze
+        self.assertTrue(c.delays_frozen)
+
+    def test_without_a_start_cfg_the_floor_comes_from_the_current_buffer(self):
+        tmp = tempfile.mkdtemp()
+        f = Fakes({})
+        c = f.controller(tmp)
+        c.cfg = safe({"main_delay_ms": 450, "pip_delay_ms": 2560})
+        self.assertEqual(c.effective_delays(), {"dji-a": 1860, "cam2": 2560, "cam3": 1860, "cam4": 1860})
+
+
+class FrozenDelays(unittest.TestCase):
+    """Die laufende Sendekette übernimmt Verzögerungen nur, solange sie zum Puffer vom Start passen."""
+
+    def make(self, start, later=None):
+        self.tmp = tempfile.mkdtemp()
+        self.f = Fakes(dict(start))
+        self.logs = []
+        c = L.LiveController(load_json=self.f.load, put_state_file=lambda *a: None, state_dir=self.tmp, safe_cfg=server.PipelineStore._safe_cfg,
+                             view_values=server.PipelineStore.view_values, log=self.logs.append, clock=lambda: self.f.t,
+                             fetch=lambda: dict(self.f.pub), stats=lambda: dict(self.f.states), control=self.f.control,
+                             start_cfg=dict(CFG, **start))
+        self.c = c
+        c.start()
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}, "cam3": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 3, 1: 3, 2: 3, 3: 1}
+        self.run_dir = mock.patch.object(L, "RUN", self.tmp)
+        self.run_dir.start()
+        self.addCleanup(self.run_dir.stop)
+        return c
+
+    def tick(self):
+        self.f.t += 1.1
+        self.c.tick()
+        return self.f.take()
+
+    @staticmethod
+    def delays(lines):
+        out = {}
+        for l in lines:
+            parts = l.split()
+            if len(parts) == 4 and parts[0] == "set" and parts[1].endswith("_vq") and parts[2] == "min-threshold-time":
+                out[parts[1][:4]] = int(parts[3]) // 1000000
+        return out
+
+    def test_matching_changes_are_applied_live(self):
+        self.make({"main_delay_ms": 450})                                    # Puffer 750
+        self.assertEqual(self.delays(self.tick()), {"sbf0": 483, "sbf1": 0, "sbf2": 0, "sbf3": 0})
+        self.f.cfg.update(main_delay_ms=300, pip_delay_ms=200)               # braucht 600: passt
+        self.assertEqual(self.delays(self.tick()), {"sbf0": 333, "sbf1": 233})
+        self.assertFalse(self.c.delays_frozen)
+        self.assertEqual(self.logs, [])
+
+    def test_the_exact_setup_of_the_test_box_gets_raised_holds_on_every_branch(self):
+        """Hauptbild 450, kleines Bild 1 mit 2560, die übrigen 0, Puffer 2860: Kein Zweig darf mehr als 1000 ms früh am Mischer ankommen (vorher: 3 bis 9 statt 30 Bilder/s)."""
+        self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})
+        d = self.delays(self.tick())
+        self.assertEqual(d, {"sbf0": 1893, "sbf1": 2593, "sbf2": 1893, "sbf3": 1893})
+        for slot, hold in d.items():
+            self.assertLessEqual(2860 - (hold - 33), 1000 if hold != 2593 else 2860)     # früher als 1000 ms vor dem Termin kommt nur ein Bild an, dessen eingestellte Haltezeit schon größer war
+
+    def test_a_change_that_does_not_fit_the_buffer_is_not_applied(self):
+        self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})              # Puffer 2860, wie bei der Testbox
+        first = self.delays(self.tick())
+        self.assertEqual(first["sbf0"], 1893)                                # Hauptbild 450 ms wird auf 1860 ms angehoben (Puffer 2860 - 1000), plus ein Bild
+        self.assertEqual(first["sbf1"], 2593)                                # die große Verzögerung bleibt, wie sie ist
+        self.f.cfg.update(main_delay_ms=0, pip_delay_ms=0)                   # alles auf 0: bräuchte 600, der Puffer steht bei 2860
+        self.assertEqual(self.delays(self.tick()), {})                       # nichts geändert: die Sendung bleibt im Takt
+        self.assertTrue(self.c.delays_frozen)
+        self.assertEqual(len([m for m in self.logs if "bleibt bis zum Neustart" in m]), 1)
+        self.tick()
+        self.tick()
+        self.assertEqual(len([m for m in self.logs if "bleibt bis zum Neustart" in m]), 1)     # nur einmal gemeldet
+
+    def test_frozen_delays_follow_again_when_they_fit(self):
+        self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})
+        self.tick()
+        self.f.cfg.update(main_delay_ms=0, pip_delay_ms=0)
+        self.tick()
+        self.f.cfg.update(main_delay_ms=450, pip_delay_ms=2000)              # braucht 2300, Puffer 2860: Überschuss 560, passt
+        d = self.delays(self.tick())
+        self.assertEqual(d, {"sbf1": 2033})
+        self.assertFalse(self.c.delays_frozen)
+        self.assertTrue(any("gilt jetzt" in m for m in self.logs))
+
+    def test_a_larger_delay_than_the_buffer_allows_is_not_applied(self):
+        self.make({"main_delay_ms": 0})                                       # Puffer 600
+        self.tick()
+        self.f.cfg.update(pip_delay_ms=2000)                                  # braucht 2300
+        self.assertEqual(self.delays(self.tick()), {})
+        self.assertTrue(self.c.delays_frozen)
+
+    def test_swapping_main_and_small_picture_keeps_every_delay_with_its_camera(self):
+        self.make({"main_delay_ms": 450, "pip_delay_ms": 0})
+        self.delays(self.tick())
+        self.f.cfg.update(main="cam2", pip="dji-a", main_delay_ms=0, pip_delay_ms=450)     # Tausch: die Verzögerung geht mit
+        self.tick()
+        self.assertFalse(self.c.delays_frozen)
+
+    def test_camera_that_was_not_there_at_the_start_gets_at_most_what_the_buffer_allows(self):
+        self.make({"main_delay_ms": 450, "pip_delay_ms": 0, "pip2": ""})      # Puffer 750, cam3 war nicht dabei
+        self.tick()
+        self.f.cfg.update(pip2="cam3", pip2_delay_ms=2000, main_delay_ms=450)  # neue Kamera mit 2000: braucht 2300, passt nicht
+        d = self.delays(self.tick())
+        self.assertTrue(self.c.delays_frozen)
+        self.assertLessEqual(max(d.values() or [0]), (750 - 300 + 33))         # höchstens Puffer minus 300 ms (plus ein Bild)
+
+    def test_without_start_cfg_nothing_is_ever_frozen(self):
+        tmp = tempfile.mkdtemp()
+        f = Fakes({"main_delay_ms": 450, "pip_delay_ms": 2560})
+        c = f.controller(tmp)                                                  # wie in den älteren Tests: ohne start_cfg
+        self.assertIsNone(c.running_buffer)
+        c.start()
+        c.cfg = safe({"main_delay_ms": 0, "pip_delay_ms": 0})
+        self.assertEqual(c.effective_delays(), L.delays_by_key(c.cfg))
+        self.assertFalse(c.delays_frozen)
+
+
 class Fakes:
     """Alles, was der Regler von außen braucht: Einstellung, nginx, Statistik von belacoder, Steuerkanal."""
 

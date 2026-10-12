@@ -756,6 +756,45 @@ class Deactivate(unittest.TestCase):
             self.send.srtla.public = lambda: {"servers": [], "selected": ""}
             self.assertFalse(self.send.status()["no_server"])
 
+    def _pending_status(self, running, delays, active=True):
+        pl = self.make(cfg=dict(CFG, **delays))
+        self.send._active = lambda: active
+        self.send._detail = lambda: {"buffer_ms": running} if running is not None else {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+        with mock.patch.object(server, "belacoder_running", lambda: False):
+            return self.send.status()["pending"]
+
+    def test_pending_names_the_delay_when_the_running_buffer_no_longer_fits(self):
+        """Verzögerungen geändert, Puffer der laufenden Sendekette passt nicht mehr: "Verzögerung" steht bei "noch nicht übernommen" (12. Oktober 2026)."""
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        self.assertEqual(server.pipbox_live.buffer_ms(server.PipelineStore._safe_cfg(dict(CFG, **z))), 600)      # alles 0: Mindestwert
+        self.assertEqual(self._pending_status(2860, z), ["Verzögerung"])         # lief mit 2560 ms Verzögerung, jetzt alles 0
+        self.assertEqual(self._pending_status(600, z), [])                       # passt
+        self.assertEqual(self._pending_status(750, z), [])                       # etwas Überschuss ist in Ordnung
+        d = dict(z, pip_delay_ms=2000)                                           # braucht 2300
+        self.assertEqual(self._pending_status(600, d), ["Verzögerung"])          # neue hohe Verzögerung ohne Neustart
+        self.assertEqual(self._pending_status(2300, d), [])
+        self.assertEqual(self._pending_status(750, dict(z, main_delay_ms=450)), [])    # Standard: Hauptbild 450 ms
+
+    def test_pending_ignores_missing_or_odd_buffer_values_and_a_stopped_chain(self):
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        for bad in (None, True, "2860", 2860.0, [2860]):                          # alte Sendekette ohne Wert, Müll: nie eine Meldung
+            self.assertEqual(self._pending_status(bad, z), [], bad)
+        self.assertEqual(self._pending_status(2860, z, active=False), [])         # ohne Sendung gibt es nichts, was laufen könnte
+
+    def test_pending_keeps_the_other_labels_and_adds_the_delay_last(self):
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        pl = self.make(cfg=dict(CFG, **z))
+        self.send._active = lambda: True
+        self.send._detail = lambda: {"buffer_ms": 2860, "applied": {"bitrate": "gestern", "latency": "x"}}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+        with mock.patch.object(server, "belacoder_running", lambda: False):
+            p = self.send.status()["pending"]
+        self.assertEqual(p[-1], "Verzögerung")
+        self.assertIn("Bitrate", p)
+
     def test_status_reports_a_clash_of_address_ranges(self):
         """Derselbe Adressbereich bei zwei verschiedenen Geräten (Stand des Adress-Wächters): status() meldet net_conflict, auch während der Sendung. LAN und WLAN am selben Router ist keiner."""
         pl = self.make()
