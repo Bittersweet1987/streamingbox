@@ -421,7 +421,8 @@ class ImportProgress(unittest.TestCase):
         self.assertIn("/von Hand|Passwort/i", fn)                                                         # fehlendes Passwort: Hinweis auf die DJI-Karte
         self.assertIn('d.wifi_ifname===ch.iface', fn)                                                     # Erfolg nur, wenn die Kamera wirklich über die gewählte Verbindung sendet
         self.assertIn("ch.busy", fn)                                                                      # und nur nach einem neuen Verbindungsaufbau, nicht aus dem alten Zustand
-        self.assertIn("45000", fn)                                                                        # der Erfolg verschwindet wieder
+        self.assertIn("ch.okAt>15000", fn)                                                                 # der Erfolg verschwindet nach 15 s
+        self.assertEqual(fn.count("delete netChg[key]"), 1)                                               # nur der Erfolg löscht den Hinweis; Fehler bleiben stehen
         self.assertIn("netChg[e.target.dataset.dji]={iface:e.target.value,reconn:false,busy:false,okAt:0}", PAGE)   # Auswahl startet die Anzeige
         self.assertIn("{reconn:true,busy:false,okAt:0}", PAGE)                                            # Knopf "Neu verbinden" ebenso
         self.assertIn("setInterval(()=>{ if(!document.hidden) paintNetNotes(); },1000);", PAGE)
