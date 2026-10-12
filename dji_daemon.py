@@ -510,6 +510,32 @@ class Camera:
                   "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked()})
         return c
 
+    def network_for_unreadable(self, o):
+        """WLAN-Name und Passwort für eine Verbindung der Box, deren Passwort der Dienst nicht aus NetworkManager lesen kann (Client-WLAN der Box).
+        Die Kamera muss dem Netz beitreten, in dem die Adresse der Box gilt. Beim Wechsel der Verbindung (zum Beispiel wlan1 -> wlan0) blieb früher der
+        zuletzt eingetragene Name stehen: die Kamera trat dem alten Netz bei und bekam die Adresse des neuen (12. Oktober 2026, Testbox: "wifi S23" mit Ziel 192.168.80.135).
+        Reihenfolge: 1. der eingetragene Name ist der des Netzes dieser Verbindung, 2. er wurde für diese Verbindung gewählt (zum Beispiel ein 2,4-GHz-Name des
+        Routers), 3. das gespeicherte Netz der Kamera mit dem Namen dieser Verbindung, 4. das zuletzt dort eingegebene Netz, 5. ältere Einstellung ohne Merker:
+        wie bisher der eingetragene Name, 6. sonst klare Meldung."""
+        cfg, ifname, want = self.cfg, o["ifname"], o["ssid"]
+        typed = cfg.get("ssid") and cfg.get("password")
+        if typed and cfg["ssid"] == want:
+            cfg["ssid_if"] = ifname
+            return cfg["ssid"], cfg["password"]
+        if typed and cfg.get("ssid_if") == ifname:
+            return cfg["ssid"], cfg["password"]
+        cands = [n for n in cfg.get("saved", []) if isinstance(n, dict) and n.get("ssid") == want and n.get("password")]
+        m = self.daemon.by_conn.get(ifname)
+        if not cands and isinstance(m, dict) and m.get("ssid") == want and m.get("password"):
+            cands = [m]
+        if cands:
+            cfg["ssid"], cfg["password"], cfg["ssid_if"] = cands[-1]["ssid"], cands[-1]["password"], ifname
+            return cfg["ssid"], cfg["password"]
+        if typed and not cfg.get("ssid_if"):
+            return cfg["ssid"], cfg["password"]
+        raise CameraError('Die Box ist über %s im WLAN "%s", dessen Passwort sich nicht aus NetworkManager lesen lässt. Die Kamera muss diesem Netz beitreten: '
+                          'Bitte in der DJI-Karte WLAN-Name und Passwort von Hand eintragen (oder ein gespeichertes Netz wählen).' % (ifname, want))
+
     def resolve_target(self):
         """SSID, Passwort und RTMP-Adresse aus der gewählten Verbindung ermitteln."""
         cfg = self.cfg
@@ -529,11 +555,11 @@ class Camera:
         if ifname and ifname != "manual":
             for o in self.daemon.wifi_options():
                 if o["ifname"] == ifname:
-                    if o["type"] == "other" or o.get("secret_missing"):
-                        if o["type"] != "other" and not cfg.get("password"):
-                            raise CameraError("Das Passwort des WLANs %s lässt sich nicht aus NetworkManager lesen. "
-                                              "Bitte WLAN-Name und Passwort der Kamera von Hand eintragen." % o["ssid"])
+                    if o["type"] == "other":
                         ssid, pw, ip = cfg.get("ssid") or o["ssid"], cfg.get("password", ""), o["ip"]
+                    elif o.get("secret_missing"):
+                        ssid, pw = self.network_for_unreadable(o)
+                        ip = o["ip"]
                     else:
                         self.typed_network = False
                         ssid, pw, ip = o["ssid"], o["password"], o["ip"]
@@ -1147,6 +1173,7 @@ class Daemon:
         saved = [n for n in cam.cfg.get("saved", []) if n["ssid"] != ssid]
         saved.append({"ssid": ssid, "password": password})
         cam.cfg["saved"] = saved[-20:]
+        cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")          # dieses WLAN gilt für die jetzt gewählte Verbindung
         self._note_connection(dict(cam.cfg, ssid=ssid, password=password))
         self.save()
 
@@ -1159,6 +1186,7 @@ class Daemon:
         if not m or cfg.get("ssid"):
             return False
         cfg["ssid"], cfg["password"] = m["ssid"], m["password"]
+        cfg["ssid_if"] = cfg.get("wifi_ifname")
         saved = [n for n in cfg.get("saved", []) if n["ssid"] != m["ssid"]]
         saved.append(dict(m))
         cfg["saved"] = saved[-20:]
@@ -1314,6 +1342,7 @@ class Daemon:
         if cmd == "update":
             if cam.mode_locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
                 return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
+            prev_if = cam.cfg.get("wifi_ifname")
             for k, t in SETTINGS_ALLOWED.items():
                 if k in req and isinstance(req[k], t) and not (t is int and isinstance(req[k], bool)):
                     if k == "password" and req[k] == "":
@@ -1322,9 +1351,12 @@ class Daemon:
             if "status_only" in req and isinstance(req["status_only"], bool):
                 self._apply_status_only(cam)
             if "wifi_ifname" in req:
+                if cam.cfg.get("wifi_ifname") != prev_if and cam.cfg.get("ssid") and "ssid" not in req:
+                    cam.cfg.setdefault("ssid_if", prev_if)             # der eingetragene Name gehörte zur bisherigen Verbindung
                 self.pin_connection(cam)
                 self.offer_connection_network(cam)
             if "ssid" in req or "password" in req:
+                cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")        # von Hand eingetragen: gilt für die gewählte Verbindung
                 self._note_connection(cam.cfg)
             self.sanitize(cam)
             if req.get("autoconnect") is True or req.get("status_only") is True:
@@ -1341,6 +1373,7 @@ class Daemon:
                 for n in cam.cfg.get("saved", []):
                     if n["ssid"] == ssid:
                         cam.cfg["ssid"], cam.cfg["password"] = n["ssid"], n["password"]
+                        cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")
                         self._note_connection(cam.cfg)
             self.save()
             return {"ok": True}
