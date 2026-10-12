@@ -220,7 +220,7 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .bkwhat{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 28px;margin:6px 0 2px}.bkwhat .bkwh{font-weight:650;margin:8px 0 2px}.bkwhat ul{margin:0;padding-left:20px}.bkwhat li{margin:3px 0}.bkwhat .bkno li::marker{color:var(--crit)}.bkwhat .bkyes li::marker{color:var(--ok)}
 .bkplan label.logopt{margin:6px 0}.bkplan .bkok{color:var(--ok)}.bkplan .bkbad{color:var(--crit)}.bkres div{margin:4px 0}
 /* Hilfetexte (Issue #21): hinter dem runden "i", auf dem Handy und am Rechner gleich */
-.ibtn{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
+.ibtn,.swinfo{display:inline-block;margin-left:8px;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font:italic 700 13px/20px Georgia,serif;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle}
 .ibtn[aria-expanded=true]{background:var(--accent);color:#0f172a}
 .ibrow{display:block;margin:0 0 4px}.ibrow .ibtn{margin-left:0}
 details:not([open])>summary .ibtn{display:none}
@@ -622,8 +622,8 @@ html[data-design="kompakt"][data-theme="light"]{--bg:#e9edf2;--card:#ffffff;--te
 @media(max-width:620px){:where(html[data-design="kompakt"]) main{padding:6px 6px 14px;gap:8px}:where(html[data-design="kompakt"]) .card{padding:9px 10px}:where(html[data-design="kompakt"]) :is(button,input,select){min-height:40px}}
 
 /* die runden Hilfeknöpfe "i" behalten ihre Form (die Mindesthöhe der Knöpfe gilt für sie nicht) */
-html[data-design] :is(.ibtn,.helpbtn){min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}
-html[data-design="kompakt"] :is(.ibtn,.helpbtn){width:22px;height:22px;font-size:13px;line-height:20px}
+html[data-design] :is(.ibtn,.helpbtn,.swinfo){min-height:0;width:26px;height:26px;padding:0;border-radius:50%;font-size:14px;line-height:24px}
+html[data-design="kompakt"] :is(.ibtn,.helpbtn,.swinfo){width:22px;height:22px;font-size:13px;line-height:20px}
 /* Kästchen und Auswahlkreise: groß genug zum Antippen */
 html[data-design="klar"] :is(input[type=checkbox],input[type=radio]){width:22px;height:22px;min-height:0;padding:0;accent-color:var(--accent)}
 html[data-design="kompakt"] :is(input[type=checkbox],input[type=radio]){width:16px;height:16px;min-height:0;padding:0;accent-color:var(--accent)}
@@ -996,7 +996,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
   <details class="card wide" id="swcard">
     <summary><span class="sumh">Software-Update (IRL4YOU BOX)</span><span id="sw_badge" class="badge ok">…</span></summary>
     <div class="ph" style="margin-top:0">Holt neue Versionen dieser Software aus dem Repository auf GitHub. Kameras, Server und Einstellungen bleiben erhalten. Nicht während einer Übertragung.</div>
-    <div class="row"><span>Installiert</span><b id="sw_cur">–</b></div>
+    <div class="row"><span>Installiert</span><span><b id="sw_cur">–</b><button type="button" id="sw_curinfo" class="swinfo" aria-controls="sw_hist" aria-label="Änderungen dieser Version anzeigen" title="Änderungen dieser Version anzeigen" hidden>i</button></span></div>
     <div class="row"><span>Neueste auf GitHub</span><b id="sw_latest">–</b></div>
     <div id="sw_notes" hidden></div>
     <div class="actions" style="margin:6px 0 0"><button id="sw_histbtn" type="button" class="sec" aria-expanded="false" aria-controls="sw_hist">Alle Änderungen</button></div>
@@ -2954,7 +2954,7 @@ function fmtNotes(t){
 }
 // ---- Änderungsverlauf mit Suche (Issue #57): die ganze CHANGELOG.md von GitHub, auf Wunsch geladen; die Suche filtert Punkte und Versionsüberschriften
 (function(){
-  const btn=$("sw_histbtn"), panel=$("sw_hist"), q=$("sw_hq"), cnt=$("sw_hcount"), res=$("sw_hres"); let secs=null, busy=false, tm=0;
+  const btn=$("sw_histbtn"), panel=$("sw_hist"), q=$("sw_hq"), cnt=$("sw_hcount"), res=$("sw_hres"); let secs=null, busy=false, tm=0, only=null;     // only: nur diese Version zeigen (Knopf "i" bei der installierten Version)
   function parse(text){
     const out=[]; let cur=null, it=null;
     String(text||"").split("\n").forEach(raw=>{ const l=raw.replace(/\s+$/,"");
@@ -2980,7 +2980,9 @@ function fmtNotes(t){
     if(!secs) return;
     const toks=q.value.toLowerCase().split(/\s+/).filter(Boolean).slice(0,6);
     let out="", hits=0, vers=0;
+    const vre=only?new RegExp("^##\\s+v?"+only.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"(\\s|$|\\()"):null;
     for(const sec of secs){
+      if(vre&&!vre.test(sec.head)) continue;
       const hl=sec.head.toLowerCase();
       const pick=toks.length?sec.items.filter(it=>{ const t=hl+" "+it.join(" ").toLowerCase(); return toks.every(w=>t.includes(w)); }):sec.items;
       if(toks.length&&!pick.length) continue;
@@ -2988,7 +2990,8 @@ function fmtNotes(t){
       out+=sec.head+"\n"+pick.map(it=>it.join("\n")).join("\n")+"\n\n";
     }
     res.dataset.h=""; res.innerHTML=fmtNotes(out); mark(res,toks);
-    cnt.textContent=toks.length?(hits?`${hits} Treffer in ${vers} Versionen`:"Keine Treffer."):`${secs.length} Versionen. Zum Suchen ein Stichwort eintippen.`;
+    cnt.textContent=only?(vers?`Änderungen der Version ${only}. Ein Stichwort im Suchfeld zeigt alle Versionen.`:`Zu Version ${only} steht nichts in der Änderungsliste. Ein Stichwort im Suchfeld zeigt alle Versionen.`)
+      :toks.length?(hits?`${hits} Treffer in ${vers} Versionen`:"Keine Treffer."):`${secs.length} Versionen. Zum Suchen ein Stichwort eintippen.`;
   }
   async function load(){
     if(busy) return; busy=true; cnt.textContent="Wird geladen …";
@@ -2998,8 +3001,15 @@ function fmtNotes(t){
     catch(e){ cnt.textContent="Der Verlauf konnte nicht geladen werden."; }
     busy=false;
   }
-  btn.addEventListener("click",()=>{ const open=panel.hidden; panel.hidden=!open; btn.setAttribute("aria-expanded",String(open)); if(open){ if(!secs) load(); q.focus(); } });
-  q.addEventListener("input",()=>{ clearTimeout(tm); tm=setTimeout(render,150); });
+  btn.addEventListener("click",()=>{ const open=panel.hidden; panel.hidden=!open; btn.setAttribute("aria-expanded",String(open)); if(open){ only=null; if(secs) render(); else load(); q.focus(); } });
+  q.addEventListener("input",()=>{ only=null; clearTimeout(tm); tm=setTimeout(render,150); });
+  // "i" bei der installierten Version: den Verlauf öffnen und nur diese Version zeigen
+  $("sw_curinfo").addEventListener("click",async()=>{
+    const v=window.swCurVer; if(!v) return;
+    only=v; q.value=""; panel.hidden=false; btn.setAttribute("aria-expanded","true");
+    if(secs) render(); else await load();
+    panel.scrollIntoView({block:"nearest",behavior:"smooth"});
+  });
 })();
 // Ende des Updates: Fortschritt voll zeigen, dann die Seite einmal neu laden (danach erscheint bei Bedarf die Anmeldung)
 function swFinish(cur){
@@ -3050,6 +3060,7 @@ async function swLoad(force,fresh){
   const busy=d.state==="installing"||!!swPending;
   $("stagefoot").textContent=d.stage?`IRL4YOU BOX Version ${d.current} (${d.stage}) – Funktionen und Bedienung können sich noch ändern.`:`IRL4YOU BOX Version ${d.current}`;
   $("sw_cur").textContent="v"+d.current+(d.stage?" ("+d.stage+")":"");
+  window.swCurVer=d.current||""; $("sw_curinfo").hidden=!d.current;
   $("sw_latest").textContent=d.latest?"v"+d.latest:(d.error?"–":"wird geprüft …");
   $("sw_badge").textContent=busy?"läuft …":(d.error?"unbekannt":(d.newer?"Update verfügbar":"aktuell"));
   $("sw_badge").className="badge "+(d.newer||busy?"attn":"ok");
