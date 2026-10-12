@@ -53,24 +53,30 @@ NET_PREFIXES = ("eth", "en", "wlan", "wl", "usb", "wwan", "ppp", "rndis")
 NET_SKIP = ("docker", "veth", "br-", "virbr", "tailscale", "tun", "tap", "lo")
 
 # Ampelgrenzen (Rohwerte, später anhand echter Messungen festlegen)
-ARP_STATUS = "/run/pipbox-arp/status.json"       # schreibt der Adress-Wächter (install/pipbox-arp.py): welche Karten im selben Netz hängen
+ARP_STATUS = "/run/pipbox-arp/status.json"       # schreibt der Adress-Wächter (install/pipbox-arp.py): welche Karten denselben Adressbereich bei verschiedenen Geräten haben
 ARP_STATUS_MAX_AGE = 60                           # ein älterer Stand gilt nicht (der Wächter läuft nicht mehr)
 IFACE_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+NET_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$")
 
 
-def net_overlap(path=None):
-    """Namen der Netzkarten, die mit einer anderen im selben IPv4-Netz hängen (Stand des Adress-Wächters), sonst []. Streng geprüft: nur Kartennamen, höchstens 8, nicht älter als eine Minute."""
+def net_conflict(path=None):
+    """Karten, die denselben Adressbereich bei verschiedenen Geräten benutzen (Stand des Adress-Wächters: die Router haben verschiedene Hardware-Adressen), sonst None.
+    LAN und WLAN am selben Router ist keiner. Streng geprüft: nur Kartennamen und Netze, höchstens 8 und 4, nicht älter als eine Minute."""
     try:
         with open(path or ARP_STATUS, "rb") as f:
             d = json.loads(f.read(4096).decode("utf-8", "replace"))
         if not isinstance(d, dict) or not isinstance(d.get("time"), int) or abs(time.time() - d["time"]) > ARP_STATUS_MAX_AGE:
-            return []
-        names = d.get("overlap")
+            return None
+        names, nets = d.get("conflict"), d.get("nets")
         if not isinstance(names, list):
-            return []
-        return [n for n in names if isinstance(n, str) and IFACE_NAME_RE.match(n)][:8]
+            return None
+        cards = [n for n in names if isinstance(n, str) and IFACE_NAME_RE.match(n)][:8]
+        if len(cards) < 2:
+            return None
+        nets = [n for n in nets if isinstance(n, str) and NET_RE.match(n)][:4] if isinstance(nets, list) else []
+        return {"cards": cards, "nets": nets}
     except (OSError, ValueError):
-        return []
+        return None
 
 
 LIMITS = {"temp_warn": 70.0, "temp_crit": 80.0, "cpu_warn": 85.0, "core_warn": 90.0, "mem_warn": 85.0}
@@ -1996,7 +2002,7 @@ class SendControl:
             out["reasons"].append("Es läuft schon ein belacoder (z. B. über die BELABOX-Oberfläche)")
         out["no_layout"] = not active and not self.pipeline.cfg.get("main")
         out["no_server"] = not active and not pub["selected"]            # noch kein SRTLA-Server eingetragen oder ausgewählt: Live ist grau, die Live-Karte sagt es und führt zum Server
-        out["net_overlap"] = net_overlap()                                     # zwei Karten im selben Netz (WLAN und LAN oder zweimal WLAN): kleine Warnung in der Live-Karte, auch während der Sendung
+        out["net_conflict"] = net_conflict()                                   # derselbe Adressbereich bei zwei verschiedenen Geräten (nicht: LAN und WLAN am selben Router): kleine Warnung in der Live-Karte, auch während der Sendung
         out["can_start"] = not active and not out["reasons"]
         return out
 
