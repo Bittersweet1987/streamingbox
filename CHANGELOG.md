@@ -2,6 +2,10 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.20
+- **Kameraliste: DJI-Kameras zeigen in der Verbindungs-Auswahl nur noch WLAN-Schnittstellen (Wunsch des Nutzers, 12. Oktober 2026).** Eine DJI-Kamera tritt immer einem WLAN bei, nie einem Kabel; `eth0`, `eth1` und USB-Tether in der Auswahl führten nur zu Fehlern (ohne WLAN-Name und Passwort der Kamera). Der Server meldet dafür je Schnittstelle `wifi` (`/api/network`, aus `/sys/class/net/<name>/wireless`). Eine in der DJI-Karte schon gewählte Kabel-Schnittstelle bleibt in der Liste sichtbar und gewählt; ohne Angabe `wifi` (ältere Box) bleibt alles wie vorher. Normale (Telefon-)Kameras und die DJI-Karte zeigen weiter alle Verbindungen (ein Router am Kabel, dessen WLAN die Kamera nutzt, ist dort mit Namen und Passwort von Hand weiter möglich).
+  - Am echten Seitencode geprüft: gewählt `wlan1` → nur wlan0 und wlan1; gewählt `eth1` → eth1 bleibt gewählt; ohne `wifi`-Angabe alle; normale Kamera alle vier.
+
 ## 1.0.19
 - **Kameraliste: Der Knopf „Neu verbinden“ (↻) war bei DJI-Kameras nicht zu sehen (Nutzermeldung auf der Testbox, 12. Oktober 2026).** Er war in 1.0.18 vorhanden, aber das Auswahlfeld füllte die ganze Zeile und `.camnet` schneidet Überlauf ab, sodass der Knopf dahinter verschwand. Jetzt ist die Zeile eine Flex-Zeile (Auswahl nimmt den Rest, Knopf feste Breite). Am echten Layout gemessen (Desktop und 375 px Breite): Knopf 28 px breit, vollständig innerhalb der Zeile, kein seitliches Scrollen. Der Test prüft jetzt auch die Layout-Regeln (Gegenversuch ohne Flex schlägt fehl).
   - Ohne den Knopf bleibt ein Wechsel der Verbindung bei einer verbundenen Kamera wirkungslos bis zur nächsten Verbindung; mit ↻ (oder „Jetzt neu verbinden“ in der DJI-Karte) greift er sofort.
