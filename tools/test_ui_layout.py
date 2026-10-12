@@ -351,12 +351,51 @@ class ImportProgress(unittest.TestCase):
 
     def test_removed_dji_camera_disappears_from_the_list_at_once(self):
         """Eine entfernte Kamera blieb in der Liste stehen, bis man die Seite neu lud: djiRender baut die Liste nicht neu auf, solange der Fokus in ihr steht, und der Knopf "Entfernen" hatte ihn (Nutzermeldung)."""
-        self.assertIn("if(sig!==djiStruct&&!box.contains(document.activeElement)){", PAGE)                 # der Schutz fürs Tippen bleibt
+        self.assertIn("if(sig!==djiStruct&&!typing){", PAGE)                                                # der Schutz fürs Tippen bleibt (nur noch für Felder)
         i = PAGE.index('if(cl.contains("d-remove")){')
         handler = PAGE[i:PAGE.index('else if(cl.contains("d-saveddel"))', i)]
         self.assertIn('document.activeElement.blur()', handler)                                           # Fokus lösen
         self.assertIn('djiStruct=""; tick(); djiLoad();', handler)                                        # und sofort neu laden
         self.assertLess(handler.index("blur()"), handler.index('djiStruct=""'))                           # erst Fokus lösen, dann neu aufbauen lassen
+
+    def test_a_button_in_the_dji_card_no_longer_blocks_the_refresh(self):
+        """Nach "Neu verbinden" erschien das Netz erst unter "Gespeicherte Netze", wenn man die Karte zu- und wieder aufklappte: der Knopf hatte den Fokus, und der Neuaufbau wartete (Nutzermeldung, 12. Oktober 2026). Nur ein Feld, in das getippt wird, hält ihn an."""
+        i = PAGE.index("const ae=document.activeElement, typing=")
+        line = PAGE[i:PAGE.index("\n", i)]
+        for tag in ('"TEXTAREA"', '"SELECT"', '"INPUT"'):
+            self.assertIn(tag, line)
+        self.assertIn("button|checkbox|radio|submit|reset", line)                                         # Knöpfe und Schalter zählen nicht als Tippen
+        self.assertNotIn("BUTTON", line)
+        self.assertNotIn("box.contains(document.activeElement)){", PAGE[i:i + 800].split("typing")[0])
+
+    def test_lock_hint_has_a_reconnect_button(self):
+        """Die Kamera bleibt nach einer anderen Verbindung, bis sie neu verbindet: der Hinweis dazu hat jetzt einen Knopf (derselbe wie "Neu verbinden")."""
+        i = PAGE.index('<div class="ph d-lockhint"')
+        hint = PAGE[i:PAGE.index("</div>", i)]
+        self.assertIn("Die Kamera ist verbunden. Änderungen an der Verbindung gelten ab der nächsten Verbindung, die laufende bleibt bestehen.", hint)
+        self.assertIn('class="sec d-reconnect"', hint)
+        self.assertIn("Jetzt neu verbinden", hint)
+        self.assertIn('else if(cl.contains("d-reconnect")) await djiCmd({cmd:"reconnect",addr});', PAGE)       # derselbe Befehl wie beim Knopf in der Zeile darunter
+        self.assertIn('card.querySelector(".d-lockhint").hidden=!c.locked;', PAGE)                         # nur bei einer verbundenen Kamera sichtbar
+
+    def test_dji_camera_row_has_a_connection_select_and_a_reconnect_button(self):
+        """Die Verbindung einer DJI-Kamera ist auch in der Kameraliste wählbar (Wunsch des Nutzers, 12. Oktober 2026): dieselbe Einstellung wie in der DJI-Karte, mit Knopf zum Neu-Verbinden."""
+        i = PAGE.index("function camNetHtml(c){")
+        fn = PAGE[i:PAGE.index("// QR-Code-Erzeuger", i)]
+        self.assertIn('data-dji="${esc(c.key)}"', fn)
+        self.assertIn('class="camnetsel"', fn)
+        self.assertIn('class="camreconn sec"', fn)
+        self.assertNotIn("· DJI-Karte", fn)                                                               # kein reiner Text mehr
+        self.assertIn('own&&c.via==="manual"', fn)                                                        # eine von Hand eingetragene Verbindung bleibt sichtbar (nicht wählbar)
+        self.assertIn("netOpts.map(o=>", fn)                                                              # dieselben Verbindungen wie in der DJI-Karte
+        ci = PAGE.index("const djiAddrOfKey=")
+        handler = PAGE[ci:PAGE.index('$("cams").addEventListener("click"', ci)]
+        self.assertIn("djiUpdate(addr,{wifi_ifname:e.target.value})", handler)                            # über den Kamera-Dienst, nicht über /api/cameras (der lehnt DJI-Kameras ab)
+        self.assertLess(handler.index("djiUpdate(addr"), handler.index('"/api/cameras/"'))                 # DJI-Zweig zuerst
+        click = PAGE[PAGE.index('$("cams").addEventListener("click"', ci):PAGE.index("async function renameCam")]
+        self.assertIn('djiCmd({cmd:"reconnect",addr})', click)
+        self.assertIn("x.rtmp_key===key", PAGE)                                                           # Schlüssel der Kamera -> Adresse im Kamera-Dienst
+        self.assertIn("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt", open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())      # der Server lehnt den alten Weg weiter ab
 
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
