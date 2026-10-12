@@ -17,12 +17,12 @@ if not hasattr(os, "killpg"):                   # Entwicklungsrechner ohne Linux
         sys.modules.setdefault(_m, mock.MagicMock())
 import pipbox_watch as W  # noqa: E402
 
-LIVE = ("t=1 br=400000 comp=30.8/0/44 comp_new=0.0 in_f0=%s/0/0 in_f1=%s/0/37 vr_f0=0.0/0/0 dec_f0=%s/0/0 dmx_f0=%s/0/0 dmx_f1=29.8/0/37 "
+LIVE = ("t=1 br=400000 comp=30.8/0/44 comp_new=0.0 in_f0=%s/0/0 in_f1=%s/0/37 vr_f0=0.0/0/0 dec_f0=%s/0/0 dmx_f0=%s/0/0 dmx_f1=%s/0/37 "
         "feed_sbf0=3 feed_sbf1=3 feed_sbf2=1 feed_sbf3=1")
 
 
-def line(f0="29.8", f1="29.8", dec0="29.8", dmx0="29.8"):
-    return LIVE % (f0, f1, dec0, dmx0)
+def line(f0="29.8", f1="29.8", dec0="29.8", dmx0="29.8", dmx1="29.8", **_ignored):
+    return LIVE % (f0, f1, dec0, dmx0, dmx1)
 
 
 class Clock:
@@ -269,7 +269,9 @@ class SenderIntegration(unittest.TestCase):
         s.live = True
         s.always = SimpleNamespace(binder=SimpleNamespace(slot_key=["cam-a", "cam-b", "", ""]),
                                    pub={"cam-a": {"w": 1920, "h": 1080, "audio": True}, "cam-b": {"w": 1280, "h": 720, "audio": False}},
-                                   states={0: 3, 1: 3}, inactive=[], desired=["cam-a", "cam-b", "", ""])
+                                   states={0: 3, 1: 3}, inactive=[], desired=["cam-a", "cam-b", "", ""],
+                                   control=lambda lines: self.sent.extend(lines) or True)
+        self.sent = []
         s.watch = W.HangWatch(clock=self.clock.mono, wall=self.clock.wall)
         s.watch.started_now()
         s.hang_n = 0
@@ -307,11 +309,46 @@ class SenderIntegration(unittest.TestCase):
             self.tick()
         self.assertEqual((self.log, self.sender.hang_n), ([], 0))
 
+    def run_dead(self, seconds, **dead):
+        for _ in range(int(seconds)):
+            self.write_stats(line(**dead))
+            self.tick()
+
+    def test_one_dead_feed_is_reset_alone_first_and_belacoder_keeps_running(self):
+        """Ein einzelner hängender Zweig (die anderen liefern): nur sein Zweig wird zurückgesetzt, die Sendung läuft für alle weiter."""
+        self.run_dead(W.START_GRACE_S + 2)
+        self.run_dead(W.FEED_DEAD_S + 3, f0="0.0", dec0="0.0", dmx0="0.0")
+        self.assertEqual(self.sent, ["feed sbf0 off"])
+        self.assertEqual((self.log, self.sender.hang_n), ([], 0))                           # belacoder bleibt, kein Neustart gezählt
+        self.assertIn("Art: feed", self.read(self.tmp))                                     # das Diagnosepaket wird trotzdem gesichert
+        self.run_dead(5)                                                                    # der Zweig läuft wieder
+        self.assertEqual(self.sent, ["feed sbf0 off"])
+
+    def test_same_feed_dead_again_after_the_reset_restarts_belacoder(self):
+        self.run_dead(W.START_GRACE_S + 2)
+        self.run_dead(W.FEED_DEAD_S + 3, f0="0.0", dec0="0.0", dmx0="0.0")
+        self.assertEqual(self.sender.hang_n, 0)
+        self.run_dead(W.FEED_DEAD_S + 3, f0="0.0", dec0="0.0", dmx0="0.0")                  # der Zweig bleibt tot
+        self.assertEqual(self.sender.hang_n, 1)
+        self.assertEqual(self.log, [("stop", "belacoder"), ("spawn", "belacoder")])
+        self.assertEqual(self.sent, ["feed sbf0 off"])                                      # nur der eine Versuch
+
+    def test_two_dead_feeds_restart_belacoder_at_once(self):
+        """Hängen mehrere Zweige gleichzeitig (der Fall vom 12. Oktober: alle Eingänge stehen), hilft das Zurücksetzen eines einzelnen nicht."""
+        self.run_dead(W.START_GRACE_S + 2)
+        self.run_dead(W.FEED_DEAD_S + 3, f0="0.0", dec0="0.0", dmx0="0.0", f1="0.0", dmx1="0.0")
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.sender.hang_n, 1)
+        self.assertEqual(self.log, [("stop", "belacoder"), ("spawn", "belacoder")])
+
     def test_dead_feed_gets_a_report_and_a_restart_of_belacoder_only(self):
         for _ in range(int(W.START_GRACE_S) + 2):
             self.write_stats(line())
             self.tick()
         for _ in range(int(W.FEED_DEAD_S) + 3):
+            self.write_stats(line(f0="0.0", dec0="0.0", dmx0="0.0"))
+            self.tick()
+        for _ in range(int(W.FEED_DEAD_S) + 3):                                             # nach dem Zurücksetzen bleibt der Zweig tot
             self.write_stats(line(f0="0.0", dec0="0.0", dmx0="0.0"))
             self.tick()
         self.assertEqual(self.sender.hang_n, 1)

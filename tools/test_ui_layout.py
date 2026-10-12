@@ -427,14 +427,28 @@ class ImportProgress(unittest.TestCase):
         self.assertIn("{reconn:true,busy:false,okAt:0}", PAGE)                                            # Knopf "Neu verbinden" ebenso
         self.assertIn("setInterval(()=>{ if(!document.hidden) paintNetNotes(); },1000);", PAGE)
 
+    def test_camera_that_stops_sending_stays_on_top_for_two_minutes(self):
+        """Nutzerwunsch 12. Oktober 2026: Eine Kamera, die nicht mehr sendet (zum Beispiel beim Wechsel des Netzes), rutscht erst nach zwei Minuten nach unten."""
+        self.assertIn("const CAM_HOLD_TOP_MS=120000;", PAGE)
+        i = PAGE.index("const quiet=c=>")
+        line_ = PAGE[i:PAGE.index("\n", i)]
+        self.assertIn('c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1', line_)
+        self.assertIn('for(const c of list) if(c.state==="live"||c.state==="unknown") camSeenLive[c.id]=nowMs;', PAGE)   # merkt, wann sie zuletzt sendete
+
+    def test_switch_lock_is_shown_and_disables_the_controls(self):
+        """Nach einem Wechsel sind Auswahl und Knopf der Kamera zwei Minuten gesperrt (der Kamera-Dienst lehnt ihn ebenfalls ab); eine kleine Zeile nennt die Restzeit."""
+        self.assertIn("Wechsel gesperrt: noch ${d.switch_wait} s.", PAGE)
+        self.assertIn("b.disabled!==lock) b.disabled=lock;", PAGE)
+        self.assertIn("d.switch_wait>0", PAGE)
+
     def test_installed_version_has_an_info_button_that_shows_only_its_changes(self):
         """Bei der installierten Version steht ein "i" (Wunsch des Nutzers, 12. Oktober 2026): öffnet den Änderungsverlauf und zeigt nur diese Version."""
         i = PAGE.index('<span>Installiert</span>')
         row = PAGE[i:PAGE.index("</div>", i)]
         self.assertIn('id="sw_curinfo"', row)
         self.assertIn('class="swinfo"', row)                                                              # nicht "ibtn": "Hilfe ausblenden" soll ihn nicht verstecken (er öffnet keinen Hilfetext)
-        self.assertIn(".ibtn,.swinfo{display:inline-block", PAGE)
-        self.assertIn(":is(.ibtn,.helpbtn,.swinfo)", PAGE)                                                # Größe in den Designs wie die anderen "i"-Knöpfe
+        self.assertIn(".swinfo{display:inline-block", PAGE)
+        self.assertIn("html[data-design] .swinfo{min-height:0;width:26px;", PAGE)                            # Größe in den Designs wie die anderen "i"-Knöpfe
         self.assertIn('window.swCurVer=d.current||""; $("sw_curinfo").hidden=!d.current;', PAGE)         # ohne bekannte Version kein Knopf
         self.assertIn('if(vre&&!vre.test(sec.head)) continue;', PAGE)                                     # genau die Überschrift dieser Version (nicht jede Erwähnung)
         self.assertIn('q.addEventListener("input",()=>{ only=null;', PAGE)                                # Tippen im Suchfeld zeigt wieder alle Versionen

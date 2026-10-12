@@ -629,6 +629,7 @@ class Session(unittest.TestCase):
         self.patches = [mock.patch.object(dji, "SYSFS_BT", self.bt),
                         mock.patch.object(dd, "rtmp_publishing", lambda key, url=None: True),
                         mock.patch.object(dd.Camera, "RETRY_SCHEDULE", (0.2,)),
+                        mock.patch.object(dd.Camera, "OLD_STREAM_WAIT_S", 0.0),            # die Tests lassen den "alten Stream" nicht warten (eigener Test unten)
                         mock.patch.object(dd.Camera, "SEARCH_SECONDS", 0.6),
                         mock.patch.object(dd.Camera, "STREAM_CHECK_SECONDS", 0.2),
                         mock.patch.object(dd.Camera, "STREAM_LOST_SECONDS", 0.6),
@@ -1317,6 +1318,74 @@ class Session(unittest.TestCase):
             keys = json.load(open(os.path.join(tmp, dd.FEED_HOLD_FILE)))["keys"]
             self.assertEqual(sorted(keys), ["dji-000002"])                                       # nur der freigegebene Eintrag verschwindet
             self.assertEqual(oct(os.stat(os.path.join(tmp, dd.FEED_HOLD_FILE)).st_mode & 0o777), "0o644")   # der Regler (root) liest sie
+        arun(go())
+
+    def test_after_a_switch_the_next_one_is_locked_for_two_minutes(self):
+        """Nutzerwunsch 12. Oktober 2026: nach einem Wechsel (Neu verbinden einer sendenden Kamera) zwei Minuten lang kein weiterer Wechsel dieser Kamera."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm, wifi_ifname="manual")
+            await dm.handle({"cmd": "connect", "addr": ADDR})
+            cam = dm.cameras[ADDR]
+            self.assertTrue(await self.wait_state(cam, ("streaming",)), cam.detail)
+            self.assertEqual(cam.public()["switch_wait"], 0)
+            r = await dm.handle({"cmd": "reconnect", "addr": ADDR})                              # der Wechsel
+            self.assertEqual(r, {"ok": True})
+            self.assertTrue(await self.wait_state(cam, ("streaming",), 10), cam.detail)
+            w = cam.public()["switch_wait"]
+            self.assertTrue(100 < w <= dd.SWITCH_LOCK_S, w)
+            r = await dm.handle({"cmd": "reconnect", "addr": ADDR})                              # sofort noch einmal: gesperrt
+            self.assertIn("error", r)
+            self.assertIn("Sekunden", r["error"])
+            r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "wlan9"})         # anderes Netz wählen: ebenfalls gesperrt, nichts wird geändert
+            self.assertIn("error", r)
+            self.assertEqual(cam.cfg["wifi_ifname"], "manual")
+            r = await dm.handle({"cmd": "update", "addr": ADDR, "wifi_ifname": "manual", "bitrate": 5000})   # andere Einstellungen bleiben möglich
+            self.assertEqual(r, {"ok": True})
+            cam.switch_until = time.monotonic() - 1                                              # zwei Minuten sind um
+            self.assertEqual(cam.switch_wait(), 0)
+            self.assertEqual(await dm.handle({"cmd": "reconnect", "addr": ADDR}), {"ok": True})
+            cam.set_state("error", "Test")                                                       # kam die Kamera nicht zurück, darf sofort neu versucht werden
+            self.assertEqual(cam.switch_wait(), 0)
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_reconnect_of_a_camera_that_does_not_stream_does_not_lock(self):
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            cam = dm.cameras[ADDR]
+            self.assertEqual(await dm.handle({"cmd": "reconnect", "addr": ADDR}), {"ok": True})
+            self.assertEqual(cam.switch_wait(), 0)                                               # war nichts verbunden: kein Wechsel
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+        arun(go())
+
+    def test_start_waits_until_nginx_has_dropped_the_old_stream(self):
+        """12. Oktober 2026: Der alte Stream blieb bei nginx 15 s als idle publisher stehen, der neue Start wurde mit "already publishing" abgelehnt."""
+        async def go():
+            sim = CameraSim()
+            self.install({ADDR: sim})
+            dm = dd.Daemon(tempfile.mkdtemp())
+            await self.setup_cam(dm)
+            t0 = time.monotonic()
+            calls = []
+
+            def publishing(key, stat_url=None):
+                calls.append(time.monotonic() - t0)
+                return time.monotonic() - t0 < 1.6                                              # der alte Stream ist 1,6 s lang noch da
+            with mock.patch.object(dd, "rtmp_publishing", publishing), mock.patch.object(dd.Camera, "OLD_STREAM_WAIT_S", 6.0):
+                await dm.handle({"cmd": "connect", "addr": ADDR})
+                cam = dm.cameras[ADDR]
+                self.assertTrue(await self.wait_state(cam, ("streaming",), 10), cam.detail)
+                starts = [m for m in sim.sent if m.id == dd.ID_START]
+                self.assertEqual(len(starts), 1)
+                self.assertGreater(len(calls), 1)
+                self.assertGreaterEqual(time.monotonic() - t0, 1.6)                              # gestartet erst nach dem Ende des alten Streams
+                await dm.handle({"cmd": "disconnect", "addr": ADDR})
         arun(go())
 
     def test_cameras_connect_one_after_the_other(self):
