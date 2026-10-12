@@ -460,6 +460,17 @@ button.foldm{font-size:17px;line-height:1;padding:3px 10px}
 #tw_sec .twrow label.f{flex:0 0 120px}
 #tw_sec .twrow label.f.grow{flex:1 1 240px}
 #tw_status:empty{display:none}
+#sa_sec label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px;min-width:0}
+#sa_sec label.f input{width:100%}
+#sa_sec .chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
+#sa_sec .sarows{display:flex;flex-wrap:wrap;gap:0 18px}
+#sa_sec .sarows .chk{flex:0 0 auto}
+#sa_sec .sarows input[type=number],#sa_sec .sacd input{width:64px}
+#sa_sec .twrow{display:flex;flex-wrap:wrap;gap:0 10px;align-items:flex-end}
+#sa_sec .twrow label.f.grow{flex:1 1 240px}
+#sa_sec .sacd{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}
+#sa_sum{white-space:nowrap}
+#sa_status:empty{display:none}
 .dcam .dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:8px}
 .dscan{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px}
 button.sec{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:400}
@@ -859,6 +870,29 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
     <div id="tw_status" class="ph" role="status"></div>
     <div id="tw_err" class="err"></div>
   </details>
+  <details class="subsec" id="sa_sec"><summary>Systemwarnungen im Twitch-Chat <span class="muted" id="sa_sum"></span></summary>
+    <label class="chk"><input type="checkbox" id="sa_on"> Einschalten</label>
+    <div class="sarows">
+      <label class="chk"><input type="checkbox" id="sa_t_on"> Temperatur ab <input id="sa_t" type="number" min="40" max="100" step="1" aria-label="Temperatur in Grad"> °C</label>
+      <label class="chk"><input type="checkbox" id="sa_c_on"> CPU-Last ab <input id="sa_c" type="number" min="20" max="100" step="1" aria-label="CPU-Last in Prozent"> %</label>
+      <label class="chk"><input type="checkbox" id="sa_r_on"> RAM ab <input id="sa_r" type="number" min="20" max="100" step="1" aria-label="Arbeitsspeicher in Prozent"> %</label>
+    </div>
+    <div class="sarows">
+      <label class="sacd">Pause <input id="sa_cd" type="number" min="1" max="120" step="1" aria-label="Pause in Minuten"> Min.</label>
+      <label class="chk"><input type="checkbox" id="sa_rec"> „Wieder normal“ melden</label>
+      <label class="chk"><input type="checkbox" id="sa_live"> Nur während der Sendung</label>
+    </div>
+    <details class="subsec" id="sa_txt"><summary>Texte</summary>
+      <div class="twrow">
+        <label class="f grow">Warnung ({Name}, {Wert} und {Grenze} werden ersetzt)<input id="sa_msg_a" maxlength="300" autocomplete="off"></label>
+        <label class="f grow">Wieder normal<input id="sa_msg_o" maxlength="300" autocomplete="off"></label>
+      </div>
+    </details>
+    <div class="ph" data-hlp>Meldet über denselben Twitch-Zugang wie die Akku-Warnung (Anmeldung im Bereich „Chat“ oder Bot-Konto oben). Eine Warnung kommt, wenn der Wert etwa 30 Sekunden lang die Grenze erreicht; bleibt er darüber, folgt nach jeder Pause eine Erinnerung. „Wieder normal“ kommt, wenn er die Grenze klar unterschreitet.</div>
+    <div class="actions"><button id="sa_save" type="button">Speichern</button><button id="sa_test" type="button" class="sec" disabled>Testnachricht senden</button></div>
+    <div id="sa_status" class="ph" role="status"></div>
+    <div id="sa_err" class="err"></div>
+  </details>
   </details>
 
 
@@ -904,6 +938,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
         <details class="pvs" data-k="3"></details>
       </div>
     </div>
+    <div id="dl_warn" class="ph" role="note" hidden style="color:var(--warn)">Die Verzögerungen der Kameras unterscheiden sich um mehr als 2000 ms. Das kann dazu führen, dass einzelne Bilder ruckeln. Besser den Unterschied klein halten.</div>
     <div class="piponly pvwrap"><div class="sech">Vorschau: kleine Bilder verschieben</div><div id="pvbox" class="pvbox"></div><div id="pvnote" class="ph"></div></div>
     <label class="muted" style="display:block;margin-top:12px"><input type="checkbox" id="p_auto" checked> Automatisch umschalten, wenn eine Kamera ausfällt (nach 5 s ohne Signal; zurück nach 60 s stabilem Signal)</label>
     <label class="muted piponly" style="display:block;margin-top:12px">Hauptbild tauschen ohne Unterbrechung (experimentell)
@@ -1805,6 +1840,62 @@ $("tw_test").addEventListener("click",twTest);
 $("tw_sec").addEventListener("toggle",()=>{ if($("tw_sec").open) twLoad(); });
 twLoad(); setInterval(()=>{ if(due("tw","c_cams",60000)) twLoad(); },10000);
 
+// ---- Systemwarnungen im Twitch-Chat (Unterabschnitt unter der Akku-Warnung; Server: SysAlerts, Wunsch aus Issue #67). Zugang, Kanal und Token gehören zur Twitch-Karte.
+let saData=null, saDirty=false, saBusy=false;
+function saStatusHtml(d){
+  const parts=[];
+  if(d.enabled&&!d.ready) parts.push("<span>Twitch ist noch nicht eingerichtet: Anmeldung im Bereich „Chat“ oder Bot-Konto bei der Akku-Warnung.</span>");
+  const v=d.values||{};
+  if(d.enabled&&d.ready&&(d.alerting||[]).length) parts.push("<span>Gerade über der Grenze: "+d.alerting.map(k=>({temp:"Temperatur",cpu:"CPU-Last",ram:"RAM"})[k]).join(", ")+"</span>");
+  const s=d.last;
+  if(s) parts.push(s.ok?`<span>Letzte Meldung um ${twTime(s.time)} Uhr:</span> <span translate="no">${esc(s.text)}</span>`:`<span>Fehler um ${twTime(s.time)} Uhr:</span> <span>${esc(s.text)}</span>`);
+  return parts.join(" ");
+}
+function saButtons(){
+  const ok=!!(saData&&saData.ready);
+  $("sa_save").disabled=saBusy; $("sa_test").disabled=saBusy||saDirty||!ok;
+  $("sa_test").title=saDirty?"Zuerst speichern":"";
+}
+function saFill(d){
+  saData=d;
+  $("sa_sum").textContent=d.enabled?"· an":"· aus";
+  setHtml($("sa_status"),saStatusHtml(d));
+  if(!saDirty){                                                   // ungespeicherte Eingaben nicht überschreiben
+    $("sa_on").checked=!!d.enabled;
+    [["t","temp"],["c","cpu"],["r","ram"]].forEach(([i,k])=>{ $("sa_"+i+"_on").checked=!!d[k].on; $("sa_"+i).value=d[k].limit; });
+    $("sa_cd").value=d.cooldown; $("sa_rec").checked=!!d.recover; $("sa_live").checked=d.only_live!==false;
+    $("sa_msg_a").value=d.msg_alert||""; $("sa_msg_o").value=d.msg_ok||"";
+  }
+  saButtons();
+}
+async function saLoad(){
+  let d; try{ d=await srtlaCall("GET","/api/sysalerts"); }catch(e){ return; }
+  saFill(d);
+}
+function saForm(){
+  const n=id=>parseInt($(id).value,10);
+  return {enabled:$("sa_on").checked, cooldown:n("sa_cd"), recover:$("sa_rec").checked, only_live:$("sa_live").checked,
+          temp:{on:$("sa_t_on").checked, limit:n("sa_t")}, cpu:{on:$("sa_c_on").checked, limit:n("sa_c")}, ram:{on:$("sa_r_on").checked, limit:n("sa_r")},
+          msg_alert:$("sa_msg_a").value, msg_ok:$("sa_msg_o").value};
+}
+async function saSave(){
+  const err=$("sa_err"); err.textContent=""; err.style.color=""; saBusy=true; saButtons();
+  try{ const d=await srtlaCall("POST","/api/sysalerts",saForm()); saDirty=false; saFill(d); err.textContent="Gespeichert."; err.style.color="var(--ok)"; }
+  catch(x){ err.textContent=x.message; }
+  saBusy=false; saButtons();
+}
+async function saTest(){
+  const err=$("sa_err"); err.textContent="Wird gesendet …"; err.style.color=""; saBusy=true; saButtons();
+  try{ const r=await srtlaCall("POST","/api/twitch/test",{}); err.textContent=r.message; err.style.color=r.ok?"var(--ok)":""; }
+  catch(x){ err.textContent=x.message; err.style.color=""; }
+  saBusy=false; saButtons(); saLoad();
+}
+$("sa_save").addEventListener("click",saSave);
+$("sa_test").addEventListener("click",saTest);
+["input","change"].forEach(ev=>$("sa_sec").addEventListener(ev,()=>{ saDirty=true; saButtons(); }));
+$("sa_sec").addEventListener("toggle",()=>{ if($("sa_sec").open) saLoad(); });
+saLoad(); setInterval(()=>{ if(due("sa","c_cams",60000)) saLoad(); },10000);
+
 // ---- HDMI-Kamera (Karte "Kameras", Abschnitt "HDMI- und USB-Kameras"): der HDMI-Dienst der Box speist den HDMI-Eingang als Kamera "HDMI" ein
 let hdmiData=null, hdmiDirty=false, hdmiBusy=false;
 function hdmiIsUsb(d){ return !!(d&&d.settings&&d.settings.source==="usb"); }
@@ -2299,6 +2390,13 @@ function setDelays(vals){
 }
 function delayBody(){ const o={}; DL.forEach(([r,n,v,k])=>{ o[k]=+($(n).value||0); }); return o; }
 const isDelayCtl=id=>DL.some(([r,n])=>id===r||id===n);
+const DL_SPREAD_WARN=2000;               // Unterschied zwischen der größten und kleinsten Verzögerung (ms), ab dem gewarnt wird (12. Oktober 2026: 2560 gegen 450 und 0 ließ zwei von drei Zweigen ruckeln; die Sendekette hebt die Haltezeit inzwischen selbst an, die Warnung ist die zweite Sicherung)
+function dlWarn(){
+  const el=$("dl_warn"); if(!el) return;
+  const pip=$("p_type").value==="pip", vals=[+$("n_delay").value||0];       // Hauptbild immer, kleine Bilder nur mit gewählter Kamera
+  if(pip) [["p_pip","n_delay1"],["p_pip2","n_delay2"],["p_pip3","n_delay3"]].forEach(([s,n])=>{ if($(s).value) vals.push(+$(n).value||0); });
+  el.hidden=!(pip&&vals.length>1&&Math.max(...vals)-Math.min(...vals)>DL_SPREAD_WARN);
+}
 // Der Schlüssel in Klammern erscheint nur, wenn zwei Kameras denselben Namen tragen (sonst reicht der Name)
 const pipOpt=(k,sel)=>`<option value="${esc(k.key)}"${k.key===sel?" selected":""}>${esc(k.name)}${pipCams.filter(x=>x.name===k.name).length>1?" ("+esc(k.key)+")":""}${k.state==="live"?" · sendet":""}</option>`;
 // Dieselbe Kamera oder dieselbe Ecke darf nicht doppelt gewählt werden. Vorrang: Hauptbild vor erstem kleinen
@@ -2405,6 +2503,7 @@ async function pipeLoad(){
   [["p_size1",c.size_pct],["p_size2",c.size_pct2??c.size_pct],["p_size3",c.size_pct3??c.size_pct]].forEach(([id,v])=>{ if(document.activeElement.id!==id) $(id).value=v; });
   renderPreview();
   setDelays([c.main_delay_ms,c.pip_delay_ms,c.pip2_delay_ms,c.pip3_delay_ms]);
+  dlWarn();
   pipLive=d.live||{};
   $("p_audio").value=c.audio;
   { const inPic=[c.main,c.pip,c.pip2,c.pip3].filter(Boolean), bar=$("swapbar");
@@ -2428,11 +2527,12 @@ $("pipecard").addEventListener("input",e=>{
   if(isDelayCtl(id)){                       // Regler und Zahlenfeld synchron halten
     const row=DL.find(([r,n])=>id===r||id===n), val=Math.max(0,Math.min(3000,+e.target.value||0));
     $(row[0]).value=val; if(id!==row[1]) $(row[1]).value=val; $(row[2]).textContent=val;
-    pipDelayDirty=true; return;
+    pipDelayDirty=true; dlWarn(); return;
   }
   pipeDirty=true; $("pipeerr").textContent="Nicht gespeichert: Mit „Bildaufbau speichern“ übernehmen.";
 });
 $("pipecard").addEventListener("change",async e=>{
+  dlWarn();                                  // Kamera oder Verzögerung gewählt: Hinweis auf zu große Unterschiede neu bewerten
   if(isDelayCtl(e.target.id||"")){
     const row=DL.find(([r,n])=>(e.target.id===r||e.target.id===n));
     const liveOk=(row[3]==="main_delay_ms"?pipLive.main:pipLive.pips);
