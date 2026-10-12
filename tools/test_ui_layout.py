@@ -408,6 +408,19 @@ class ImportProgress(unittest.TestCase):
         self.assertIn('"wifi": os.path.isdir(f"/sys/class/net/{name}/wireless")', src)                    # der Server meldet, welche Schnittstelle ein WLAN ist
         self.assertIn("Die Verbindung einer DJI-Kamera wird in ihrer DJI-Karte gewählt", open(os.path.join(ROOT, "server.py"), encoding="utf-8").read())      # der Server lehnt den alten Weg weiter ab
 
+    def test_installed_version_has_an_info_button_that_shows_only_its_changes(self):
+        """Bei der installierten Version steht ein "i" (Wunsch des Nutzers, 12. Oktober 2026): öffnet den Änderungsverlauf und zeigt nur diese Version."""
+        i = PAGE.index('<span>Installiert</span>')
+        row = PAGE[i:PAGE.index("</div>", i)]
+        self.assertIn('id="sw_curinfo"', row)
+        self.assertIn('class="swinfo"', row)                                                              # nicht "ibtn": "Hilfe ausblenden" soll ihn nicht verstecken (er öffnet keinen Hilfetext)
+        self.assertIn(".ibtn,.swinfo{display:inline-block", PAGE)
+        self.assertIn(":is(.ibtn,.helpbtn,.swinfo)", PAGE)                                                # Größe in den Designs wie die anderen "i"-Knöpfe
+        self.assertIn('window.swCurVer=d.current||""; $("sw_curinfo").hidden=!d.current;', PAGE)         # ohne bekannte Version kein Knopf
+        self.assertIn('if(vre&&!vre.test(sec.head)) continue;', PAGE)                                     # genau die Überschrift dieser Version (nicht jede Erwähnung)
+        self.assertIn('q.addEventListener("input",()=>{ only=null;', PAGE)                                # Tippen im Suchfeld zeigt wieder alle Versionen
+        self.assertIn('if(open){ only=null;', PAGE)                                                       # "Alle Änderungen" zeigt alle
+
     def test_remote_card_always_links_to_the_tailscale_https_switch(self):
         """Fernzugriff: Ist die Box verbunden, aber noch nicht freigegeben, steht ein fester Link zu den Tailscale-Einstellungen da, wo HTTPS einmal freigeschaltet wird (ein Nutzer fand den Weg nicht)."""
         self.assertIn('<a id="r_httpslink" class="btnlink" href="https://login.tailscale.com/admin/dns" target="_blank" rel="noopener noreferrer">Tailscale-Einstellungen öffnen</a>', PAGE)
