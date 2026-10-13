@@ -30,6 +30,7 @@ CTL_FIFO = f"{RUN}/belacoder.ctl"
 LIVE_STATS = f"{RUN}/belacoder-live.txt"
 BIN = "/opt/pipbox/bin/belacoder"
 BUFFER_NEED_MIN_MS = 600                    # Untergrenze dessen, was Verzögerungen brauchen (buffer_need_ms)
+BUFFER_MIN_COPY_MS = 1350                   # dasselbe mit einem belacoder, der das Hauptbild kopiert (Version -sb13 oder neuer): das Hauptbild darf dann ebenso früh ankommen wie die kleinen Bilder, der Spielraum für Schübe wächst auf rund 870 ms
 BUFFER_MIN_MS = 1050                        # Ausrichtungspuffer (belacoder -A), mindestens: Reserve für Kameras, die ihre Bilder in Schüben senden (Pocket 3: Ankunft schwankt um 0,7 s, bei 600 ms kamen 4 bis 10 % der Sekunden unter 26 Bilder; Testbox, 13. Oktober 2026)
 FEED_COOLDOWN_S = 3.0
 STATS_MAX_AGE_S = 4.0
@@ -57,6 +58,29 @@ def supported():
         return _SUP["ok"]
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+_ENG = {"mtime": None, "level": 0}
+COPY_LEVEL = 13            # ab belacoder "-sb13" kopiert die Engine das ganzflächige Hauptbild aus dem Speicher des Dekoders (belacoder-frame-copy.patch)
+
+
+def engine_level():
+    """Die Nummer hinter "-sb" in der Version des installierten belacoder (0, wenn unbekannt). PIPBOX_ENGINE=<Zahl> erzwingt sie (Tests)."""
+    force = os.environ.get("PIPBOX_ENGINE")
+    if force is not None:
+        try:
+            return int(force)
+        except ValueError:
+            return 0
+    try:
+        mt = os.stat(BIN).st_mtime
+        if _ENG["mtime"] != mt:
+            out = subprocess.run([BIN, "-v"], capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"-sb(\d+)", out)
+            _ENG.update(mtime=mt, level=int(m.group(1)) if m else 0)
+        return _ENG["level"]
+    except (OSError, subprocess.SubprocessError):
+        return 0
 
 
 def enabled(cfg):
@@ -200,7 +224,7 @@ def delays_by_key(c):
 
 def buffer_ms(c):
     """Ausrichtungspuffer: mindestens BUFFER_MIN_MS und 300 ms mehr als die größte Verzögerung (sonst kommen verzögerte Bilder 'zu spät')."""
-    return max(BUFFER_MIN_MS, buffer_need_ms(c))
+    return max(BUFFER_MIN_COPY_MS if engine_level() >= COPY_LEVEL else BUFFER_MIN_MS, buffer_need_ms(c))
 
 
 def buffer_need_ms(c):
@@ -225,7 +249,7 @@ def buffer_mismatch(running, need):
     return need > running + BUFFER_LATE_MS or running > need + BUFFER_EARLY_MS
 
 
-def hold_delays(delays, buffer, big_key=None):
+def hold_delays(delays, buffer, big_key=None, big_lead=None):
     """Haltezeit je Kamera auf der komprimierten Seite des Zweigs (set sbf<N>_vq min-threshold-time). Jedes Bild ist beim Verlassen des Dekoders um (Puffer - Haltezeit - Dekodierzeit) früher
     als sein Termin und wartet bis dahin roh in Warteschlangen; die fassen zusammen nur etwa 2,5 s. Ist der Unterschied der Verzögerungen größer (Puffer = größte Verzögerung + 300 ms),
     läuft der Zweig mit der kleinsten Verzögerung über, und fast alle seine Bilder werden verworfen (Testbox, 12. Oktober 2026: 2560 ms gegen 450 und 0). Darum wird die Haltezeit
@@ -233,7 +257,7 @@ def hold_delays(delays, buffer, big_key=None):
     Grenze LEAD_MAX_BIG_MS. Das ändert nichts daran, wann ein Bild gezeigt wird (der Termin steht fest, die Haltezeit bleibt höchstens Puffer - 300 ms), und bei Puffern bis
     LEAD_MAX_BIG_MS nichts an der Einstellung."""
     floor = max(0, int(buffer) - LEAD_MAX_MS)
-    floor_big = max(0, int(buffer) - LEAD_MAX_BIG_MS)
+    floor_big = max(0, int(buffer) - (LEAD_MAX_BIG_MS if big_lead is None else int(big_lead)))
     return {k: max(int(v), floor_big if k == big_key else floor) for k, v in delays.items()}
 
 
@@ -579,6 +603,7 @@ class LiveController:
         # Einstellung, mit der die Sendekette gestartet wurde: daraus stammt der Ausrichtungspuffer (belacoder -A) und die Verzögerungen, die dazu passen
         sc = safe_cfg(start_cfg) if start_cfg else None
         self.running_buffer = buffer_ms(sc) if sc else None
+        self.big_lead = LEAD_MAX_MS if engine_level() >= COPY_LEVEL else LEAD_MAX_BIG_MS     # Ausgangslage beim Start der Sendekette: kopiert der belacoder das Hauptbild, gilt für es dieselbe Grenze wie für die kleinen Bilder
         self.start_delays = delays_by_key(sc) if sc else {}
         self.delays_frozen = False
         self.log, self.clock, self.fetch, self.stats, self.control, self.base = log, clock, fetch, stats, control, rtmp_base
@@ -640,7 +665,7 @@ class LiveController:
         if frozen:
             cap = max(0, self.running_buffer - 300)
             want = {k: (self.start_delays[k] if k in self.start_delays else min(v, cap)) for k, v in want.items()}
-        return hold_delays(want, self.running_buffer if self.running_buffer is not None else buffer_ms(self.cfg), big_key)
+        return hold_delays(want, self.running_buffer if self.running_buffer is not None else buffer_ms(self.cfg), big_key, self.big_lead)
 
     def read_view(self):
         """Ansicht im Betrieb: Datei main-view ("ausgeblendet Ton stumm", schreibt die Oberfläche); fehlt sie, gilt die Einstellung."""
