@@ -129,7 +129,8 @@ def send_stats():
     """Kennzahlen der Sendung aus der Datei von belacoder (Bitrate, Laufzeit, Sendepuffer, Neuübertragungen, Verlust, Encoder-Bilder je Sekunde).
     None, wenn keine frische Datei da ist (Sendung aus oder ältere belacoder-Fassung)."""
     try:
-        if time.time() - os.stat(BC_STATS_FILE).st_mtime > 6:
+        mtime = os.stat(BC_STATS_FILE).st_mtime
+        if time.time() - mtime > 6:
             return None
         d = json.loads(read(BC_STATS_FILE, "") or "{}")
     except (OSError, ValueError):
@@ -138,6 +139,7 @@ def send_stats():
         return None
     sent = d.get("sent_total")
     out = {k: d.get(k) for k in ("fps", "bitrate_kbps", "rtt_ms", "send_mbps", "snd_buf_pkts", "snd_buf_ms", "retrans_total", "loss_total", "drop_total", "sent_total")}
+    out["mtime"] = mtime                    # Zeit der Datei in Sekunden mit Bruchteil (belacoders eigenes Feld "time" ist auf ganze Sekunden abgeschnitten)
     for k in ("retrans", "loss"):
         t = d.get(k + "_total")
         out[k + "_pct"] = round(100.0 * t / sent, 2) if isinstance(t, (int, float)) and isinstance(sent, (int, float)) and sent > 0 and t >= 0 else None
@@ -415,8 +417,67 @@ class Sampler:
         self.prev_cpu = None
         self.prev_net = None
         self.prev_t = None
+        self.sm_net, self.sm_zero = {}, {}     # geglättete Raten je Netzkarte und Zähler der Messungen ohne Verkehr (smooth_rates)
+        self.pay_prev, self.pay_sm, self.pay_zero = None, None, 0   # Nutzdatenrate der Sendung: letzter Stand (Zeit der Datei, Pakete), geglätteter Wert, Messungen ohne Verkehr (payload_rate)
         self._lock = threading.Lock()
         self._d_since, self._d_last = None, 0.0
+
+    # Angezeigte Raten der Netzkarten: gleitender Mittelwert statt Rohwert. Der Sender schickt Bilder in Schüben (SRT-Pacing, WLAN), darum zeigte jede einzelne Messung über 1,5 bis 2 s mal 10 und mal 20 Mbit/s,
+    # im Mittel über 10 s waren es 14,5 (Testbox, 13. Oktober 2026).
+    NET_SMOOTH_S = 4.0          # Zeitkonstante: nach einem Sprung der Rate ist die Anzeige nach 4 s noch bei 37 % des Unterschieds, nach 8 s bei 14 %
+    NET_SMOOTH_GAP_S = 15.0     # war die letzte Messung länger her (Seite nicht geöffnet), beginnt die Glättung neu mit dem Rohwert
+    NET_ZERO_MBIT, NET_ZERO_N = 0.1, 2   # Kommt zweimal hintereinander (rund 3 s) fast nichts, ist es ein Ausfall: die Anzeige springt sofort auf den Rohwert, statt 10 bis 20 s auszulaufen
+
+    def smooth_rates(self, raw, dt_s):
+        """Rohe Raten (je Netzkarte rx_mbit/tx_mbit über die Zeit dt_s seit der letzten Messung) glätten; Zeitkonstante NET_SMOOTH_S, unabhängig davon, wie oft abgefragt wird. Ein Ausfall (NET_ZERO_N
+        Messungen hintereinander unter NET_ZERO_MBIT) wird nicht geglättet."""
+        fresh = dt_s is None or dt_s > self.NET_SMOOTH_GAP_S
+        a = 1.0 - math.exp(-max(dt_s or 0.0, 0.0) / self.NET_SMOOTH_S)
+        out, new, zeros = {}, {}, {}
+        for n, r in raw.items():
+            p = None if fresh else self.sm_net.get(n)
+            cur = {}
+            for k in ("rx_mbit", "tx_mbit"):
+                z = (self.sm_zero.get((n, k), 0) + 1) if r[k] < self.NET_ZERO_MBIT else 0
+                zeros[(n, k)] = z
+                cur[k] = r[k] if (p is None or z >= self.NET_ZERO_N) else p[k] + (r[k] - p[k]) * a
+            new[n] = cur
+            out[n] = {k: round(v, 2) for k, v in cur.items()}
+        self.sm_net, self.sm_zero = new, zeros
+        return out
+
+    SRT_PAYLOAD_BYTES = 1316    # Nutzdaten je SRT-Paket (7 TS-Pakete zu 188 Byte; belacoder ohne Option -r)
+
+    def payload_rate(self, send):
+        """Nutzdatenrate der Sendung in Mbit/s (Video und Ton, ohne Kopfdaten (IP, UDP, SRT, SRTLA) und ohne Neuübertragungen): Zuwachs von sent_total - retrans_total aus der Kennzahlen-Datei von belacoder
+        (SRT zählt in sent_total auch die Neuübertragungen, pktSentTotal), mal 1316 Byte je Paket, geteilt durch die Zeit zwischen zwei Ständen der Datei (mtime mit Bruchteil; belacoder schreibt einmal je
+        Sekunde, die Zeit der Abfrage wäre ungenau), danach wie die Netzraten geglättet. Das ist, was belacoder an srtla_send übergibt; die Anzeige nimmt nie mehr als auf der Leitung gesendet wird.
+        Die Summe der Netzkarten (Leitung) lag auf der Testbox bei 14,5 Mbit/s, der Server bekam 11 bis 12 (13. Oktober 2026). None ohne laufende Sendung und bis zum zweiten Stand."""
+        def num(k):
+            v = send.get(k) if isinstance(send, dict) else None
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        t, sent, retr = num("mtime"), num("sent_total"), num("retrans_total")
+        if t is None or sent is None or sent < 0:
+            self.pay_prev, self.pay_sm, self.pay_zero = None, None, 0
+            return None
+        unique = sent - (retr if retr is not None and 0 <= retr <= sent else 0.0)
+        cur, prev = (t, unique), self.pay_prev
+        if prev is not None and t <= prev[0]:
+            return None if self.pay_sm is None else round(self.pay_sm, 2)              # Datei noch nicht erneuert (oder Uhr zurück): der letzte Wert gilt weiter
+        self.pay_prev = cur
+        dt = None if prev is None else t - prev[0]
+        if dt is None or dt > self.NET_SMOOTH_GAP_S or unique < prev[1]:               # erster Wert, lange Pause (Uhrsprung, Sendung lange aus) oder Zähler zurückgesetzt (belacoder neu gestartet)
+            self.pay_sm, self.pay_zero = None, 0
+            return None
+        raw = (unique - prev[1]) * self.SRT_PAYLOAD_BYTES * 8 / dt / 1e6
+        if self.pay_sm is None:
+            self.pay_sm = raw
+        elif raw < self.NET_ZERO_MBIT and self.pay_zero + 1 >= self.NET_ZERO_N:       # zweimal fast nichts: Ausfall, nicht glätten
+            self.pay_sm = raw
+        else:
+            self.pay_sm += (raw - self.pay_sm) * (1.0 - math.exp(-dt / self.NET_SMOOTH_S))
+        self.pay_zero = self.pay_zero + 1 if raw < self.NET_ZERO_MBIT else 0
+        return round(self.pay_sm, 2)
 
     @classmethod
     def d_relevant(cls, names):
@@ -496,10 +557,10 @@ class Sampler:
         with self._lock:
             hit = getattr(self, "_last", None)
             if hit is not None and time.monotonic() - hit[0] < 1.5:
-                return hit[1]
+                return dict(hit[1])                      # flache Kopie: der Abrufer ergänzt Schlüssel und Meldungen, das darf den Zwischenspeicher nicht verändern (zweiter Tab: Meldungen doppelt)
             val = self.sample_real()
             self._last = (time.monotonic(), val)
-            return val
+            return dict(val)
 
     def sample_real(self):
         now = time.time()
@@ -516,6 +577,7 @@ class Sampler:
                 if p:
                     rates[n] = {"rx_mbit": max(0.0, round((rx - p[0]) * 8 / dt_s / 1e6, 2)),
                                 "tx_mbit": max(0.0, round((tx - p[1]) * 8 / dt_s / 1e6, 2))}
+        rates = self.smooth_rates(rates, dt_s)
         self.prev_cpu, self.prev_net, self.prev_t = cpu, net, now
 
         freqs = []
@@ -549,7 +611,9 @@ class Sampler:
             zones.append({"name": THERMAL_NAMES.get(zt, zt or f"Zone {zi}"), "c": round(temps[zi], 1)})
         out = self.finish(cores, freqs, max(temps) if temps else None,
                           total, avail, rates, blocked, self.fan_pwm(), self.blocked_threads() if blocked > 0 else None)
-        out["details"] = {"temps": zones, "accel": devfreq_loads(), "disk": disk_usage("/"), "send": send_stats()}
+        send = send_stats()
+        out["details"] = {"temps": zones, "accel": devfreq_loads(), "disk": disk_usage("/"), "send": send}
+        out["payload_mbit"] = self.payload_rate(send)
         return out
 
     def sample_demo(self):
