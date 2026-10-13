@@ -57,7 +57,8 @@ class Header(unittest.TestCase):
         fn = PAGE[PAGE.index("function placeSig(){"):PAGE.index('$("hdr_more").addEventListener')]
         self.assertIn('const want=isPhone()&&document.body.classList.contains("streaming")', fn)    # nur am Handy und nur während der Sendung
         self.assertIn('hold.appendChild(sig); hold.appendChild(dots)', fn)                           # dieselben Elemente: die Messwerte laufen unverändert weiter
-        self.assertIn('gear.before(sig); gear.before(dots)', fn)                                    # sonst zurück an ihren Platz im Chat (vor dem Zahnrad)
+        self.assertIn('up.before(sig)', fn)                                                         # sonst zurück an ihren Platz im Chat (Signal vor dem Hochladewert)
+        self.assertIn('gear.before(dots)', fn)                                                       # die Kamerapunkte vor das Zahnrad                                    # sonst zurück an ihren Platz im Chat (vor dem Zahnrad)
         self.assertIn('matchMedia("(max-width:620px)").addEventListener("change",placeSig)', PAGE)  # auch beim Ändern der Fensterbreite
         self.assertIn("placeSig(); } }", PAGE)                                                      # beim Start und Ende der Sendung
         self.assertIn('id="net_sig" class="sig"', PAGE)                                             # die Chat-Elemente selbst bleiben unangetastet

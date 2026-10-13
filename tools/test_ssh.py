@@ -609,7 +609,7 @@ class FilesAndPage(unittest.TestCase):
 
     def test_card_follows_the_feedback_of_the_issue(self):
         page = self.read("web", "index.html")
-        html = page[page.index('id="c_dev"'):page.index('id="c_power"')]
+        html = page[page.index('id="c_dev"'):page.index('id="c_layout"')]
         js = page[page.index("// ---- Entwickler"):page.index("// ---- Box herunterfahren")]
         self.assertNotIn("dev_open", page)                                               # kein Knopf "Original öffnen"
         self.assertNotIn("Original-Oberfläche öffnen", page)

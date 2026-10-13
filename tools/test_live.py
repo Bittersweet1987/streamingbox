@@ -74,8 +74,26 @@ class Geometry(unittest.TestCase):
         self.assertEqual(right[0], g["x"] + g["w"] - g["bw"])
 
     def test_buffer_covers_the_delay(self):
-        self.assertEqual(L.buffer_ms(safe()), 750)                      # größte Verzögerung 450 ms + 300 ms
-        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 0})), 600)
+        self.assertEqual(L.buffer_ms(safe()), 1050)                     # Mindestpuffer (größte Verzögerung 450 ms + 300 ms wären nur 750)
+        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 0})), 1050)
+        self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 750})), 1050)     # größte erlaubte Verzögerung: gleicher Puffer
+
+    def test_a_chain_started_before_the_minimum_buffer_is_not_reported_as_outdated(self):
+        """Lief die Sendekette mit Puffer 750 (vor 1.0.29) und sind die Verzögerungen unverändert, fehlt nichts: kein "noch nicht übernommen"."""
+        self.assertEqual(L.buffer_need_ms(safe()), 750)
+        self.assertFalse(L.buffer_mismatch(750, L.buffer_need_ms(safe())))
+        self.assertFalse(L.buffer_mismatch(600, L.buffer_need_ms(safe({"main_delay_ms": 0}))))
+        self.assertTrue(L.buffer_mismatch(750, L.buffer_need_ms(safe({"pip_delay_ms": 750}))))
+
+    def test_the_default_buffer_gives_the_bursty_main_camera_300_ms_more_room_without_a_longer_hold(self):
+        """Pocket 3 als Hauptbild kam mit 0,7 s Streuung an; der Puffer 750 ließ nur etwa 65 ms Spielraum (13. Oktober 2026). Mit 1050 bleibt die Haltezeit des Hauptbilds
+        bei 450 ms (Untergrenze Puffer - 600), der Spielraum wächst um 300 ms."""
+        c = safe()
+        buf = L.buffer_ms(c)
+        hold = L.hold_delays(L.delays_by_key(c), buf, "dji-a")
+        self.assertEqual(hold["dji-a"], 450)
+        self.assertLessEqual(buf - hold["dji-a"], L.LEAD_MAX_BIG_MS)
+        self.assertGreaterEqual(L.BUFFER_MIN_MS, 1050)
 
 
 class PipelineText(unittest.TestCase):
@@ -176,9 +194,9 @@ class AudioQueues(unittest.TestCase):
         return L.build(safe(cfg))
 
     def test_normal_buffer_keeps_two_seconds_at_least(self):
-        t = self.text()                                                     # Puffer 750
-        self.assertIn("sbf0_aq max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0", t)
-        self.assertIn("sbf0_aq2 max-size-time=2000000000 max-size-buffers=0 max-size-bytes=0", t)
+        t = self.text()                                                     # Puffer 1050 + 1 s
+        self.assertIn("sbf0_aq max-size-time=2050000000 max-size-buffers=0 max-size-bytes=0", t)
+        self.assertIn("sbf0_aq2 max-size-time=2050000000 max-size-buffers=0 max-size-bytes=0", t)
 
     def test_large_buffer_gets_larger_queues_on_every_branch(self):
         t = self.text(main_delay_ms=450, pip_delay_ms=750)                 # größter Puffer der Engine: 750 + 300 = 1050
@@ -189,6 +207,7 @@ class AudioQueues(unittest.TestCase):
         self.assertIn("sbf0_aq max-size-time=2050000000", t)
 
 
+@mock.patch.object(L, "BUFFER_MIN_MS", 600)        # diese Prüfungen betreffen die Rechnung mit dem alten Mindestpuffer (so bleiben die Fälle "passt nicht in den Puffer" erreichbar)
 class BufferMismatch(unittest.TestCase):
     """Passt der Ausrichtungspuffer der laufenden Sendekette noch zu den gespeicherten Verzögerungen? (12. Oktober 2026)"""
 
@@ -277,6 +296,7 @@ class HoldDelays(unittest.TestCase):
                     if d[k] <= buf - lim:
                         self.assertLessEqual(buf - out[k], lim, (combo, big, k))
 
+    @mock.patch.object(L, "BUFFER_MIN_MS", 600)        # diese Prüfungen betreffen die Rechnung mit dem alten Mindestpuffer (so bleiben die Fälle "passt nicht in den Puffer" erreichbar)
     def test_effective_delays_apply_the_floor_on_top_of_the_freeze(self):
         # Start mit Puffer 600 (alles 0). Danach Verzögerungen gespeichert, die 1050 bräuchten: eingefroren auf die Werte vom Start, davon wird die Haltezeit gebildet.
         tmp = tempfile.mkdtemp()
@@ -298,6 +318,7 @@ class HoldDelays(unittest.TestCase):
         self.assertEqual(c.effective_delays("dji-a"), {"dji-a": 450, "cam2": 750, "cam3": 50, "cam4": 50})     # Hauptbild: Untergrenze 450, hier schon erfüllt
 
 
+@mock.patch.object(L, "BUFFER_MIN_MS", 600)        # diese Prüfungen betreffen die Rechnung mit dem alten Mindestpuffer (so bleiben die Fälle "passt nicht in den Puffer" erreichbar)
 class FrozenDelays(unittest.TestCase):
     """Die laufende Sendekette übernimmt Verzögerungen nur, solange sie zum Puffer vom Start passen."""
 

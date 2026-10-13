@@ -768,7 +768,7 @@ class Deactivate(unittest.TestCase):
     def test_pending_names_the_delay_when_the_running_buffer_no_longer_fits(self):
         """Verzögerungen geändert, Puffer der laufenden Sendekette passt nicht mehr: "Verzögerung" steht bei "noch nicht übernommen" (12. Oktober 2026)."""
         z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
-        self.assertEqual(server.pipbox_live.buffer_ms(server.PipelineStore._safe_cfg(dict(CFG, **z))), 600)      # alles 0: Mindestwert
+        self.assertEqual(server.pipbox_live.buffer_need_ms(server.PipelineStore._safe_cfg(dict(CFG, **z))), 600)      # alles 0: Mindestwert
         self.assertEqual(self._pending_status(2860, z), ["Verzögerung"])         # lief mit 2560 ms Verzögerung, jetzt alles 0
         self.assertEqual(self._pending_status(600, z), [])                       # passt
         self.assertEqual(self._pending_status(750, z), [])                       # etwas Überschuss ist in Ordnung

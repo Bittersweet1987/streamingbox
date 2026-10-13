@@ -468,8 +468,8 @@ class Scopes(T.Base):
         self.assertTrue(st["mod"] and st["helix_chat"])
         self.assertFalse(st["events"])
         # Ereignisse später dazu: die Moderation geht nicht verloren
-        self.assertEqual(tl.scopes_for(events=True).split(), ["chat:read", "chat:edit", "user:write:chat", "moderator:manage:banned_users",
-                                                              "moderator:manage:chat_messages", "moderator:read:followers", "channel:read:redemptions"])
+        self.assertEqual(tl.scopes_for(events=True).split(), ["chat:read", "chat:edit", "user:write:chat"] + tl.MOD_SCOPES.split()      # Moderation samt Befehlen bleibt erhalten
+                         + ["moderator:read:followers", "channel:read:redemptions"])
         T.FakeTwitch.state["polls"] = 0
         tl.start(events=True)
         self.wait(tl, "angemeldet")

@@ -138,6 +138,7 @@ class Service(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        asyncio.set_event_loop(asyncio.new_event_loop())          # Python 3.9: asyncio.Lock() im Dienst braucht eine Schleife
         self.d = dd.Daemon(self.dir.name)
 
     def cmd(self, **req):
