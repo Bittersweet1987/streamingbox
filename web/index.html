@@ -3187,7 +3187,7 @@ function renderDetails(m){
   const f1=x=>x==null||x<0?"–":(+x).toFixed(1), n0=x=>x==null||x<0?"–":String(Math.round(x));
   const s=d.send;
   $("det_send").innerHTML=!s?'<span class="muted">Keine Daten (die Sendung läuft nicht).</span>':
-    drow("Bitrate",`<b>${f1(upTotal(m))}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
+    drow("Bitrate",`<b>${f1(upShown(m))}</b> Mbit/s <span class="muted">(eingestellt ${f1(s.bitrate_kbps/1000)})</span>`)
     +drow("Laufzeit (Ping, RTT)",`<b>${f1(s.rtt_ms)}</b> ms`)
     +Object.entries(m.uplinks||{}).filter(([n,u])=>u&&u.srtt!=null).map(([n,u])=>drow('<span class="muted">· '+esc(ifd(n))+'</span>',`${n0(u.srtt)} ms`)).join("")
     +drow("Sendepuffer",`<b>${n0(s.snd_buf_ms)}</b> ms <span class="muted">(${n0(s.snd_buf_pkts)} Pakete)</span>`)
@@ -3205,10 +3205,15 @@ function renderDetails(m){
     +drow("Frei",`<b>${f1(k.free_gb)}</b> GB`)+drow("Gesamt",`${f1(k.total_gb)} GB`);
 }
 $("statdet").addEventListener("toggle",()=>{ if($("statdet").open) tick(); });
-// Gesamt-Upload der gewählten Sendewege in Mbit/s (Zähler der Netzwerkkarten, dieselbe Zahl wie neben "Live")
+// Gesamt-Upload der gewählten Sendewege in Mbit/s auf der Leitung (Zähler der Netzwerkkarten, mit Kopfdaten und Neuübertragungen, geglättet)
 function upTotal(m){
   const upl=((srtlaData&&srtlaData.settings)||{}).uplinks||[]; let nets=Object.entries(m.net||{}); const sel=nets.filter(([n])=>upl.includes(n)); if(sel.length) nets=sel;
   return nets.reduce((a,[n,r])=>a+(+r.tx_mbit||0),0);
+}
+// Die Zahl neben "Live", im Verlauf und bei "Details": die Nutzdaten der Sendung (Video und Ton), nie mehr als auf der Leitung gesendet wird (fällt die Leitung aus, zählt sie), ohne Messwert die Leitung
+function upShown(m){
+  const wire=upTotal(m), pay=m.payload_mbit==null?null:+m.payload_mbit;
+  return pay==null||isNaN(pay)?wire:Math.min(pay,wire);
 }
 // Signalbalken neben "Chat": aus den Messwerten der Sendung (Wege, Laufzeit, Sendepuffer, Senderate); grau, wenn nicht gesendet wird
 function sigLevel(m){
@@ -3244,7 +3249,7 @@ setInterval(()=>{                                                               
 function paintSig(m){
   const el=$("net_sig"); if(!el) return;
   const q=sigLevel(m), sd=m.details&&m.details.send;
-  sigPts.push({t:Date.now(),v:q==null?0:Math.max(0,upTotal(m)*1000)}); sigDraw();
+  sigPts.push({t:Date.now(),v:q==null?0:Math.max(0,upShown(m)*1000)}); sigDraw();
   el.classList.remove("ok","warn","crit"); if(q!=null) el.classList.add(q>=3?"ok":q===2?"warn":"crit");
   const tip=q==null?"Verbindung: keine Messung (es wird nicht gesendet)":q>=3?"Verbindung: gut":q===2?"Verbindung: mäßig":"Verbindung: schlecht";
   el.setAttribute("title",tip); el.setAttribute("aria-label",tip);
@@ -3269,8 +3274,9 @@ async function tick(){
     const upl=((srtlaData&&srtlaData.settings)||{}).uplinks||[];
     let nets=Object.entries(m.net); const sel=nets.filter(([n])=>upl.includes(n)); if(sel.length) nets=sel;
     {   // Gesamt-Upload neben dem Live-Status; Farbe nach Höhe
-      const tot=nets.reduce((a,[n,r])=>a+(+r.tx_mbit||0),0), el=$("liveup");
+      const tot=upShown(m), el=$("liveup");                                                  // große Zahl: Nutzdaten der Sendung, sonst die Leitung (upShown)
       el.hidden=!(sendData&&sendData.active);
+      el.title=m.payload_mbit==null?"Gesamter Upload über die gewählten Netze":"Nutzdaten der Sendung (Video und Ton, ohne Kopfdaten und Neuübertragungen)";
       el.innerHTML=`${fmt(tot)} <small>Mbit/s ↑</small>`;
       el.style.color=tot>=1.5?"var(--ok)":(tot>=0.5?"var(--warn)":"var(--crit)");   // grün ab 1,5 Mbit/s, orange bis dahin, rot fast nichts
     }
@@ -3278,7 +3284,7 @@ async function tick(){
     let netHtml=nets.map(([n,r])=>upRow(upDot(m.uplinks&&m.uplinks[n])+esc(ifd(n)),r.tx_mbit,r.rx_mbit)).join("");
     if(nets.length>1){   // Summe über alle verbundenen Netzwerkkarten (Ethernet, WLAN, USB/Mobilfunk)
       const sum=k=>nets.reduce((a,[n,r])=>a+(+r[k]||0),0);
-      netHtml+=upRow(`<b title="Summe über ${nets.length} Netze">Summe</b> <span class="unit">(${nets.length})</span>`,sum("tx_mbit"),sum("rx_mbit")," sum");
+      netHtml+=upRow(`<b title="Summe über ${nets.length} Netze, auf der Leitung (mit Kopfdaten und Neuübertragungen)">Summe</b> <span class="unit">(${nets.length})</span>`,sum("tx_mbit"),sum("rx_mbit")," sum");
     }
     $("net").classList.toggle("hasrows",!!netHtml);
     $("net").innerHTML=netHtml||'<span class="muted">keine Daten</span>';
