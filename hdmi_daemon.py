@@ -138,6 +138,13 @@ def clean_settings(d, current=None):
     return out
 
 
+# Die Tonquelle eines Geräts (USB-Kamera, HDMI-Eingang) darf nicht der Takt der ganzen Sendekette sein: alsasrc liefert sonst standardmäßig den Takt (provide-clock=true),
+# und der Takt der Kamera läuft gegenüber dem der Box (gemessen 12./13. Oktober 2026: etwa 0,44 ms je Sekunde). Die Zeitstempel des Bildes folgen dann diesem Takt, belacoder
+# vergleicht sie mit seiner Uhr, und der Versatz der HDMI-Kamera wuchs gleichmäßig von -0,1 auf +1,5 s in etwa einer Stunde, bis der Verzugs-Schutz den Zweig herausnahm.
+# Mit provide-clock=false gilt der Systemtakt; der Ton wird per Neuberechnung (resample) an ihn angepasst.
+ALSA_CLOCK = ["provide-clock=false", "slave-method=resample"]
+
+
 def feeder_argv(cfg, rtmp_port=RTMP_PORT, rtmp_app=RTMP_APP, device=HDMI_DEVICE, audio_device=HDMI_AUDIO):
     """Befehl der Einspeisung als Liste (keine Shell). Alle Werte kommen aus clean_settings()."""
     cfg = clean_settings(cfg)
@@ -151,7 +158,7 @@ def feeder_argv(cfg, rtmp_port=RTMP_PORT, rtmp_app=RTMP_APP, device=HDMI_DEVICE,
          "mpph264enc", "bitrate=%d" % (cfg["bitrate"] * 1000), "gop=%d" % cfg["fps"], "!",
          "h264parse", "config-interval=-1", "!", "queue", "!", "mux."]
     if cfg["audio"] == "hdmi":
-        a = ["alsasrc", "device=" + audio_device, "!", "audioconvert", "!", "voaacenc", "bitrate=128000", "!", "aacparse", "!", "queue", "!", "mux."]
+        a = ["alsasrc", "device=" + audio_device] + ALSA_CLOCK + ["!", "audioconvert", "!", "voaacenc", "bitrate=128000", "!", "aacparse", "!", "queue", "!", "mux."]
     else:
         a = ["audiotestsrc", "wave=silence", "is-live=true", "!", "audio/x-raw,rate=48000,channels=2", "!",
              "voaacenc", "bitrate=128000", "!", "aacparse", "!", "queue", "!", "mux."]
@@ -287,7 +294,7 @@ def usb_feeder_argv(cfg, device, cand, audio_device=None, rtmp_port=RTMP_PORT, r
     else:
         v += ["queue", "!", "mpph264enc", "bitrate=%d" % (cfg["bitrate"] * 1000), "gop=%d" % fps, "!", "h264parse", "config-interval=-1", "!", "queue", "!", "mux."]
     if cfg["audio"] == "hdmi" and audio_device:
-        a = ["alsasrc", "device=" + audio_device, "!", "audioconvert", "!", "audioresample", "!", "audio/x-raw,rate=48000,channels=2", "!",
+        a = ["alsasrc", "device=" + audio_device] + ALSA_CLOCK + ["!", "audioconvert", "!", "audioresample", "!", "audio/x-raw,rate=48000,channels=2", "!",
              "voaacenc", "bitrate=128000", "!", "aacparse", "!", "queue", "!", "mux."]
     else:
         a = ["audiotestsrc", "wave=silence", "is-live=true", "!", "audio/x-raw,rate=48000,channels=2", "!",
