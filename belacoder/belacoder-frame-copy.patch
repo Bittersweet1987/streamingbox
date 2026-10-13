@@ -1,8 +1,8 @@
 diff --git a/belacoder.c b/belacoder.c
-index 252f445..7c1ee88 100644
+index 252f445..588ed80 100644
 --- a/belacoder.c
 +++ b/belacoder.c
-@@ -1313,6 +1313,73 @@ static GstPadProbeReturn feed_latency_probe(GstPad *pad, GstPadProbeInfo *info,
+@@ -1313,6 +1313,76 @@ static GstPadProbeReturn feed_latency_probe(GstPad *pad, GstPadProbeInfo *info,
    return GST_PAD_PROBE_OK;
  }
  
@@ -10,7 +10,10 @@ index 252f445..7c1ee88 100644
 +// (videoscale) reads source pixels once per OUTPUT pixel: on the RK3588 a 720p frame enlarged to 1080p took 43 ms straight from the decoder memory
 +// (more than the 33 ms of a frame at 30 fps), and 3.5 ms after one sequential copy into normal memory. So a frame that is going to be scaled to a
 +// target larger than itself is copied once before it enters the queue of its branch (<name>_lq). Frames that stay the same size or get smaller
-+// are passed on untouched (measured: copying them costs more than it saves). The target is read from the capsfilter <name>_scc.
++// are passed on untouched (measured: copying them costs more than it saves), EXCEPT frames for a full-screen target (at least 1.8 million pixels,
++// the main picture): they are passed on without a scaling step, so each one would hold one of the decoder's few output buffers until the mixer
++// takes it, which limits how early the main picture may arrive (600 ms) and so how much jitter of a bursty camera the alignment buffer can absorb.
++// A copy (about 2 ms) frees the decoder buffer at once. The target is read from the capsfilter <name>_scc.
 +// SB_FRAME_COPY=0 switches this off.
 +static GstPadProbeReturn probe_frame_copy(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
 +  GstElement *scc = (GstElement *)data;
@@ -35,7 +38,7 @@ index 252f445..7c1ee88 100644
 +    gst_caps_unref(tc);
 +  }
 +  if (sw <= 0 || sh <= 0 || tw <= 0 || th <= 0) return GST_PAD_PROBE_OK;          // unknown: leave the frame alone
-+  if ((gint64)tw * th <= (gint64)sw * sh) return GST_PAD_PROBE_OK;                // not enlarged (same size or smaller): a downscale reads each source pixel at most once
++  if ((gint64)tw * th <= (gint64)sw * sh && (gint64)tw * th < 1800000) return GST_PAD_PROBE_OK;   // not enlarged and not full screen: a downscale reads each source pixel at most once
 +  GstMapInfo mi;
 +  if (!gst_buffer_map(b, &mi, GST_MAP_READ)) return GST_PAD_PROBE_OK;
 +  GstBuffer *c = gst_buffer_new_allocate(NULL, mi.size, NULL);
@@ -76,7 +79,7 @@ index 252f445..7c1ee88 100644
  static void feed_answer_latency(Feed *fd) {
    if (!fd->extra[0]) return;
    GstElement *q = gst_bin_get_by_name(GST_BIN(gst_pipeline), fd->extra[0]);
-@@ -1359,6 +1426,7 @@ static void setup_feeds(const char *absent) {
+@@ -1359,6 +1429,7 @@ static void setup_feeds(const char *absent) {
      gst_iterator_free(it);
      fd->dynamic = TRUE;
      if (g_getenv("SB_FEED_LATENCY") == NULL || g_strcmp0(g_getenv("SB_FEED_LATENCY"), "0") != 0) feed_answer_latency(fd);
