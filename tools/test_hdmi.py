@@ -156,6 +156,13 @@ class Command(unittest.TestCase):
         self.assertIn("location=rtmp://127.0.0.1:1935/publish/cam-hdmi", a)
         self.assertEqual(a.count("mux."), 2)
 
+    def test_the_hdmi_sound_source_is_not_the_clock_of_the_pipeline(self):
+        """Der Takt des Tons läuft gegenüber der Box (0,44 ms/s): Mit provide-clock=true wuchs der Versatz der HDMI-Kamera in einer Stunde von -0,1 auf +1,5 s (12./13. Oktober 2026)."""
+        a = H.feeder_argv(dict(H.DEFAULTS, audio="hdmi"))
+        i = a.index("alsasrc")
+        self.assertIn("provide-clock=false", a[i:i + 4])
+        self.assertIn("slave-method=resample", a[i:i + 4])
+
     def test_silence_instead_of_the_hdmi_sound(self):
         a = H.feeder_argv(dict(H.DEFAULTS, audio="none"))
         self.assertIn("audiotestsrc", a)

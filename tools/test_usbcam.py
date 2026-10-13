@@ -126,7 +126,7 @@ class Commands(unittest.TestCase):
         a = H.usb_feeder_argv(self.CFG, "/dev/video2", ("mjpeg", 1920, 1080, 30), "plughw:CARD=Action6")
         s = " ".join(a)
         self.assertIn("v4l2src device=/dev/video2 ! image/jpeg,width=1920,height=1080,framerate=30/1 ! jpegparse ! mppjpegdec ! queue ! mpph264enc bitrate=6000000 gop=30", s)
-        self.assertIn("alsasrc device=plughw:CARD=Action6 ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! voaacenc", s)
+        self.assertIn("alsasrc device=plughw:CARD=Action6 provide-clock=false slave-method=resample ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! voaacenc", s)    # nicht der Takt der Sendekette (Drift 0,44 ms/s, 12. Oktober 2026)
         self.assertIn("rtmpsink location=rtmp://127.0.0.1:1935/publish/hdmi", s)
         self.assertEqual(a[:2], ["gst-launch-1.0", "-q"])
 
