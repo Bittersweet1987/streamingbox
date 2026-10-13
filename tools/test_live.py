@@ -78,6 +78,32 @@ class Geometry(unittest.TestCase):
         self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 0})), 1050)
         self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 750})), 1050)     # größte erlaubte Verzögerung: gleicher Puffer
 
+    def test_a_copying_engine_gets_the_larger_buffer_and_the_same_lead_limit_for_the_main_picture(self):
+        """belacoder ab -sb13 kopiert das Hauptbild aus dem Dekoderspeicher: Es darf wie die kleinen Bilder bis 1000 ms früh ankommen, der Puffer ist 1350 ms."""
+        with mock.patch.dict(os.environ, {"PIPBOX_ENGINE": "12"}):
+            self.assertEqual(L.engine_level(), 12)
+            self.assertEqual(L.buffer_ms(safe()), 1050)
+        with mock.patch.dict(os.environ, {"PIPBOX_ENGINE": "13"}):
+            self.assertEqual(L.engine_level(), 13)
+            self.assertEqual(L.buffer_ms(safe()), 1350)
+            self.assertEqual(L.buffer_ms(safe({"main_delay_ms": 750, "pip_delay_ms": 750})), 1350)   # Verzögerungen allein brauchen höchstens 1050
+            c = safe()
+            hold = L.hold_delays(L.delays_by_key(c), L.buffer_ms(c), "dji-a", L.LEAD_MAX_MS)
+            self.assertEqual(hold["dji-a"], 450)                                   # Haltezeit des Hauptbilds bleibt, der Spielraum ist 1350 - 483 = 867 ms
+            self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1350, "a", L.LEAD_MAX_MS), {"a": 350, "b": 350})
+            self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1350, "a"), {"a": 750, "b": 350})   # ohne Angabe gilt die alte Grenze 600 ms
+        with mock.patch.dict(os.environ, {"PIPBOX_ENGINE": "x"}):
+            self.assertEqual(L.engine_level(), 0)
+
+    def test_the_controller_remembers_the_engine_it_was_started_with(self):
+        f = Fakes({})
+        for lvl, lead in (("12", L.LEAD_MAX_BIG_MS), ("13", L.LEAD_MAX_MS)):
+            with mock.patch.dict(os.environ, {"PIPBOX_ENGINE": lvl}):
+                c = f.controller(tempfile.mkdtemp())
+            self.assertEqual(c.big_lead, lead, lvl)
+            with mock.patch.dict(os.environ, {"PIPBOX_ENGINE": "13" if lvl == "12" else "12"}):
+                self.assertEqual(c.big_lead, lead)                                  # eine später ausgetauschte Datei ändert es nicht
+
     def test_a_chain_started_before_the_minimum_buffer_is_not_reported_as_outdated(self):
         """Lief die Sendekette mit Puffer 750 (vor 1.0.29) und sind die Verzögerungen unverändert, fehlt nichts: kein "noch nicht übernommen"."""
         self.assertEqual(L.buffer_need_ms(safe()), 750)
