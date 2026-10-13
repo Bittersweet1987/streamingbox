@@ -2000,7 +2000,7 @@ class SendControl:
         out["pending"] = [lab for k, lab in PENDING_LABELS if isinstance(applied, dict) and k in applied and applied[k] != cur[k]]
         running = d.get("buffer_ms") if active else None
         if isinstance(running, int) and not isinstance(running, bool):                       # Verzögerungen geändert: der Puffer der laufenden Sendekette passt nicht mehr (hilft nur ein Neustart)
-            need = pipbox_live.buffer_ms(PipelineStore._safe_cfg(self.pipeline.cfg))
+            need = pipbox_live.buffer_need_ms(PipelineStore._safe_cfg(self.pipeline.cfg))
             if pipbox_live.buffer_mismatch(running, need):
                 out["pending"].append("Verzögerung")
         out["reasons"] = [] if active else self.reasons()

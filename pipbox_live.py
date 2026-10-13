@@ -29,7 +29,8 @@ RUN = "/run/pipbox-send"
 CTL_FIFO = f"{RUN}/belacoder.ctl"
 LIVE_STATS = f"{RUN}/belacoder-live.txt"
 BIN = "/opt/pipbox/bin/belacoder"
-BUFFER_MIN_MS = 600                         # Ausrichtungspuffer (belacoder -A)
+BUFFER_NEED_MIN_MS = 600                    # Untergrenze dessen, was Verzögerungen brauchen (buffer_need_ms)
+BUFFER_MIN_MS = 1050                        # Ausrichtungspuffer (belacoder -A), mindestens: Reserve für Kameras, die ihre Bilder in Schüben senden (Pocket 3: Ankunft schwankt um 0,7 s, bei 600 ms kamen 4 bis 10 % der Sekunden unter 26 Bilder; Testbox, 13. Oktober 2026)
 FEED_COOLDOWN_S = 3.0
 STATS_MAX_AGE_S = 4.0
 Z_BIG = 1
@@ -198,8 +199,14 @@ def delays_by_key(c):
 
 
 def buffer_ms(c):
-    """Ausrichtungspuffer: mindestens 600 ms und 300 ms mehr als die größte Verzögerung (sonst kommen verzögerte Bilder 'zu spät')."""
-    return max(BUFFER_MIN_MS, max(delays_by_key(c).values() or [0]) + 300)
+    """Ausrichtungspuffer: mindestens BUFFER_MIN_MS und 300 ms mehr als die größte Verzögerung (sonst kommen verzögerte Bilder 'zu spät')."""
+    return max(BUFFER_MIN_MS, buffer_need_ms(c))
+
+
+def buffer_need_ms(c):
+    """Was die gespeicherten Verzögerungen mindestens brauchen: 600 ms und 300 ms mehr als die größte Verzögerung. Damit (nicht mit buffer_ms) wird verglichen, ob der Puffer einer
+    laufenden Sendekette noch passt: Eine Kette, die vor dem Mindestpuffer von 1050 ms gestartet wurde, ist mit unveränderten Verzögerungen nicht "veraltet"."""
+    return max(BUFFER_NEED_MIN_MS, max(delays_by_key(c).values() or [0]) + 300)
 
 
 LEAD_MAX_MS = 1000                         # so früh vor seinem Termin darf ein Bild höchstens am Mischer ankommen: früher wartet es roh in Warteschlangen von zusammen etwa 2,5 s (45 Bilder + 1 s) und läuft sie über
@@ -625,7 +632,7 @@ class LiveController:
         zu früh am Mischer an und würden verworfen (12. Oktober 2026: Hauptbild 3 bis 9 statt 30 Bilder/s, Durchsatz halbiert). Eine Kamera, die beim Start nicht dabei war,
         bekommt höchstens, was der laufende Puffer verträgt. Die Oberfläche meldet die Änderung als "noch nicht übernommen" (Verzögerung)."""
         want = delays_by_key(self.cfg)
-        frozen = self.running_buffer is not None and buffer_mismatch(self.running_buffer, buffer_ms(self.cfg))
+        frozen = self.running_buffer is not None and buffer_mismatch(self.running_buffer, buffer_need_ms(self.cfg))
         if frozen != self.delays_frozen:
             self.delays_frozen = frozen
             self.log("send: Verzögerung passt nicht zum laufenden Puffer, bleibt bis zum Neustart bei den Werten vom Start" if frozen
