@@ -2299,12 +2299,33 @@ class UpdateHistory(unittest.TestCase):
         self.assertEqual(server.SwUpdate._oldest("## 0.9.5\n\n## 0.9.11\n## x\n"), (0, 9, 5))
         self.assertIsNone(server.SwUpdate._oldest("kein Abschnitt"))
 
-    def test_nothing_is_loaded_while_sending(self):
+    def test_history_is_loaded_on_request_even_while_sending(self):
+        """Ein Klick auf das "i" lädt den Verlauf auch während der Übertragung (Download, rund 100 KB, einmal; 30 Minuten gehalten)."""
         sw = self.sw(sending=True)
-        with mock.patch.object(sw, "_get", side_effect=AssertionError("kein Zugriff")):
+        calls = []
+
+        def get(name, limit):
+            calls.append(name)
+            return "## 0.9.1\n- a\n" if name == "CHANGELOG.md" else "## 0.9.0\n- z\n"
+        with mock.patch.object(sw, "_get", get):
             r = sw.history()
-        self.assertEqual(r["text"], "")
-        self.assertIn("Übertragung", r["error"])
+            self.assertEqual(r["error"], "")
+            self.assertIn("0.9.1", r["text"])
+            n = len(calls)
+            sw.history()
+            self.assertEqual(len(calls), n)                                       # beim zweiten Mal aus dem Speicher
+
+    def test_history_while_sending_without_network_gives_a_readable_error(self):
+        sw = self.sw(sending=True)
+        with mock.patch.object(sw, "_get", side_effect=OSError("kein Netz")):
+            r = sw.history()
+        self.assertEqual((r["text"], r["error"]), ("", "GitHub ist nicht erreichbar."))
+
+    def test_automatic_checks_stay_blocked_while_sending(self):
+        sw = self.sw(sending=True)
+        with mock.patch.object(sw, "_get", side_effect=AssertionError("kein Zugriff")), \
+                mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("kein Zugriff")):
+            sw.releases()
 
     def test_error_is_readable_and_not_cached(self):
         sw = self.sw()
