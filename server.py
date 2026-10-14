@@ -4012,16 +4012,14 @@ class SwUpdate:
         return res
 
     def history(self):
-        """Der ganze Änderungsverlauf (CHANGELOG.md von GitHub) für die Suche in der Oberfläche: {"text", "error"}. Nur auf Wunsch geladen, 30 Minuten gehalten,
-        nie während einer Übertragung (kein Mobilfunk-Verkehr nebenbei). Der Fehlertext ist fertig lesbar."""
+        """Der ganze Änderungsverlauf (CHANGELOG.md von GitHub) für die Suche in der Oberfläche: {"text", "error"}. Nur auf Wunsch geladen (ein Klick auf das "i"),
+        30 Minuten gehalten, auch während einer Übertragung: Der Abruf ist einmalig (Änderungsliste mit Archiv rund 400 KB Download, kein Upload), die automatischen
+        Prüfungen (check, releases) bleiben während der Übertragung gesperrt. Der Fehlertext ist fertig lesbar."""
         with self.lock:
             if self.hist and time.time() - self.hist_t < self.HISTORY_TTL:
                 return self.hist
         if self.demo:
             res = {"text": "## 0.9.1 (Demo)\n- Beispiel für eine neue Version.\n\n## 0.9.0 (Demo)\n- Erste Version.", "error": ""}
-        elif self.send._active():
-            with self.lock:
-                return self.hist or {"text": "", "error": "Während der Übertragung wird nichts von GitHub geladen. Bitte nach dem Senden noch einmal öffnen."}
         else:
             try:
                 res = {"text": self._changelog(), "error": ""}
