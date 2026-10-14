@@ -2284,7 +2284,7 @@ function hsControls(c,busy){                                // Zeile "Hotspot-Mo
   const pwRow=pw?`<div class="hsrow"><div class="pwshow" title="Klicken kopiert das Passwort">${esc(pw)}</div></div>`:"";
   if(c.camera_net) return on?`<div class="hsrow">${label} <b>An</b> ${show}</div>${pwRow}`:"";
   return `<div class="hsrow">${label}<button type="button" class="hs-toggle hsw${on?" on":" sec"}" role="switch" aria-checked="${on}" title="${on?"Hotspot ausschalten":"Hotspot einschalten"}"${off}>${on?"An":"Aus"}</button>`+
-    (on?show:`<button type="button" class="sec hs-edit"${hsOpen[c.iface]?" disabled":""}${off}>Einstellen</button>`)+`</div>`+(on?pwRow:(hsOpen[c.iface]?hsPanel(c,busy):""));
+    (on?show:`<button type="button" class="sec hs-edit"${hsOpen[c.iface]?" disabled":""}${off}>Einstellen</button>`+(c.hotspot?` <button type="button" class="sec hs-del" title="Entfernt den Hotspot dieser Karte ganz (Einstellungen und Profil), zum Beispiel um ihn auf einer anderen Karte einzurichten"${off}>Löschen</button>`:""))+`</div>`+(on?pwRow:(hsOpen[c.iface]?hsPanel(c,busy):""));
 }
 function renderWifiDev(d,force){
   const ups=((srtlaData&&srtlaData.settings)||{}).uplinks||[], busy=!d.helper_installed||d.state==="working";
@@ -2331,6 +2331,7 @@ $("wifidev").addEventListener("click",e=>{
   if(t.classList.contains("hs-toggle")) hsToggle(iface);
   else if(t.classList.contains("hs-edit")){ hsOpen[iface]=true; hsDraft[iface]=hsDefaults(hsCard(iface)||{}); setHsMsg(""); renderWifiDev(wifiData,true); }
   else if(t.classList.contains("hs-close")){ hsOpen[iface]=false; delete hsDraft[iface]; renderWifiDev(wifiData,true); }
+  else if(t.classList.contains("hs-del")){ if(confirm(`Hotspot auf ${iface} löschen?\n\nName, Passwort und Einstellungen dieser Karte werden entfernt. Kameras, die damit verbunden waren, finden ihn dann nicht mehr.`)){ delete hsPwText[iface]; hsPost({action:"hotspot_delete",iface},"Hotspot wird gelöscht …"); } }
   else if(t.classList.contains("hs-save")) hsSave(iface);
   else if(t.classList.contains("hs-show")) hsShow(iface);
   else if(t.classList.contains("hs-gen")){
