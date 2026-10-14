@@ -28,6 +28,8 @@ patch -p1 --quiet < "$HERE/belacoder-stats.patch"
 patch -p1 --quiet < "$HERE/belacoder-live-feeds.patch"
 # Jedes Bild, das vergrößert wird, einmal in normalen Speicher kopieren (die Bilder des Hardware-Dekoders liegen in langsam lesbarem Speicher), Issue #35
 patch -p1 --quiet < "$HERE/belacoder-frame-copy.patch"
+# Beim Tausch der Größe eines Kamerabilds (Hauptbild wechseln) das "Neu verhandeln" nicht bis zum Hardware-Dekoder zurückgeben: Der Dekoder lieferte sonst etwa 1 s lang keine Bilder (Testbox, 14. Oktober 2026)
+patch -p1 --quiet < "$HERE/belacoder-no-reconfigure.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
 gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12\" belacoder.c -o belacoder.new \
