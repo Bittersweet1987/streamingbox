@@ -182,11 +182,12 @@ class Commands(unittest.TestCase):
         self.cmds(lay, {0: 0, 1: 1})
         swapped = self.cmds(lay, {1: 0, 0: 1})
         self.assertTrue(swapped)
-        self.assertTrue(all(l.startswith(("set sbf", "pad pipcomp", "select asel", "set sbb")) for l in swapped))
+        self.assertTrue(all(l == L.WAIT_MARK or l.startswith(("set sbf", "pad pipcomp", "select asel", "set sbb")) for l in swapped))
         self.assertFalse(any(l.startswith("feed ") for l in swapped))
         # das Bild, das oben landet (jetzt das kleine auf Platz 0, Reihenfolge 2), wird zuletzt bewegt: erst das große (Platz 1), dann das kleine
         self.assertGreater(swapped.index("pad pipcomp sink_0 zorder 2"), swapped.index("pad pipcomp sink_1 zorder 1"))
         self.assertGreater(swapped.index(next(l for l in swapped if l.startswith("pad pipcomp sink_0 width"))), swapped.index("pad pipcomp sink_1 width 1920"))
+        self.assertGreater(swapped.index("pad pipcomp sink_0 zorder 2"), swapped.index(L.WAIT_MARK))             # das schrumpfende Bild erst nach der Pause
 
     def test_scaling_caps_come_before_pad_size(self):
         lay = L.Layout()
@@ -340,8 +341,8 @@ class HoldDelays(unittest.TestCase):
         f = Fakes({})
         c = f.controller(tmp)
         c.cfg = safe({"main_delay_ms": 450, "pip_delay_ms": 3000})          # 3000 wird auf 750 begrenzt: Puffer 1050, Untergrenze 50
-        self.assertEqual(c.effective_delays(), {"dji-a": 450, "cam2": 750, "cam3": 50, "cam4": 50})
-        self.assertEqual(c.effective_delays("dji-a"), {"dji-a": 450, "cam2": 750, "cam3": 50, "cam4": 50})     # Hauptbild: Untergrenze 450, hier schon erfüllt
+        self.assertEqual(c.effective_delays(), {"dji-a": 450, "cam2": 750, "cam3": 450, "cam4": 450})       # alle mindestens 450: der Tausch des Hauptbilds ändert keine Haltezeit
+        self.assertEqual(c.effective_delays("dji-a"), {"dji-a": 450, "cam2": 750, "cam3": 450, "cam4": 450})   # mit oder ohne Angabe des Hauptbilds dasselbe
 
 
 @mock.patch.object(L, "BUFFER_MIN_MS", 600)        # diese Prüfungen betreffen die Rechnung mit dem alten Mindestpuffer (so bleiben die Fälle "passt nicht in den Puffer" erreichbar)
@@ -381,7 +382,7 @@ class FrozenDelays(unittest.TestCase):
 
     def test_matching_changes_are_applied_live(self):
         self.make({"main_delay_ms": 450})                                    # Puffer 750
-        self.assertEqual(self.delays(self.tick()), {"sbf0": 483, "sbf1": 0, "sbf2": 0, "sbf3": 0})
+        self.assertEqual(self.delays(self.tick()), {"sbf0": 483, "sbf1": 183, "sbf2": 183, "sbf3": 183})   # alle mit der Untergrenze des Hauptbilds (750 - 600)
         self.f.cfg.update(main_delay_ms=300, pip_delay_ms=200)               # braucht 600: passt
         self.assertEqual(self.delays(self.tick()), {"sbf0": 333, "sbf1": 233})
         self.assertFalse(self.c.delays_frozen)
@@ -391,7 +392,7 @@ class FrozenDelays(unittest.TestCase):
         """Hauptbild 450, kleines Bild 1 mit 2560, die übrigen 0 (so stand es bei der Testbox): Die Engine begrenzt auf 750, der Puffer bleibt bei 1050 ms."""
         self.make({"main_delay_ms": 450, "pip_delay_ms": 2560})
         d = self.delays(self.tick())
-        self.assertEqual(d, {"sbf0": 483, "sbf1": 783, "sbf2": 83, "sbf3": 83})     # Hauptbild 450 (Standard), kleines Bild 1 mit der Grenze 750, die übrigen mit der Untergrenze (1050 - 1000)
+        self.assertEqual(d, {"sbf0": 483, "sbf1": 783, "sbf2": 483, "sbf3": 483})   # Hauptbild 450 (Standard), kleines Bild 1 mit der Grenze 750, die übrigen mit derselben Untergrenze wie das Hauptbild (1050 - 600)
         self.assertEqual(self.c.running_buffer, 1050)
         for slot, hold in d.items():
             self.assertLessEqual(1050 - (hold - 33), 1000 if slot != "sbf0" else 600)
@@ -487,6 +488,78 @@ class Fakes:
     def take(self):
         out, self.sent = self.sent, []
         return out
+
+
+class SwapOrder(unittest.TestCase):
+    """Beim Tausch von Größen sieht der Mischer nie ein großes Bild in einem kleinen Feld (Testbox, 14. Oktober 2026: Das kostete beim Tausch des Hauptbilds 1 bis 2 s mit 5 Bildern/s)."""
+
+    BIG = "set sbf%d_scc caps video/x-raw,format=NV12,width=1920,height=1080"
+    SMALL = "set sbf%d_scc caps video/x-raw,format=NV12,width=480,height=270"
+
+    def test_no_change_of_size_changes_nothing(self):
+        lines = ["pad pipcomp sink_2 xpos 5", self.SMALL % 2, "pad pipcomp sink_2 width 480"]
+        self.assertEqual(L.order_for_swap(list(lines), {2: self.SMALL % 2}, {}), lines)
+        self.assertEqual(L.order_for_swap(list(lines), {2: self.SMALL % 2 + " "}, {}), lines)
+        self.assertEqual(L.order_for_swap(list(lines), {}, {}), lines)                              # beim ersten Setzen keine alte Größe
+
+    def test_a_growing_branch_gets_its_field_before_its_size(self):
+        lines = [self.BIG % 3, "pad pipcomp sink_3 xpos 0", "pad pipcomp sink_3 width 1920", "pad pipcomp sink_3 zorder 1", "pad pipcomp sink_3 alpha 1.00"]
+        out = L.order_for_swap(lines, {3: self.SMALL % 3}, {})
+        self.assertEqual(out[-1], self.BIG % 3)
+        self.assertEqual(out[:-1], lines[1:])
+        self.assertNotIn(L.WAIT_MARK, out)
+
+    def test_a_shrinking_branch_is_hidden_and_gets_its_field_after_the_pause(self):
+        lines = [self.SMALL % 0, "pad pipcomp sink_0 xpos 720", "pad pipcomp sink_0 ypos 404", "pad pipcomp sink_0 width 480", "pad pipcomp sink_0 height 270",
+                 "pad pipcomp sink_0 zorder 6", "pad pipcomp sink_0 alpha 0.85"]
+        out = L.order_for_swap(lines, {0: self.BIG % 0}, {0: "pad pipcomp sink_0 alpha 0.85"})
+        i = out.index(L.WAIT_MARK)
+        self.assertEqual(out[:i], [self.SMALL % 0, "pad pipcomp sink_0 alpha 0"])                  # erst klein und unsichtbar
+        self.assertEqual(out[i + 1:], lines[1:6] + ["pad pipcomp sink_0 alpha 0.85"])              # danach Feld, Lage und die eingestellte Deckkraft
+
+    def test_the_final_alpha_is_always_restored_even_if_it_did_not_change(self):
+        lines = [self.SMALL % 0, "pad pipcomp sink_0 width 480"]
+        out = L.order_for_swap(lines, {0: self.BIG % 0}, {0: "pad pipcomp sink_0 alpha 1.00"})
+        self.assertEqual(out[-1], "pad pipcomp sink_0 alpha 1.00")
+
+    def test_a_real_swap_through_the_layout(self):
+        lay = L.Layout()
+        args = dict(c=safe(), slot_key=["dji-a", "cam2", "cam3", "cam4"], dims={}, audio_ok={0, 1}, hide=0, audio_pos=-1, mute=False, delay_ms={})
+        lay.commands(roles={0: 0, 1: 1}, **args)
+        out = lay.commands(roles={1: 0, 0: 1}, **args)
+        i = out.index(L.WAIT_MARK)
+        before, after = out[:i], out[i + 1:]
+        self.assertIn("pad pipcomp sink_1 width 1920", before)
+        self.assertLess(before.index("pad pipcomp sink_1 width 1920"), before.index(next(l for l in before if l.startswith("set sbf1_scc caps"))))   # wachsend: Feld vor Größe
+        self.assertIn("pad pipcomp sink_0 alpha 0", before)                                          # schrumpfend: ausgeblendet
+        self.assertTrue(any(l.startswith("pad pipcomp sink_0 width") for l in after))
+        self.assertEqual(after[-1].split()[:4], ["pad", "pipcomp", "sink_0", "alpha"])
+        self.assertEqual(lay.commands(roles={1: 0, 0: 1}, **args), [])                               # danach nichts mehr zu senden
+
+    def test_sent_in_two_parts_with_a_pause(self):
+        f = Fakes()
+        c = f.controller(tempfile.mkdtemp())
+        pauses = []
+        c.sleep = pauses.append
+        self.assertTrue(c.send_lines(["a", L.WAIT_MARK, "b", "c"]))
+        self.assertEqual(f.sent, ["a", "b", "c"])                                                      # ohne die Trennzeile selbst, in der Reihenfolge
+        self.assertEqual(pauses, [L.SWAP_SETTLE_S])
+        pauses.clear()
+        self.assertTrue(c.send_lines(["x", "y"]))
+        self.assertEqual(pauses, [])                                                                  # ohne Trennzeile keine Pause
+
+    def test_a_failed_part_reports_failure(self):
+        f = Fakes()
+        f.ok = False
+        c = f.controller(tempfile.mkdtemp())
+        c.sleep = lambda s: None
+        self.assertFalse(c.send_lines(["a", L.WAIT_MARK, "b"]))
+
+    def test_branch_queue_is_small_and_the_hold_is_the_same_for_every_branch(self):
+        txt = L.build(safe())
+        self.assertIn(f"queue name=sbf0_q max-size-buffers={L.BRANCH_QUEUE_BUFFERS} max-size-bytes=0 max-size-time=0 ! pipcomp.sink_0", txt)
+        self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1050, "a", uniform=True), {"a": 450, "b": 450})
+        self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1050, "a"), {"a": 450, "b": 50})              # ohne uniform wie bisher
 
 
 class ControllerTests(unittest.TestCase):
