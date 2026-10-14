@@ -102,7 +102,7 @@ def cpu_text(top=2):
             if pct >= 5:
                 hot.append((pct, name, core))
     hot.sort(reverse=True)
-    return "cores=%s hot=%s" % ("/".join(cores) or "?", ",".join("%s:%d%%@%d" % (n.replace(" ", "_"), p, c) for p, n, c in hot[:top]) or "-")
+    return "cores=%s hot=%s" % ("/".join(cores) or "?", ",".join("%s:%d%%@%d" % (n.replace(" ", "_"), round(p), c) for p, n, c in hot[:top]) or "-")
 
 
 def running_names():
