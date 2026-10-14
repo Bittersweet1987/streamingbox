@@ -29,7 +29,7 @@ REQ = f"{STATE}/wifi-request"
 RUN = "/run/pipbox-wifi"
 STATUS = f"{RUN}/status.json"
 IFACE_RE = re.compile(r"^[a-z][a-z0-9]{1,14}$")
-ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save", "export_wifi", "import_wifi")
+ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save", "hotspot_delete", "export_wifi", "import_wifi")
 EXPORT_FILE = f"{STATE}/wifi-export.json"
 MARK_RE = re.compile(r"^[0-9a-f]{16}$")
 HS_PREFIX = "pipbox-hotspot-"
@@ -136,9 +136,36 @@ def do_migrate():
             bound.append(f"{name} ({ifn})")
         else:
             skipped += 1
+    hs_bound = migrate_hotspots()
     print(f"pipbox-wifi: {len(bound)} Profile an die Hardware-Adresse der Karte gebunden" + (": " + ", ".join(bound) if bound else "") +
-          (f"; {skipped} unverändert (Karte nicht da oder Kameranetz)" if skipped else ""))
+          (f"; {skipped} unverändert (Karte nicht da oder Kameranetz)" if skipped else "") +
+          (f"; Hotspots: {', '.join(hs_bound)}" if hs_bound else ""))
     return 0
+
+
+def migrate_hotspots():
+    """Hotspot-Profile dieser Box, die an einen Kartennamen gebunden sind, an die Hardware-Adresse binden. Welche Karte gemeint ist, sagt hotspot.json
+    (Netzname gleich, die Schlüssel dort folgen der Karte, wenn die Namen wechseln); gibt es keinen Eintrag, ist es die Karte, die den Namen jetzt trägt.
+    Das Profil wird nach der Karte benannt, damit es beim Beenden und Anzeigen die richtige Karte trifft. Gibt die Liste "Profil -> Karte" zurück."""
+    done = []
+    hs = hs_load()
+    names = [p[0] for p in connection_names()]
+    for name in [n for n in names if n.startswith(HS_PREFIX)]:
+        p = profile_props(name, ["connection.interface-name", "802-11-wireless.mac-address", "802-11-wireless.ssid"])
+        if p.get("802-11-wireless.mac-address"):
+            continue
+        card = next((i for i, h in hs.items() if isinstance(h, dict) and h.get("ssid") and h.get("ssid") == p.get("802-11-wireless.ssid") and hwaddr(i)), "")
+        card = card or p.get("connection.interface-name", "")
+        if not card or not hwaddr(card):
+            continue
+        if bind_to_card(name, card):
+            new = hs_name(card)
+            if new != name and new not in names:
+                nm("con", "modify", "id", name, "connection.id", new)
+                names.append(new)
+                name = new
+            done.append(f"{name} -> {card}")
+    return done
 
 
 def saved_wifi():
@@ -151,8 +178,23 @@ def hs_name(iface):
 
 
 def hotspot_active(iface):
-    """Läuft auf dieser Karte gerade der Hotspot dieser Box?"""
-    return any(d["iface"] == iface and d["connection"] == hs_name(iface) and d["state"] == "connected" for d in wifi_devices())
+    """Läuft auf dieser Karte gerade ein Hotspot dieser Box? Der Name des Profils trägt den Kartennamen von damals (wlan1 ...), und der wechselt;
+    darum zählt jedes Profil "pipbox-hotspot-…", das auf dieser Karte verbunden ist."""
+    return any(d["iface"] == iface and str(d["connection"]).startswith(HS_PREFIX) and d["state"] == "connected" for d in wifi_devices())
+
+
+def hs_profile(iface):
+    """Name des Hotspot-Profils dieser Karte: das, was auf ihr läuft, sonst das nach ihrem Namen benannte. None, wenn keines da ist."""
+    for d in wifi_devices():
+        if d["iface"] == iface and str(d["connection"]).startswith(HS_PREFIX) and d["state"] == "connected":
+            return d["connection"]
+    names = [p[0] for p in connection_names()]
+    mine = hwaddr(iface)
+    if mine:
+        for n in names:
+            if n.startswith(HS_PREFIX) and profile_props(n, ["802-11-wireless.mac-address"]).get("802-11-wireless.mac-address", "").lower() == mine:
+                return n
+    return hs_name(iface) if hs_name(iface) in names else None
 
 
 def wifi_caps(iface):
@@ -519,8 +561,13 @@ def do_hotspot_start(req):
     ssid, pw, band, ch = hs_values(req, saved)
     hs_check_caps(iface, band)
     name = hs_name(iface)
+    mine = hwaddr(iface)
     if name in [p[0] for p in connection_names()]:
-        nm("con", "delete", "id", name)                          # Profil neu anlegen, damit nichts Altes (Kanal, Passwort) zurückbleibt
+        other = profile_props(name, ["802-11-wireless.mac-address"]).get("802-11-wireless.mac-address", "").lower()
+        if other and mine and other != mine:                     # gleicher Name, aber das Profil gehört einer anderen Karte (die Namen wurden getauscht): nicht löschen
+            name = f"{name}-{mine.replace(':', '')}"
+        if name in [p[0] for p in connection_names()]:
+            nm("con", "delete", "id", name)                      # Profil neu anlegen, damit nichts Altes (Kanal, Passwort) zurückbleibt
     args = ["con", "add", "type", "wifi", "ifname", iface, "con-name", name, "autoconnect", "yes", "ssid", ssid,
             "802-11-wireless.mode", "ap", "802-11-wireless.band", band]
     if ch:
@@ -529,6 +576,8 @@ def do_hotspot_start(req):
     args += ["ipv4.method", "shared", "ipv6.method", "ignore", "connection.autoconnect-priority", "100",
              "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.proto", "rsn", "wifi-sec.pairwise", "ccmp", "wifi-sec.group", "ccmp", "wifi-sec.psk", pw]
     r = nm(*args, timeout=30)
+    if r.returncode == 0:
+        bind_to_card(name, iface)                                # an die Hardware-Adresse binden: Die Namen wlan0, wlan1 … wechseln, der Hotspot bleibt auf seinem Stick
     if r.returncode != 0:
         raise RuntimeError("Hotspot konnte nicht angelegt werden: " + ((r.stderr or r.stdout).strip().replace(pw, "***")[:160] or "unbekannter Fehler"))
     r = nm("con", "up", "id", name, "ifname", iface, timeout=60)
@@ -549,12 +598,31 @@ def do_hotspot_start(req):
 def do_hotspot_stop(req):
     iface = req.get("iface")
     check_iface(iface)
-    name = hs_name(iface)
-    if name not in [p[0] for p in connection_names()]:
+    name = hs_profile(iface)
+    if not name:
         raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
     nm("con", "modify", "id", name, "connection.autoconnect", "no")      # beendet bleibt beendet, auch nach einem Neustart der Box
     nm("con", "down", "id", name)                                          # ist er gar nicht aktiv, meldet nmcli einen Fehler: egal
     return "Hotspot beendet. Die Karte verbindet sich wieder mit einem gespeicherten Netz, wenn eines in Reichweite ist."
+
+
+def do_hotspot_delete(req):
+    """Den Hotspot einer Karte ganz entfernen: Profil in NetworkManager und gespeicherte Einstellungen (Name, Passwort, Band, Kanal). Nur bei beendetem Hotspot.
+    Danach kann ein Hotspot auf einer anderen Karte eingerichtet werden; auf dieser Karte beginnt man wieder bei "Einstellen"."""
+    iface = req.get("iface")
+    check_iface(iface)
+    if hotspot_active(iface):
+        raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann löschen")
+    name = hs_profile(iface)
+    data = hs_load()
+    if not name and iface not in data:
+        raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+    if name:
+        nm("con", "delete", "id", name)
+    if iface in data:
+        del data[iface]
+        hs_store(data)
+    return f"Hotspot auf {iface} gelöscht"
 
 
 # ------------------------------------------------------------------ Gespeicherte Netze sichern und einspielen (Issue #20)
@@ -743,6 +811,8 @@ def main():
             msg = do_hotspot_stop(req)
         elif action == "hotspot_save":
             msg = do_hotspot_save(req)
+        elif action == "hotspot_delete":
+            msg = do_hotspot_delete(req)
         elif action == "export_wifi":
             msg = do_export_wifi(req)
         elif action == "import_wifi":
