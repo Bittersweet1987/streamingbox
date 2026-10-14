@@ -3027,7 +3027,7 @@ class Wifi:
     zum Weitergeben an Kameras und Handys gedacht und liegt in hotspot.json (Benutzer pipbox, 0600)."""
     STATUS = "/run/pipbox-wifi/status.json"
     DRIVER_STATUS = "/run/pipbox-wlandriver/status.json"        # schreibt der Root-Helfer pipbox-wlandriver.py (Treiber für WLAN-Sticks mit AIC8800D80)
-    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save")
+    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save", "hotspot_delete")
     HS_PREFIX = "pipbox-hotspot-"
     HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}
 
@@ -3098,8 +3098,9 @@ class Wifi:
                     con = con.replace("\\:", ":")
                     for c in out:
                         if c["iface"] == dev and c["ip"]:
-                            if con == self.HS_PREFIX + dev:        # der Hotspot dieser Box: kein Netz, mit dem die Karte verbunden ist
+                            if con.startswith(self.HS_PREFIX):     # der Hotspot dieser Box (sein Name trägt den Kartennamen von damals): kein Netz, mit dem die Karte verbunden ist
                                 c["hotspot_running"] = True
+                                c["hotspot_con"] = con
                             else:
                                 c["ssid"] = con
                 for c in out:
@@ -3113,6 +3114,16 @@ class Wifi:
                 pass
         for c in out:
             h = hs.get(c["iface"])
+            con = c.pop("hotspot_con", "")
+            if not h and con:                          # läuft ein Hotspot ohne gespeicherte Einstellungen (Profil von früher): Name und Band aus dem Profil, damit die Karte "an" zeigt
+                try:
+                    r = subprocess.run(["nmcli", "-t", "-g", "802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel", "connection", "show", con],
+                                       capture_output=True, text=True, timeout=4)
+                    v = (r.stdout.splitlines() + ["", "", ""])[:3]
+                    ch = int(v[2]) if v[2].isdigit() else 0
+                    h = {"ssid": v[0], "band": v[1] if v[1] in ("a", "bg") else "bg", "channel": ch}
+                except (OSError, subprocess.TimeoutExpired):
+                    h = {"ssid": "", "band": "bg", "channel": 0}
             c["hotspot"] = ({"ssid": str(h.get("ssid", "")), "band": h.get("band", "bg"), "channel": h.get("channel", 0),
                              "running": bool(c.pop("hotspot_running", False))} if h else None)
             c.pop("hotspot_running", None)
@@ -3194,6 +3205,12 @@ class Wifi:
         if action == "hotspot_stop":
             if not (card.get("hotspot") or {}):
                 raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+            return req
+        if action == "hotspot_delete":
+            if not (card.get("hotspot") or {}):
+                raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+            if running:
+                raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann löschen")
             return req
         if action == "hotspot_save" and running:
             raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann einstellen")
@@ -3281,6 +3298,9 @@ class Wifi:
             elif action == "hotspot_stop" and iface in self.fake_hs:
                 self.fake_hs[iface]["running"] = False
                 self.fake_msg = (action, "Hotspot beendet (Vorschau)")
+            elif action == "hotspot_delete":
+                self.fake_hs.pop(iface, None)
+                self.fake_msg = (action, "Hotspot gelöscht (Vorschau)")
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:

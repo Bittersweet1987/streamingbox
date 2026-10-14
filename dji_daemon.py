@@ -326,7 +326,7 @@ def nm_wifi_options():
         mode = run(["nmcli", "-g", "802-11-wireless.mode", "connection", "show", conn])
         psk = run(["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn])
         secured = bool(run(["nmcli", "-g", "802-11-wireless-security.key-mgmt", "connection", "show", conn]))
-        if mode == "ap" and secured and not psk and conn == "pipbox-hotspot-" + ifname:
+        if mode == "ap" and secured and not psk and conn.startswith("pipbox-hotspot-"):
             psk = hotspot_password(ifname, ssid)
         ip = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", ifname]).split("/")[0].split("\n")[0]
         if not ssid or not ip:
