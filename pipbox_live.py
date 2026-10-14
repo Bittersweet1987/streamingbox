@@ -434,6 +434,35 @@ class Layout:
         return lines
 
 
+    def pre_commands(self, c, pre_roles, dims):
+        """Größe und Beschnitt (scc caps, crop) für Zweige, deren Bild noch nicht da ist, nach ihrer gewünschten Stelle (pre_roles: {Platz: Stelle}), damit der Zweig beim ersten Bild schon
+        die richtige Größe hat. Ein Umsetzen der Größe im laufenden Betrieb stellte beim Anlauf die ganze Kette 4 bis 9 s lang still (Testbox, 14. Oktober 2026). Gleiche Schlüssel wie commands():
+        was schon gesendet ist, wird dort nicht noch einmal gesendet."""
+        geoms = {k: small_geometry(c, k) for k in (1, 2, 3)}
+        want = []
+        for s, pos in pre_roles.items():
+            nm = f"sbf{s}"
+            if pos == 0:
+                x, y, w, h = fit_big(dims.get(s))
+                crop, sw, sh = (0, 0, 0, 0), w, h
+            else:
+                g = geoms[pos]
+                sw0, sh0 = dims.get(s) or (1920, 1080)
+                sw0, sh0 = sw0 or 1920, sh0 or 1080
+                crop = tuple(int(v * k // 1920) & ~1 for v, k in zip(g["crop"], (sw0, sw0, sw0, sw0)))
+                crop = (crop[0], crop[1], int(g["crop"][2] * sh0 // 1080) & ~1, int(g["crop"][3] * sh0 // 1080) & ~1)
+                sw, sh = g["w"], g["h"]
+            for name, v in zip(("left", "right", "top", "bottom"), crop):
+                want.append((("crop", s, name), f"set {nm}_crop {name} {v}"))
+            want.append((("caps", s), f"set {nm}_scc caps {scale_caps(sw, sh)}"))
+        lines = []
+        for key, line in want:
+            if self.sent.get(key) != line:
+                lines.append(line)
+                self.sent[key] = line
+        return lines
+
+
 # ------------------------------------------------------------------------------------------------ Hilfen für den Regler
 
 def read_stats(path=LIVE_STATS, now=None):
@@ -766,6 +795,15 @@ class LiveController:
         self.states = self.stats()
         slot_key = self.binder.slot_key
         self.check_lag(now, slot_key)
+        pre = {}                                      # gewünschte Stelle der Zweige, deren Bild noch nicht da ist: ihre Größe wird gesetzt, bevor der Zweig läuft
+        for pos in range(4):
+            k = self.desired[pos]
+            s0 = slot_key.index(k) if k and k in slot_key else None
+            if s0 is not None and self.states.get(s0) in (1, 2) and k in self.pub and k not in self.held:
+                pre[s0] = pos
+        if pre and self.cfg and self.pub_known:
+            dims0 = {s: (self.pub.get(slot_key[s], {}).get("w", 0), self.pub.get(slot_key[s], {}).get("h", 0)) for s in pre}
+            lines += self.layout.pre_commands(self.cfg, pre, dims0)
         for s in range(SLOTS):
             key, st = slot_key[s], self.states.get(s)
             if st is None or not self.pub_known:
@@ -802,7 +840,11 @@ class LiveController:
         if apos >= 0 and self.desired[apos + 1] in self.inactive:
             apos = -1                                 # deaktivierte Kamera: nie die Tonquelle, es gilt der Ton des Hauptbildes
         if self.cfg:
-            lines += self.layout.commands(self.cfg, slot_key, roles, dims, audio_ok, hide, apos, mute, self.effective_delays(main))
+            cl = self.layout.commands(self.cfg, slot_key, roles, dims, audio_ok, hide, apos, mute, self.effective_delays(main))
+            sel = [x for x in cl if x.startswith("select asel ")]
+            lines = sel + lines + [x for x in cl if not x.startswith("select asel ")]       # der Ton wechselt vor dem Stopp des Zweigs, der ihn eben noch lieferte
+        eff_changed = apos != getattr(self, "_eff_apos", None)
+        self._eff_apos = apos
         if lines and os.environ.get("PIPBOX_LIVE_DEBUG"):
             self.log("live: " + " | ".join(lines)[:1500])
         ok = self.control(lines)
@@ -811,7 +853,7 @@ class LiveController:
             self.reassign_lines = reassign + self.reassign_lines
             self._view_pending = self._view_pending or view_changed
         else:
-            self._confirm_view(view_changed or self._view_pending)
+            self._confirm_view(view_changed or self._view_pending or eff_changed)
             self._view_pending = False
         # Anzeige (Fußleiste am Handy): auch deaktivierte Kameras, die senden, behalten ihren Knopf; im Stream sind sie nicht (self.alive)
         # (jede Kamera, die an die Box sendet, behält ihren Knopf, auch während ihr Zweig gerade startet oder deaktiviert ist)
@@ -822,6 +864,7 @@ class LiveController:
         """Rückmeldung wie früher pbctl: /run/pipbox-send/view-state = was gerade gilt. Die Oberfläche wartet auf eine neue Änderungszeit der Datei
         (auch bei gleichem Inhalt), darum wird bei jeder Änderung von main-view neu geschrieben."""
         hide, apos, mute = self.view
+        apos = getattr(self, "_eff_apos", apos)             # was wirklich gilt: eine deaktivierte Kamera ist nie die Tonquelle
         text = f"{hide} {apos} {mute}\n"
         if not force and getattr(self, "_conf_text", None) == text:
             return

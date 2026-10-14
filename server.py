@@ -2218,8 +2218,8 @@ class SendControl:
         else:
             (hide, apos), mute = PipelineStore.view_values(c), False
         src = {v: k for k, v in PipelineStore.AUDIO_POS.items()}.get(apos, "main")
-        if not place.get(src):
-            src = "main"
+        if not place.get(src) or (src != "main" and place[src] in (c.get("inactive") or [])):
+            src = "main"                                  # eine deaktivierte Kamera ist nie die Tonquelle
         slot_of = {}
         for i, k in enumerate(order):
             if place[k]:
@@ -9500,7 +9500,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Nichts zu ändern")
                 return self.reply(200, dict(self.send.change_view(d.get("visible"), d.get("audio"), d.get("mute")), ok=True))
             if path == "/api/pipeline/active":
-                self.pipeline.set_active(d.get("key"), d.get("active"))
+                key, act = d.get("key"), d.get("active")
+                c = self.pipeline.cfg
+                if act is False and c.get("type") == "pip" and key and c.get("audio") in ("pip", "pip2", "pip3") and c.get(c["audio"]) == key and key != c.get("main"):
+                    self.send.change_view(audio="main")        # lag der Ton auf der Kamera, geht er zuerst zum Hauptbild; erst danach wird ihr Zweig gestoppt (sonst bleibt der Ton tot)
+                self.pipeline.set_active(key, act)
                 return self.reply(200, {"ok": True})
             if path == "/api/pipeline/swap":
                 return self.reply(200, scene_swap(self.pipeline, self.cams, self.send, d.get("with")))
