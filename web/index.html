@@ -1019,7 +1019,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
     </div>
     <div class="actions">
       <button id="sw_check" type="button" class="sec">Nach Updates suchen</button>
-      <button id="sw_install" type="button" class="warnbtn" disabled>Update installieren</button>
+      <button id="sw_install" type="button" class="sec" disabled>Update installieren</button>
       <button id="sw_rollback" type="button" class="sec" hidden>Zurück zur vorherigen Version</button>
     </div>
     <div id="swprog" class="prog" hidden><div class="bar"><i></i></div><div class="progline"><span><b class="progpct"></b> <span class="progtxt"></span></span><span class="progel muted"></span></div></div>
@@ -1527,6 +1527,7 @@ function renderUpdate(u){
   $("updmsg").style.color=(u.state==="failed"||u.state==="refused")?"var(--crit)":"";
   $("u_check").disabled=$("u_dry").disabled=busy||!u.helper_installed;
   $("u_run").disabled=busy||u.streaming||!u.helper_installed;
+  $("u_run").className=u.available>0?"warnbtn":"sec";                     // gelb nur, wenn wirklich Updates bereitliegen
   $("u_reboot").disabled=busy||u.streaming||!u.helper_installed;
   $("u_reboot").className=u.reboot_pending?"warnbtn":"sec";
   if(u.log!==undefined && $("upddet").open) $("updlog").textContent=u.log||"(leer)";
@@ -3116,6 +3117,7 @@ async function swLoad(force,fresh){
   $("sw_badge").className="badge "+(d.newer||busy?"attn":"ok");
   const n=$("sw_notes"); n.hidden=!(d.newer&&d.notes); if(d.newer&&d.notes) setHtml(n,fmtNotes(d.notes)); else if(n.dataset.h){ n.dataset.h=""; n.innerHTML=""; }
   $("sw_install").disabled=busy||!d.newer||d.sending||!d.helper_installed;
+  $("sw_install").className=d.newer?"warnbtn":"sec";                      // gelb nur, wenn eine neuere Version bereitliegt
   $("sw_check").disabled=busy;
   $("sw_rollback").hidden=!d.backup_version||busy;
   if(d.backup_version) $("sw_rollback").textContent=`Zurück zu Version ${d.backup_version}`;
