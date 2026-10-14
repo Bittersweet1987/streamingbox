@@ -688,8 +688,8 @@ class LogModeSwitch(unittest.TestCase):
         calls = []
         with mock.patch.multiple(m, CONF_DIR=d + "/etc", MODE_FILE=d + "/etc/logmode", JOURNAL_DIR=d + "/j",
                                  JOURNAL_CONF=d + "/j/pipbox-journal.conf", OLD_JOURNAL_CONF=d + "/j/pipbox-persistent.conf",
-                                 RUN=d + "/run", JOURNAL_LOG_DIR=d + "/varlog"), \
-                mock.patch.object(m.subprocess, "run", side_effect=lambda *a, **k: calls.append(a[0])):
+                                 RUN=d + "/run", JOURNAL_LOG_DIR=d + "/varlog", NGINX_DROPIN=d + "/ngx/pipbox-log.conf"), \
+                mock.patch.object(m.subprocess, "run", side_effect=lambda *a, **k: calls.append(a[0]) or mock.Mock(returncode=0)):
             os.makedirs(d + "/j")
             open(d + "/j/pipbox-persistent.conf", "w").write("alt")
             m.apply("sparsam")
@@ -706,6 +706,183 @@ class LogModeSwitch(unittest.TestCase):
             self.assertIn(["journalctl", "--flush"], calls)
             with self.assertRaises(ValueError):
                 m.apply("alles")
+
+    # ---- Zugriffsprotokoll von nginx und Begrenzung großer Protokolle (1.0.36)
+    def nginx_env(self, m, d, running=False, test_ok=True):
+        calls = []
+
+        def run(cmd, **k):
+            calls.append(cmd)
+            return mock.Mock(returncode=0 if (cmd[:2] != ["nginx", "-t"] or test_ok) else 1)
+        os.makedirs(d + "/ngx", exist_ok=True)
+        patches = [mock.patch.object(m, "NGINX_DROPIN", d + "/ngx/pipbox-log.conf"), mock.patch.object(m.subprocess, "run", side_effect=run),
+                   mock.patch.object(m, "sending", lambda: running)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return calls
+
+    def test_sparsam_switches_the_nginx_access_log_off_and_reloads(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d)
+        self.assertEqual(m.apply_nginx("sparsam"), "nginx neu geladen")
+        self.assertEqual(open(d + "/ngx/pipbox-log.conf").read(), m.NGINX_TEXT)
+        self.assertIn("access_log off;", m.NGINX_TEXT)
+        self.assertIn(["nginx", "-t"], calls)
+        self.assertIn(["nginx", "-s", "reload"], calls)
+        calls.clear()
+        self.assertEqual(m.apply_nginx("sparsam"), "unverändert")                            # nichts zu tun: kein Neuladen
+        self.assertEqual(calls, [])
+
+    def test_ausfuehrlich_removes_the_file_and_reloads(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d)
+        m.apply_nginx("sparsam")
+        calls.clear()
+        self.assertEqual(m.apply_nginx("ausfuehrlich"), "nginx neu geladen")
+        self.assertFalse(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertIn(["nginx", "-s", "reload"], calls)
+        self.assertEqual(m.apply_nginx("ausfuehrlich"), "unverändert")
+
+    def test_nginx_is_not_reloaded_while_sending(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d, running=True)
+        self.assertIn("nächsten Start", m.apply_nginx("sparsam"))                            # ein Neuladen trennte die Kameras
+        self.assertTrue(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertNotIn(["nginx", "-s", "reload"], calls)
+        self.assertIn(["nginx", "-t"], calls)                                                  # geprüft wird trotzdem
+
+    def test_a_rejected_nginx_config_is_rolled_back(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d, test_ok=False)
+        self.assertIn("zurückgesetzt", m.apply_nginx("sparsam"))
+        self.assertFalse(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertNotIn(["nginx", "-s", "reload"], calls)
+        open(d + "/ngx/pipbox-log.conf", "w").write(m.NGINX_TEXT)
+        self.assertIn("zurückgesetzt", m.apply_nginx("ausfuehrlich"))
+        self.assertEqual(open(d + "/ngx/pipbox-log.conf").read(), m.NGINX_TEXT)              # der alte Stand ist wieder da
+
+    def test_nginx_step_never_breaks_the_mode_switch(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        with mock.patch.multiple(m, CONF_DIR=d + "/etc", MODE_FILE=d + "/etc/logmode", JOURNAL_DIR=d + "/j", JOURNAL_CONF=d + "/j/x.conf",
+                                 OLD_JOURNAL_CONF=d + "/j/y.conf", RUN=d + "/run", JOURNAL_LOG_DIR=d + "/v"), \
+                mock.patch.object(m, "apply_nginx", side_effect=RuntimeError("kaputt")), \
+                mock.patch.object(m.subprocess, "run", return_value=mock.Mock(returncode=0)):
+            os.makedirs(d + "/j")
+            m.apply("sparsam")
+            self.assertIn("Fehler", json.load(open(d + "/run/status.json"))["nginx"])
+            self.assertEqual(open(d + "/etc/logmode").read(), "sparsam\n")
+
+    def test_apply_nginx_option_uses_the_saved_mode(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        open(d + "/logmode", "w").write("sparsam\n")
+        with mock.patch.object(m, "MODE_FILE", d + "/logmode"), mock.patch.object(m, "apply_nginx", return_value="x") as an:
+            self.assertEqual(m.main(["x", "--apply-nginx"]), 0)
+            an.assert_called_once_with("sparsam")
+        with mock.patch.object(m, "MODE_FILE", d + "/fehlt"), mock.patch.object(m, "apply_nginx") as an:
+            self.assertEqual(m.main(["x", "--apply-nginx"]), 0)
+            an.assert_not_called()
+
+    def test_big_logs_are_compressed_and_cut_in_place(self):
+        import gzip
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/access.log"
+        data = b"127.0.0.1 GET / 200\n" * 1000
+        open(f, "wb").write(data)
+        self.assertFalse(m.rotate_file(f, len(data)))                                          # nicht über der Grenze: nichts passiert
+        self.assertEqual(open(f, "rb").read(), data)
+        self.assertTrue(m.rotate_file(f, len(data) - 1))
+        self.assertEqual(os.path.getsize(f), 0)                                                # an Ort und Stelle gekürzt
+        self.assertEqual(gzip.open(f + ".1.gz").read(), data)                                  # Inhalt komplett gesichert
+        self.assertEqual(os.stat(f + ".1.gz").st_mode & 0o777, 0o640)
+
+    def test_writer_with_the_file_open_keeps_writing_after_rotation(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/access.log"
+        w = open(f, "ab", buffering=0)                                                         # wie nginx: Datei offen, Anhängen
+        w.write(b"a" * 2000)
+        self.assertTrue(m.rotate_file(f, 1000))
+        w.write(b"neu\n")
+        w.close()
+        self.assertEqual(open(f, "rb").read(), b"neu\n")                                      # keine Lücke aus Nullen, sondern der Anfang der neuen Datei
+
+    def test_only_three_old_copies_are_kept_and_the_newest_is_first(self):
+        import gzip
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/x.log"
+        for i in range(1, 6):
+            open(f, "wb").write(("Stand %d\n" % i).encode() * 100)
+            self.assertTrue(m.rotate_file(f, 10))
+        self.assertEqual(sorted(os.listdir(d)), ["x.log", "x.log.1.gz", "x.log.2.gz", "x.log.3.gz"])
+        self.assertIn(b"Stand 5", gzip.open(f + ".1.gz").read())
+        self.assertIn(b"Stand 3", gzip.open(f + ".3.gz").read())
+
+    def test_old_copies_are_removed_after_thirty_days(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/x.log"
+        for n, age in ((1, 5), (2, 40)):
+            open("%s.%d.gz" % (f, n), "wb").write(b"x")
+            t = time.time() - age * 86400
+            os.utime("%s.%d.gz" % (f, n), (t, t))
+        m.rotate_cleanup(f)
+        self.assertEqual(sorted(os.listdir(d)), ["x.log.1.gz"])
+
+    def test_rotate_all_takes_the_known_files_and_survives_missing_ones(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        big = d + "/nginx-access.log"
+        open(big, "wb").write(b"z" * 5000)
+        open(d + "/pipbox-eins.log", "wb").write(b"y" * 5000)
+        open(d + "/pipbox-klein.log", "wb").write(b"y" * 10)
+        with mock.patch.multiple(m, ROTATE_LOCK=d + "/lock", ROTATE_LIMITS=((big, 1000), (d + "/gibtsnicht.log", 1000)),
+                                 ROTATE_GLOBS=((d + "/pipbox-*.log", 1000),)), mock.patch.object(m.os, "nice", lambda n: 0):
+            done = m.rotate_all()
+        self.assertEqual(sorted(os.path.basename(x) for x in done), ["nginx-access.log", "pipbox-eins.log"])
+        self.assertEqual(os.path.getsize(d + "/pipbox-klein.log"), 10)
+
+    def test_rotate_option_runs_and_a_second_run_at_the_same_time_does_nothing(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        import fcntl
+        lock = os.open(d + "/lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with mock.patch.multiple(m, ROTATE_LOCK=d + "/lock", ROTATE_LIMITS=(), ROTATE_GLOBS=()):
+            self.assertEqual(m.rotate_all(), [])                                               # läuft schon: nichts doppelt
+        os.close(lock)
+
+    def test_units_install_the_daily_timer_and_the_script(self):
+        root = os.path.dirname(HERE)
+        svc = open(root + "/install/pipbox-logrotate.service").read()
+        tim = open(root + "/install/pipbox-logrotate.timer").read()
+        self.assertIn("pipbox-logmode.py --rotate", svc)
+        self.assertIn("Nice=19", svc)
+        self.assertIn("OnUnitActiveSec=1d", tim)
+        self.assertIn("OnBootSec=", tim)                                                      # die Box hat keine Echtzeituhr: nur monotone Zeiten
+        self.assertNotIn("OnCalendar", tim)
+
+    def test_install_script_installs_enables_and_removes_the_log_parts(self):
+        sh = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        for line in ('install/pipbox-logrotate.service" /etc/systemd/system/pipbox-logrotate.service', 'install/pipbox-logrotate.timer" /etc/systemd/system/pipbox-logrotate.timer',
+                     "pipbox-logmode.py --apply-nginx", "/etc/nginx/conf.d/pipbox-log.conf"):
+            self.assertIn(line, sh)
+        self.assertGreaterEqual(sh.count("pipbox-logrotate.timer"), 4)           # installieren, aktivieren, abschalten, Datei entfernen
+        self.assertIn("pipbox-arp.service pipbox-logrotate.timer", sh)                           # wird aktiviert
+        self.assertIn("pipbox-dji.service pipbox-logrotate.timer || true", sh)                  # wird beim Entfernen abgeschaltet
+
+    def test_script_has_no_network_and_no_shell(self):
+        src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
+        self.assertNotIn("shell=True", src)
+        self.assertNotIn("urllib", src)
 
     def test_helper_ignores_unknown_keyword(self):
         m = self.helper("pipbox-logmode")
