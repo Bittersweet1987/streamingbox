@@ -521,6 +521,95 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(st["alive"], ["dji-a"])
         self.assertIn("pad pipcomp sink_0 alpha 1.00", self.f.take())
 
+    # ---- Größe vor dem Start des Zweigs (Testbox, 14. Oktober 2026): Setzte der Regler die Größe erst, wenn schon Bilder flossen (scc caps im laufenden Betrieb), stand die ganze Kette beim Anlauf
+    # 3 bis 9 s still (Encoder 4 bis 5 Bilder je Sekunde, dann Nachholen mit 70 bis 250), die Bitrate stürzte bis auf 300 kbit/s. Mit der Größe vor dem Start: Bildfluss nach 2 s, Bitrate nie unter 9 Mbit/s.
+
+    def three_cameras(self):
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}, "cam3": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+
+    def slot_of(self, key):
+        return list(self.c.binder.slot_key).index(key)
+
+    def test_the_size_is_set_before_the_branch_is_started(self):
+        self.three_cameras()
+        self.tick()
+        lines = self.f.take()
+        first_on = min(i for i, l in enumerate(lines) if l.startswith("feed sbf"))
+        for key, pos in (("dji-a", 0), ("cam2", 1), ("cam3", 2)):
+            s = self.slot_of(key)
+            caps = [i for i, l in enumerate(lines) if l.startswith(f"set sbf{s}_scc caps")]
+            self.assertTrue(caps, key)
+            self.assertLess(max(caps), first_on, key)                         # vor dem ersten "feed ... on"
+            if pos == 0:
+                self.assertIn("width=1920,height=1080", lines[caps[-1]])
+            else:
+                g = L.small_geometry(safe(), pos)
+                self.assertIn(f"width={g['w']},height={g['h']}", lines[caps[-1]])
+            self.assertTrue(any(l.startswith(f"set sbf{s}_crop left") for l in lines[:first_on]), key)
+
+    def test_the_same_size_is_not_sent_again_when_the_picture_arrives(self):
+        self.three_cameras()
+        self.tick()
+        self.f.take()
+        self.f.states = {0: 3, 1: 3, 2: 3, 3: 1}
+        self.tick()
+        lines = self.f.take()
+        self.assertFalse([l for l in lines if "_scc caps" in l or "_crop " in l], lines)      # nichts doppelt: die Größe stimmte schon
+        self.assertIn(f"pad pipcomp sink_{self.slot_of('dji-a')} alpha 1.00", lines)          # sichtbar wird es trotzdem erst jetzt
+
+    def test_only_stopped_or_waiting_branches_get_the_early_size(self):
+        self.three_cameras()
+        self.f.states = {0: 3, 1: 1, 2: 2, 3: 1}
+        self.tick()
+        lines = self.f.take()
+        slots_with_early = {int(l.split("_")[0][len("set sbf"):]) for l in lines if "_scc caps" in l}
+        self.assertEqual(slots_with_early, {0, 1, 2})                          # Platz 0 läuft schon (Zustand 3): sein Bild bekommt die Größe wie bisher mit der Rolle
+        self.f.take()
+
+    def test_a_camera_that_does_not_send_gets_no_early_size(self):
+        self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+        self.tick()
+        lines = self.f.take()
+        self.assertEqual({l.split("_")[0] for l in lines if "_scc caps" in l}, {f"set sbf{self.slot_of('dji-a')}"})
+
+    def test_a_held_camera_gets_no_early_size(self):
+        self.three_cameras()
+        self.f.hold = {"keys": {"cam2": self.f.wall + 30}}
+        self.tick()
+        lines = self.f.take()
+        self.assertFalse([l for l in lines if l.startswith(f"set sbf{self.slot_of('cam2')}_scc")], lines)
+
+    def test_a_stand_in_for_the_missing_main_gets_the_big_size_when_its_picture_arrives(self):
+        """Das eingestellte Hauptbild sendet nicht: eine kleine Kamera springt ein und wird groß (wie bisher, dabei ändert sich die Größe im laufenden Betrieb)."""
+        self.f.pub = {"cam2": {"w": 1920, "h": 1080, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+        self.tick()
+        lines = self.f.take()
+        s = self.slot_of("cam2")
+        g = L.small_geometry(safe(), 1)
+        self.assertIn(f"set sbf{s}_scc caps video/x-raw,format=NV12,width={g['w']},height={g['h']}", lines)      # vorab: kleine Größe nach der eingestellten Stelle
+        self.f.states[s] = 3
+        self.tick()
+        self.assertIn(f"set sbf{s}_scc caps video/x-raw,format=NV12,width=1920,height=1080", self.f.take())      # dann als Hauptbild groß
+
+    def test_the_big_picture_keeps_the_aspect_ratio_of_its_source_in_the_early_size(self):
+        self.f.pub = {"dji-a": {"w": 1080, "h": 1920, "audio": True}}
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
+        self.tick()
+        caps = [l for l in self.f.take() if "_scc caps" in l][-1]
+        w = int(caps.split("width=")[1].split(",")[0])
+        self.assertLess(w, 1920)                                                 # schmaler als das Ausgabebild, wie fit_big es für ein hochkantes Bild macht
+
+    def test_a_branch_that_stops_and_starts_again_gets_the_size_again_only_if_it_changed(self):
+        self.three_cameras()
+        self.tick()
+        self.f.take()
+        self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}                                 # Zweige wieder gestoppt (zum Beispiel Verzugs-Schutz)
+        self.tick(4.0)
+        self.assertFalse([l for l in self.f.take() if "_scc caps" in l])         # dieselbe Größe: keine neue Anweisung
+
     def test_small_picture_appears_without_touching_the_big_one(self):
         self.f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
         self.f.states = {0: 3, 1: 1, 2: 1, 3: 1}
@@ -745,7 +834,9 @@ class ControllerTests(unittest.TestCase):
         c.tick()
         lines = self.f.take()
         # Zweig stoppen, Adresse setzen, Zweig starten: im selben Durchgang, in dieser Reihenfolge (belacoder arbeitet die Zeilen nacheinander ab)
-        self.assertEqual(lines[:3], ["feed sbf3 off", "set sbf3_src location rtmp://127.0.0.1:1935/publish/cam4", "feed sbf3 on"])
+        self.assertEqual(lines[:2], ["feed sbf3 off", "set sbf3_src location rtmp://127.0.0.1:1935/publish/cam4"])
+        on = lines.index("feed sbf3 on")
+        self.assertTrue(all(l.startswith("set sbf3_crop ") or l.startswith("set sbf3_scc caps ") for l in lines[2:on]), lines[:on + 1])      # dazwischen nur Größe und Beschnitt, noch vor dem Start des Zweigs
 
     def test_other_key_in_a_place_is_set_while_the_branch_is_stopped(self):
         self.f.states = {0: 1, 1: 1, 2: 1, 3: 1}
@@ -831,6 +922,32 @@ class InactiveAudio(unittest.TestCase):
         with mock.patch.object(L, "RUN", tmp):
             c.tick()
         self.assertIn("select asel sink_1", f.take())                    # Ton des Hauptbildes, nicht sink_2 (cam2)
+
+    def test_deactivating_the_audio_camera_while_live_moves_the_sound(self):
+        tmp = tempfile.mkdtemp()
+        f = Fakes()
+        c = f.controller(tmp)
+        c.start()
+        with open(os.path.join(tmp, "main-view"), "w") as fh:
+            fh.write("0 0 0" + chr(10))                                       # Ton von Stelle 1 (cam2)
+        f.pub = {"dji-a": {"w": 1920, "h": 1080, "audio": True}, "cam2": {"w": 1920, "h": 1080, "audio": True}}
+        f.states = {0: 3, 1: 3, 2: 1, 3: 1}
+        f.t += 20
+        with mock.patch.object(L, "RUN", tmp):
+            c.tick()
+            self.assertIn("select asel sink_2", f.take())                     # Ton liegt auf cam2
+            f.cfg = dict(f.cfg, inactive=["cam2"])                            # cam2 wird deaktiviert (Fußleiste, lang drücken)
+            f.t += 2
+            c.tick()
+            lines = f.take()
+            self.assertIn("select asel sink_1", lines)                        # der Ton wechselt wirklich zum Hauptbild
+            self.assertIn("feed sbf1 off", lines)
+            f.states[1] = 1
+            f.t += 5
+            c.tick()
+            self.assertEqual([x for x in f.take() if x.startswith("select asel")], [])
+            with open(os.path.join(tmp, "view-state")) as fh:
+                self.assertEqual(fh.read().split()[1], "-1")                  # die Rückmeldung nennt das Hauptbild als Tonquelle
 
     def test_server_refuses_it(self):
         st = server.PipelineStore(os.devnull)
