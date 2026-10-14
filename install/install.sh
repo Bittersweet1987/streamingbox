@@ -154,6 +154,8 @@ PY
     install -m 755 "$HERE/install/pipbox-logmode.py" /opt/pipbox/pipbox-logmode.py
     install -m 644 "$HERE/install/pipbox-logmode.service" /etc/systemd/system/pipbox-logmode.service
     install -m 644 "$HERE/install/pipbox-logmode.path" /etc/systemd/system/pipbox-logmode.path
+    install -m 644 "$HERE/install/pipbox-logrotate.service" /etc/systemd/system/pipbox-logrotate.service         # große Protokolle begrenzen (täglicher Timer)
+    install -m 644 "$HERE/install/pipbox-logrotate.timer" /etc/systemd/system/pipbox-logrotate.timer
     install -m 755 "$HERE/install/pipbox-netaddr.py" /opt/pipbox/pipbox-netaddr.py
     install -m 644 "$HERE/install/pipbox-netaddr.service" /etc/systemd/system/pipbox-netaddr.service
     install -m 644 "$HERE/install/pipbox-netaddr.path" /etc/systemd/system/pipbox-netaddr.path
@@ -170,6 +172,7 @@ PY
       if [ -f /etc/systemd/journald.conf.d/pipbox-persistent.conf ]; then mode=ausfuehrlich; else mode=sparsam; fi
       python3 /opt/pipbox/pipbox-logmode.py --apply "$mode" || echo "WARNUNG: Protokoll-Modus konnte nicht gesetzt werden."
     fi
+    python3 /opt/pipbox/pipbox-logmode.py --apply-nginx || true       # Zugriffsprotokoll von nginx zum Protokoll-Modus (sparsam = aus; nginx wird nur neu geladen, wenn nicht gesendet wird)
     install -m 644 "$HERE/install/pipbox-power.service" /etc/systemd/system/pipbox-power.service
     install -m 644 "$HERE/install/pipbox-power.path" /etc/systemd/system/pipbox-power.path
     install -m 644 "$HERE/install/pipbox-health.service" /etc/systemd/system/pipbox-health.service
@@ -251,7 +254,7 @@ PY
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     if [ "$hdmi_changed" = 1 ] || ! systemctl is-active --quiet pipbox-hdmi.service; then systemctl restart pipbox-hdmi.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-btchip.path pipbox-btchip.service pipbox-arp.service
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-btchip.path pipbox-btchip.service pipbox-arp.service pipbox-logrotate.timer
     systemctl enable --now pipbox-preview.socket
     systemctl try-restart pipbox-preview.service 2>/dev/null || true       # neuer Programmstand (der Dienst endet sonst nach einer Minute ohne Zuschauer von selbst)
     systemctl try-restart pipbox-arp.service 2>/dev/null || true       # neuer Programmstand; der Zustand bleibt (Merkzettel in /run)
@@ -268,14 +271,19 @@ PY
     [ -x /opt/pipbox/pipbox-arp.py ] && python3 /opt/pipbox/pipbox-arp.py uninstall || true     # eingestellte ARP-Werte zurücksetzen
     [ -x /opt/pipbox/pipbox-btchip.py ] && python3 /opt/pipbox/pipbox-btchip.py uninstall || true     # Firmware-Verknüpfungen des Bluetooth-Chips der ROCK 5B Plus entfernen
     [ -x /opt/pipbox/pipbox-btdriver.py ] && python3 /opt/pipbox/pipbox-btdriver.py uninstall || true     # eingespieltes Bluetooth-Modul entfernen (Standardmodul gilt nach dem nächsten Neustart)
-    systemctl disable --now pipbox-arp.service pipbox-btchip.path pipbox-btchip.service pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service || true
+    systemctl disable --now pipbox-arp.service pipbox-btchip.path pipbox-btchip.service pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service pipbox-logrotate.timer || true
     rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-hdmi.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-netaddr.service /etc/systemd/system/pipbox-netaddr.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btchip.service /etc/systemd/system/pipbox-btchip.path /etc/udev/rules.d/81-pipbox-btchip.rules /opt/pipbox/pipbox-btchip.py /etc/systemd/system/pipbox-arp.service /opt/pipbox/pipbox-arp.py /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/systemd/system/pipbox-btdriver.path /etc/udev/rules.d/80-pipbox-btdriver.rules
     systemctl disable --now pipbox-preview.socket pipbox-preview.service 2>/dev/null || true
     rm -f /etc/systemd/system/pipbox-preview.socket /etc/systemd/system/pipbox-preview.service
     rm -f /etc/apt/apt.conf.d/99pipbox-nginx
+    rm -f /etc/systemd/system/pipbox-logrotate.service /etc/systemd/system/pipbox-logrotate.timer
     NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
     if [ -f "$NGX.vor-pipbox" ]; then
       cp "$NGX.vor-pipbox" "$NGX" && rm -f "$NGX.vor-pipbox"
+      nginx -t >/dev/null 2>&1 && nginx -s reload 2>/dev/null || true
+    fi
+    if [ -f /etc/nginx/conf.d/pipbox-log.conf ]; then
+      rm -f /etc/nginx/conf.d/pipbox-log.conf
       nginx -t >/dev/null 2>&1 && nginx -s reload 2>/dev/null || true
     fi
     rm -f /usr/local/bin/srtla_send
