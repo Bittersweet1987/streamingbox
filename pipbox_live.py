@@ -235,6 +235,10 @@ def buffer_need_ms(c):
 
 LEAD_MAX_MS = 1000                         # so früh vor seinem Termin darf ein Bild höchstens am Mischer ankommen: früher wartet es roh in Warteschlangen von zusammen etwa 2,5 s (45 Bilder + 1 s) und läuft sie über
 LEAD_MAX_BIG_MS = 600                      # dasselbe für das ganzflächige Hauptbild: es wird ohne Kopie durchgereicht, seine Bilder bleiben im Speicher des Dekoders hängen (begrenzte Zahl Puffer); bei 1000 ms Vorlauf setzte es aus (Testbox, 12. Oktober 2026), mit 600 ms (Puffer 600, alle Verzögerungen 0) lief es fehlerfrei
+HOLD_UNIFORM = True                        # dieselbe Mindesthaltezeit für alle Zweige, nicht nur für das Hauptbild: Sonst ändert jeder Tausch des Hauptbilds die Haltezeit zweier Zweige (50 gegen 450 ms): Der Zweig mit der längeren Haltezeit liefert dann rund eine halbe Sekunde keine Bilder, der Mischer wartet darauf (Testbox, 14. Oktober 2026)
+BRANCH_QUEUE_BUFFERS = 3                   # Warteschlange hinter dem Skalierer: klein, damit beim Tausch der Größe nur wenige Bilder in der alten Größe vor dem Mischer warten (vorher die Voreinstellung: bis zu 1 s oder 10 MB)
+SWAP_SETTLE_S = 0.2                        # beim Tausch: so lange bleibt ein schrumpfender Zweig ausgeblendet, bis die Bilder in der alten (großen) Größe den Mischer passiert haben
+WAIT_MARK = "#wait"                        # Trennzeile in der Liste der Befehle: Davor senden, SWAP_SETTLE_S warten, danach senden
 BUFFER_LATE_MS = 150                       # nötiger Puffer größer als der laufende um mehr als das: verzögerte Bilder kämen zu spät
 BUFFER_EARLY_MS = 800                      # laufender Puffer größer als der nötige um mehr als das: die Bilder aller Kameras mit kürzerer Verzögerung kommen zu früh am Mischer an, sie werden verworfen (12. Oktober 2026: Hauptbild 3 bis 9 statt 30 Bilder/s)
 
@@ -249,7 +253,7 @@ def buffer_mismatch(running, need):
     return need > running + BUFFER_LATE_MS or running > need + BUFFER_EARLY_MS
 
 
-def hold_delays(delays, buffer, big_key=None, big_lead=None):
+def hold_delays(delays, buffer, big_key=None, big_lead=None, uniform=False):
     """Haltezeit je Kamera auf der komprimierten Seite des Zweigs (set sbf<N>_vq min-threshold-time). Jedes Bild ist beim Verlassen des Dekoders um (Puffer - Haltezeit - Dekodierzeit) früher
     als sein Termin und wartet bis dahin roh in Warteschlangen; die fassen zusammen nur etwa 2,5 s. Ist der Unterschied der Verzögerungen größer (Puffer = größte Verzögerung + 300 ms),
     läuft der Zweig mit der kleinsten Verzögerung über, und fast alle seine Bilder werden verworfen (Testbox, 12. Oktober 2026: 2560 ms gegen 450 und 0). Darum wird die Haltezeit
@@ -258,7 +262,7 @@ def hold_delays(delays, buffer, big_key=None, big_lead=None):
     LEAD_MAX_BIG_MS nichts an der Einstellung."""
     floor = max(0, int(buffer) - LEAD_MAX_MS)
     floor_big = max(0, int(buffer) - (LEAD_MAX_BIG_MS if big_lead is None else int(big_lead)))
-    return {k: max(int(v), floor_big if k == big_key else floor) for k, v in delays.items()}
+    return {k: max(int(v), floor_big if (uniform or k == big_key) else floor) for k, v in delays.items()}
 
 
 # ------------------------------------------------------------------------------------------------ Pipeline-Text
@@ -318,7 +322,7 @@ def build(c, base=RTMP_BASE):
             f"capsfilter name={nm}_scc caps=\"video/x-raw,format=NV12,width={CANVAS_W},height={CANVAS_H}\" ! "
             f"capssetter name={nm}_c2 join=true replace=false caps=\"video/x-raw,colorimetry=bt709\" ! "   # nur beschriften, nie umrechnen (eine Umrechnung kostete zeitweise einen ganzen Kern)
             
-            f"queue name={nm}_q ! pipcomp.sink_{s}\n"
+            f"queue name={nm}_q max-size-buffers={BRANCH_QUEUE_BUFFERS} max-size-bytes=0 max-size-time=0 ! pipcomp.sink_{s}\n"
             f"{nm}.audio ! queue name={nm}_aq max-size-time={abuf} max-size-buffers=0 max-size-bytes=0 ! aacparse name={nm}_ap ! avdec_aac name={nm}_ad ! "
             f"audioconvert name={nm}_ac1 ! audioresample name={nm}_ar ! capsfilter name={nm}_ac2 caps=\"{AUDIO_CAPS}\" ! "
             f"queue name={nm}_aq2 max-size-time={abuf} max-size-buffers=0 max-size-bytes=0 ! asel.sink_{s + 1}\n")
@@ -339,6 +343,53 @@ def strip_caps(w, h):
 
 def argb(rgb):
     return (0xff000000 | rgb) & 0xffffffff
+
+
+_CAPS_RE = re.compile(r"width=(\d+),height=(\d+)")
+
+
+def _area(line):
+    m = _CAPS_RE.search(line or "")
+    return int(m.group(1)) * int(m.group(2)) if m else None
+
+
+def order_for_swap(lines, old_caps, alpha):
+    """Befehle beim Tausch von Größen so ordnen, dass der Mischer nie ein großes Bild in einem kleinen Feld skalieren muss (die Bilder des Hardware-Dekoders liegen in langsam lesbarem Speicher:
+    ein Bild in der falschen Größe kostet 100 bis 200 ms, die Ausgabe fiel beim Tausch des Hauptbilds auf 5 Bilder/s, Testbox 14. Oktober 2026).
+    Wächst ein Zweig (kleines Bild wird Hauptbild), kommt sein Feld vor seiner neuen Größe: Das Feld ist erst groß, dann kommen große Bilder, vorher höchstens kleine in einem großen Feld.
+    Schrumpft ein Zweig, bekommt er zuerst die kleine Größe und wird ausgeblendet; sein kleines Feld und die Anzeige folgen nach WAIT_MARK, wenn die großen Bilder vorbei sind.
+    Beim ersten Setzen (keine alte Größe) und bei kleinen Änderungen bleibt alles wie es war."""
+    caps = {}
+    for i, l in enumerate(lines):
+        m = re.match(r"set sbf(\d+)_scc caps ", l)
+        if m:
+            s = int(m.group(1))
+            old, new = _area(old_caps.get(s)), _area(l)
+            if old and new:
+                if new * 5 < old * 4:
+                    caps[s] = "shrink"
+                elif new * 4 > old * 5:
+                    caps[s] = "grow"
+    if not caps:
+        return lines
+    out = list(lines)
+    for s, kind in caps.items():
+        if kind == "grow":
+            i = next(j for j, l in enumerate(out) if l.startswith(f"set sbf{s}_scc caps "))
+            cl = out.pop(i)
+            last = max((j for j, l in enumerate(out) if l.startswith(f"pad pipcomp sink_{s} ")), default=i - 1)
+            out.insert(last + 1, cl)
+    later = []
+    for s, kind in caps.items():
+        if kind != "shrink":
+            continue
+        mine = [l for l in out if l.startswith(f"pad pipcomp sink_{s} ")]
+        geo = [l for l in mine if " alpha " not in l]
+        out = [l for l in out if l not in mine]
+        i = next(j for j, l in enumerate(out) if l.startswith(f"set sbf{s}_scc caps "))
+        out.insert(i + 1, f"pad pipcomp sink_{s} alpha 0")
+        later += geo + [alpha.get(s) or f"pad pipcomp sink_{s} alpha 1.00"]
+    return out + [WAIT_MARK] + later if later else out
 
 
 class Layout:
@@ -426,12 +477,16 @@ class Layout:
             add(("delay", s), f"set sbf{s}_vq min-threshold-time {(d + 33) * 1000000 if d else 0}", 100)
         # nach z sortiert (ausgeblendete zuerst), die Reihenfolge innerhalb eines Bildes bleibt (stabil)
         want.sort(key=lambda t: t[2])
-        lines = []
+        lines, old_caps, alpha = [], {}, {}
         for key, line, _ in want:
+            if key[0] == "caps":
+                old_caps[key[1]] = self.sent.get(key)
+            elif key[0] == "a" and isinstance(key[1], int):
+                alpha[key[1]] = line
             if self.sent.get(key) != line:
                 lines.append(line)
                 self.sent[key] = line
-        return lines
+        return order_for_swap(lines, old_caps, alpha)
 
 
     def pre_commands(self, c, pre_roles, dims):
@@ -636,6 +691,7 @@ class LiveController:
         self.start_delays = delays_by_key(sc) if sc else {}
         self.delays_frozen = False
         self.log, self.clock, self.fetch, self.stats, self.control, self.base = log, clock, fetch, stats, control, rtmp_base
+        self.sleep = time.sleep
         self.binder = pa.Binder()
         self.chooser = pa.Chooser(clock)
         self.layout = Layout()
@@ -694,7 +750,7 @@ class LiveController:
         if frozen:
             cap = max(0, self.running_buffer - 300)
             want = {k: (self.start_delays[k] if k in self.start_delays else min(v, cap)) for k, v in want.items()}
-        return hold_delays(want, self.running_buffer if self.running_buffer is not None else buffer_ms(self.cfg), big_key, self.big_lead)
+        return hold_delays(want, self.running_buffer if self.running_buffer is not None else buffer_ms(self.cfg), big_key, self.big_lead, uniform=HOLD_UNIFORM)
 
     def read_view(self):
         """Ansicht im Betrieb: Datei main-view ("ausgeblendet Ton stumm", schreibt die Oberfläche); fehlt sie, gilt die Einstellung."""
@@ -847,7 +903,7 @@ class LiveController:
         self._eff_apos = apos
         if lines and os.environ.get("PIPBOX_LIVE_DEBUG"):
             self.log("live: " + " | ".join(lines)[:1500])
-        ok = self.control(lines)
+        ok = self.send_lines(lines)
         if not ok:
             self.layout.reset()                       # belacoder noch nicht bereit: beim nächsten Durchgang alles neu senden
             self.reassign_lines = reassign + self.reassign_lines
@@ -859,6 +915,22 @@ class LiveController:
         # (jede Kamera, die an die Box sendet, behält ihren Knopf, auch während ihr Zweig gerade startet oder deaktiviert ist)
         shown = set(self.alive) | {k for k in slot_key if k and k in self.pub}
         return {"slots": list(slot_key), "alive": sorted(shown), "main": self.main_key, "line": self.last_line}
+
+    def send_lines(self, lines):
+        """Befehle an den Steuerkanal. Die Trennzeile WAIT_MARK teilt sie in zwei Stücke mit SWAP_SETTLE_S Pause dazwischen (Tausch von Größen). Wahr, wenn alle Stücke ankamen."""
+        parts = [[]]
+        for l in lines:
+            if l == WAIT_MARK:
+                parts.append([])
+            else:
+                parts[-1].append(l)
+        ok = True
+        for i, p in enumerate(parts):
+            if i:
+                self.sleep(SWAP_SETTLE_S)
+            if p:
+                ok = bool(self.control(p)) and ok
+        return ok
 
     def _confirm_view(self, force):
         """Rückmeldung wie früher pbctl: /run/pipbox-send/view-state = was gerade gilt. Die Oberfläche wartet auf eine neue Änderungszeit der Datei
