@@ -579,6 +579,13 @@ class BelacoderLabel(unittest.TestCase):
         level = int(re.search(r"-sb(\d+)", label).group(1))
         self.assertLess(level, L.COPY_LEVEL)
 
+    def test_install_rebuilds_belacoder_when_only_the_build_script_changes(self):
+        """1.0.39 änderte nur build.sh (Kennung): install.sh baute nicht neu, weil es nur die Patch-Dateien verglich, und die Boxen blieben auf "-sb13"."""
+        sh = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        self.assertIn('cmp -s "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh || bc_changed=1', sh)
+        self.assertIn('install -m 644 "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh', sh)
+        self.assertLess(sh.index('cmp -s "$HERE/belacoder/build.sh"'), sh.index('if [ "$bc_changed" = 1 ]'))
+
     def test_the_engine_reads_twelve_from_that_label(self):
         label = self.label()
         with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(L.os, "stat", return_value=mock.Mock(st_mtime=123.0)), \
