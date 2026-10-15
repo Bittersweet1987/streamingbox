@@ -1700,8 +1700,10 @@ class CameraOrder(unittest.TestCase):
         self.assertIn("JSON.stringify({move_before:beforeId||null})", h)
         self.assertNotIn("box.insertBefore(row", h)                                                  # die gezogene Zeile wird nie umgehängt (sonst bricht die Berührung auf dem Handy ab)
         self.assertIn('row.style.transform="translateY("', h)
+        self.assertIn('bar.className="camdrop"', h)                                                  # die Ziel-Linie ist ein eigenes Element über allem, sie verschwindet nicht unter der gezogenen Zeile
+        self.assertIn('.camdrop{position:absolute;', h)
         self.assertIn("if(camDragging) return;", h)                                                  # beim Ziehen baut sich die Liste nicht neu auf
-        self.assertIn('e.key!=="ArrowUp"&&e.key!=="ArrowDown"', h)                                   # auch mit der Tastatur
+        self.assertIn("{ArrowUp:-1,ArrowDown:1}", h)                                                  # auch mit der Tastatur
         self.assertIn('class="mv"', h)                                                              # die Pfeile bleiben
         self.assertIn('@media(max-width:620px){.cam .grip{display:inline-block;font-size:28px', h)                   # Handy: Anfasser
         self.assertIn('.cam .top .cr .mv{display:none}', h)                                           # Handy: ohne Pfeile

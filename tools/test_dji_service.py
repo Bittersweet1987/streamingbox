@@ -338,6 +338,29 @@ class Commands(unittest.TestCase):
             self.assertEqual(dm2.cameras["AA:BB:CC:00:00:03"].cfg["ssid"], "KameraNetz")
         arun(go())
 
+    def test_disconnect_survives_a_restart_and_connect_clears_it(self):
+        """"Trennen" (ausgeschaltet, gewollt) steht in der Konfiguration: Nach einem Neustart der Box verbindet sich die Kamera nicht von selbst wieder."""
+        async def go():
+            d, dm = self.daemon()
+            await self.add(dm)
+            await dm.handle({"cmd": "update", "addr": ADDR, "autoconnect": True})
+            await dm.handle({"cmd": "disconnect", "addr": ADDR})
+            self.assertTrue(dm.cameras[ADDR].manual_off)
+            saved = json.load(open(os.path.join(d, "dji-cameras.json")))
+            self.assertTrue(saved["cameras"][ADDR]["manual_off"])                          # auf der Platte
+            dm2 = dd.Daemon(d)                                                               # Neustart
+            self.assertTrue(dm2.cameras[ADDR].manual_off)
+            self.assertTrue(dm2.cameras[ADDR].public()["manual_off"])
+            await dm2.handle({"cmd": "connect", "addr": ADDR})                              # "Verbinden" hebt es auf, auch auf der Platte
+            self.assertFalse(dm2.cameras[ADDR].manual_off)
+            self.assertNotIn("manual_off", json.load(open(os.path.join(d, "dji-cameras.json")))["cameras"][ADDR])
+            await dm2.cameras[ADDR].stop()
+        arun(go())
+
+    def test_startup_does_not_connect_a_camera_that_was_switched_off(self):
+        src = open(dd.__file__, encoding="utf-8").read()
+        self.assertIn('if cam.cfg.get("autoconnect") and not cam.manual_off:', src)
+
     def test_cameras_stay_independent(self):
         async def go():
             d, dm = self.daemon()
