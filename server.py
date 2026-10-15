@@ -1362,7 +1362,8 @@ class PipelineStore:
     DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0, "always_ready": False}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0, "always_ready": False, "facecam": ""}
+    SLOTS = ("main", "pip", "pip2", "pip3")
     Q = "queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040"
 
     def __init__(self, path):
@@ -1407,6 +1408,62 @@ class PipelineStore:
 
     SLOT_DELAY = {"pip": "pip_delay_ms", "pip2": "pip2_delay_ms", "pip3": "pip3_delay_ms"}
 
+    @classmethod
+    def facecam_slot(cls, c):
+        """Platz der Facecam-Kamera in dieser Einstellung ("main", "pip", "pip2", "pip3") oder None (keine Facecam oder nicht im Bild)."""
+        k = c.get("facecam")
+        if not k or c.get("type") != "pip":
+            return None
+        return next((s for s in cls.SLOTS if c.get(s) == k), None)
+
+    @classmethod
+    def _facecam_keeps_the_sound(cls, c):
+        """Mit einer Facecam bleibt der Ton bei ihrer Kamera, auch wenn sie durch einen Tausch an einen anderen Platz wandert (Hauptbild oder ein anderes
+        kleines Bild). Eine manuell gewählte Tonquelle gilt bis zum nächsten Tausch. Ohne Facecam ändert sich nichts: der Ton bleibt am Platz, bei
+        "Hauptbild" folgt er dem wechselnden Hauptbild. Eine deaktivierte Kamera ist nie die Tonquelle."""
+        if not c.get("facecam"):
+            return
+        slot = cls.facecam_slot(c)
+        if slot is None:
+            c["facecam"] = ""                                                                  # die Kamera ist nicht mehr im Bild
+        elif slot != "main" and c.get(slot) in (c.get("inactive") or []):
+            c["audio"] = "main"
+        else:
+            c["audio"] = slot
+
+    def set_facecam(self, slot):
+        """Das kleine Bild wählen, dessen Kamera die Facecam ist ("" = keine). Gespeichert wird die Kamera, nicht der Platz: Sie behält den Ton auch nach einem
+        Tausch. Gibt die Tonquelle zurück, die jetzt gilt ("main" ohne Facecam, sonst der Platz der Kamera)."""
+        if slot not in ("", "pip", "pip2", "pip3"):
+            raise ValueError("Facecam: eines der kleinen Bilder oder keine")
+        with self.lock:
+            c = self.cfg
+            if c.get("type") != "pip":
+                raise ValueError("Das gibt es nur bei der Art Bild-in-Bild")
+            if slot:
+                key = c.get(slot)
+                if not key:
+                    raise ValueError("Dieses kleine Bild ist nicht belegt")
+                if key in (c.get("inactive") or []):
+                    raise ValueError("Diese Kamera ist deaktiviert und kann nicht die Facecam sein")
+                c["facecam"] = key
+            else:
+                c["facecam"] = ""
+            self.save()
+            return slot or "main"
+
+    def _carry_facecam(self, new):
+        """Die Facecam einer neu gespeicherten Einstellung: Sie folgt ihrem Platz (wer das kleine Bild mit einer anderen Kamera belegt, bekommt dort die neue
+        Facecam); steht ihre Kamera gerade im Hauptbild (nach einem Tausch), bleibt sie, solange sie im Bild ist."""
+        old = self.cfg.get("facecam")
+        if not old or new.get("type") != "pip":
+            return ""
+        slot = self.facecam_slot(self.cfg)
+        here = {new.get(s) for s in self.SLOTS} - {""}
+        if slot in ("pip", "pip2", "pip3"):
+            return new.get(slot) or (old if old in here else "")
+        return old if slot == "main" and old in here else ""
+
     def swap_main_pip(self, with_key=None):
         """Hauptbild gegen eine Kamera tauschen, die gerade als kleines Bild im Bild ist (Szenenwechsel, Stufe 1). Ohne Angabe
         das erste kleine Bild. Kamera und Verzögerung bleiben beisammen (die Verzögerung gehört zur Kamera); Ecke, Größe,
@@ -1430,6 +1487,7 @@ class PipelineStore:
                     c["inactive"] = rest
                 else:
                     c.pop("inactive")
+            self._facecam_keeps_the_sound(c)
             # "Ausgeblendet" gehört zur Kamera: die bisherige Hauptkamera war sichtbar, also ist ihr kleines Bild nach dem Tausch sichtbar
             styles = clean_styles(c.get("styles"))
             idx = STYLE_SLOTS[list(self.SLOT_DELAY).index(slot)]
@@ -1524,6 +1582,9 @@ class PipelineStore:
         inactive = list(dict.fromkeys(k for k in (old if isinstance(old, list) else []) if isinstance(k, str) and k in pips))[:3]
         if t == "pip" and inactive:                                                 # deaktivierte Kameras (Issue #19); ohne sie fehlt der Schlüssel
             cfg["inactive"] = inactive
+        fc = self._carry_facecam(cfg)
+        if fc:
+            cfg["facecam"] = fc
         with self.lock:
             self.cfg = cfg
             self.save()
@@ -1577,6 +1638,8 @@ class PipelineStore:
             out["swap_cams"] = 0
         out["always_ready"] = out.get("always_ready") is True and out.get("type") == "pip"
         out["type"] = "pip" if out.get("type") == "pip" else "single"
+        fc = out.get("facecam")
+        out["facecam"] = fc if (out["type"] == "pip" and isinstance(fc, str) and KEY_RE.match(fc) and fc in [out.get(s) for s in cls.SLOTS]) else ""
         out["styles"] = clean_styles(out.get("styles"))
         if "inactive" in out:
             ina = out["inactive"]
@@ -1937,6 +2000,7 @@ def view_only_change(a, b):
     Sendekette ohne Neustart umschalten."""
     def norm(c):
         c = dict(c)
+        c.pop("facecam", None)
         c["audio"] = "main"
         c["styles"] = clean_styles(c.get("styles"))
         for k in STYLE_SLOTS:
@@ -1955,7 +2019,7 @@ def always_compatible(a, b):
             c[k] = bool(c.get(k))
         for k in DELAY_KEYS:
             c.pop(k, None)
-        for k in ("audio", "inactive", "auto_failover", "swap_cams"):
+        for k in ("audio", "inactive", "auto_failover", "swap_cams", "facecam"):
             c.pop(k, None)
         c["styles"] = clean_styles(c.get("styles"))
         for k in STYLE_SLOTS:
@@ -9095,14 +9159,16 @@ def scene_swap(pipeline, cams, send, with_key=None):
     target = with_key or pipeline.cfg.get("pip")
     if target and any(x["key"] == target and x.get("state") == "offline" for x in cams.listing("")):
         raise ValueError("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.")
+    old_audio = PipelineStore.view_values(pipeline.cfg)[1]
     shown = pipeline.swap_main_pip(with_key)
     if send.always_live() or send.swap_live():
         note = "Getauscht, ohne Unterbrechung."
-        if shown:                      # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
+        moved = PipelineStore.view_values(pipeline.cfg)[1] != old_audio                  # eine Facecam nimmt ihren Ton mit
+        if shown or moved:             # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
             hide, aud = PipelineStore.view_values(pipeline.cfg)
             cur = send.view_state()
             if not (send.view_live() and send.apply_view(hide, aud, bool(cur and cur["mute"]))):
-                note += " Das kleine Bild erscheint beim nächsten Start der Sendung."
+                note += " Das kleine Bild erscheint beim nächsten Start der Sendung." if shown else " Der Ton wechselt beim nächsten Start der Sendung."
         return {"ok": True, "restarted": False, "note": note}
     restarted, note = send.restart_if_live()
     return {"ok": True, "restarted": restarted, "note": note or "Getauscht."}
@@ -9654,6 +9720,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True})
             if path == "/api/pipeline/swap":
                 return self.reply(200, scene_swap(self.pipeline, self.cams, self.send, d.get("with")))
+            if path == "/api/pipeline/facecam":
+                slot = d.get("slot", "")
+                if not isinstance(slot, str):
+                    raise ValueError("Facecam: eines der kleinen Bilder oder keine")
+                aud = self.pipeline.set_facecam(slot)
+                return self.reply(200, dict(self.send.change_view(audio=aud), ok=True, facecam=self.pipeline.cfg.get("facecam", "")))
             if path == "/api/pipeline":
                 before = dict(self.pipeline.cfg)
                 before["styles"] = clean_styles(before.get("styles"))        # eine unveränderte Einstellung ohne Stile gilt nicht als Änderung

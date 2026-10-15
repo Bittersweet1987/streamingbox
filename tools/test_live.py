@@ -1015,6 +1015,23 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(f.read().split(), ["1", "0", "1"])
 
 
+class FacecamAudio(unittest.TestCase):
+    """Mit der Tonquelle auf einem kleinen Bild fällt der Ton nicht mehr in Stille, wenn die Kamera dieses Bildes nicht im Bild ist."""
+
+    def test_sound_falls_back_to_the_main_picture_when_the_small_picture_camera_is_missing(self):
+        lay = L.Layout()
+        c = safe()
+        args = dict(c=c, slot_key=["dji-a", "cam2", "cam3", "cam4"], dims={}, audio_ok={0, 1}, hide=0, mute=False, delay_ms={})
+        lines = lay.commands(roles={0: 0}, audio_pos=0, **args)                  # Ton auf kleinem Bild 1, aber dort ist keine Kamera (ausgefallen)
+        self.assertIn("select asel sink_1", lines)                               # Ton des Hauptbildes (Platz 0) statt Stille
+
+    def test_sound_stays_on_the_small_picture_when_its_camera_is_there(self):
+        lay = L.Layout()
+        args = dict(c=safe(), slot_key=["dji-a", "cam2", "cam3", "cam4"], dims={}, audio_ok={0, 1}, hide=0, mute=False, delay_ms={})
+        lines = lay.commands(roles={0: 0, 1: 1}, audio_pos=0, **args)
+        self.assertIn("select asel sink_2", lines)
+
+
 class InactiveAudio(unittest.TestCase):
     def test_deactivated_camera_is_never_the_audio_source(self):
         tmp = tempfile.mkdtemp()

@@ -519,6 +519,8 @@ details.card[hidden]{display:none!important}
 .ctlrow.hit{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .optrow{display:flex;align-items:center;gap:8px;padding:5px 0;line-height:1.35;cursor:pointer}.optrow.sub{padding-left:26px}.optrow input{flex:none}
 .optrow.fixed{opacity:.6;cursor:default}
+.fcbtns{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.fcb{flex:1 1 150px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;cursor:pointer}.fcb .muted{font-size:13px;font-weight:400;color:var(--muted)}
+.fcb.on{background:var(--bar);color:var(--onbar,#0f172a);border-color:transparent;font-weight:600}.fcb.on .muted{color:inherit;opacity:.9}
 .vseg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:2px 0 6px}.vseg button{background:transparent;color:var(--text);border:0;border-radius:0;padding:8px 18px;min-height:40px;cursor:pointer}.vseg button+button{border-left:1px solid var(--line)}.vseg button[aria-pressed=true]{background:var(--accent);color:#04202a;font-weight:600}
 #pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
@@ -669,9 +671,11 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
   <details class="card wide" id="c_prev"><summary><span class="sumh">Vorschau</span><span class="prevctl"><button type="button" id="prev_set" class="sec small prevset" hidden aria-label="Einstellung zeigen" aria-expanded="false">⚙</button><button type="button" id="prev_btn" class="sec small">Start</button><button type="button" class="helpbtn" id="prev_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">i</button></span></summary>
     <div id="prev_help" class="ph" hidden>Zeigt das fertig gemischte Bild so, wie es gerade gesendet wird, in kleiner Auflösung: also auch, wohin die Kameras gerade zeigen und wie die Bilder angeordnet sind. Es sind 30 Bilder pro Sekunde in 640 × 360 als Video, rund 1,7 Mbit/s zum Browser, über das Netz, in dem er angemeldet ist. Die Vorschau endet nach 10 Minuten, beim Zuklappen der Karte, beim Schließen der Seite und wenn die Sendung endet. Sie kostet die Box etwa die Hälfte eines der vier kleinen Prozessorkerne, solange sie läuft; die Sendung selbst bleibt unberührt. Mit dem Häkchen darunter entfällt die Grenze von 10 Minuten: Die Vorschau startet dann in diesem Browser von selbst wieder, sobald die Seite sichtbar ist und die Box sendet.</div>
     <label class="prevkeep"><input type="checkbox" id="prev_always"> Mir ist bewusst, dass die Vorschau Rechenleistung kostet. Ich möchte sie in diesem Browser dauerhaft eingeschaltet lassen.</label>
-    <div class="autolbl" id="pa_lbl"><label class="chk" id="pa_row"><input type="checkbox" id="pa_ext"> Vorschau auch von außen erlauben (verbraucht Upload)</label> <button type="button" class="helpbtn" id="pa_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">i</button></div>
-    <div class="ph" id="pa_help" hidden>Jede Vorschau braucht rund 1,7 Mbit/s Upload, den die Sendung braucht. Von außen (Tailscale, öffentlicher Link) ist die Vorschau deshalb aus. Mit dem Haken geht sie von außen nur klein (320 Pixel, 10 Bilder pro Sekunde, etwa 0,3 Mbit/s) und für einen Zuschauer zugleich. Im Heimnetz und im WLAN der Box bleibt alles wie es ist.</div>
-    <div id="pa_err" class="err"></div>
+    <div id="pa_box">
+      <div class="autolbl" id="pa_lbl"><label class="chk" id="pa_row"><input type="checkbox" id="pa_ext"> Vorschau auch von außen erlauben (verbraucht Upload)</label> <button type="button" class="helpbtn" id="pa_help_btn" aria-label="Erklärung zeigen" aria-expanded="false">i</button></div>
+      <div class="ph" id="pa_help" hidden>Jede Vorschau braucht rund 1,7 Mbit/s Upload, den die Sendung braucht. Von außen (Tailscale, öffentlicher Link) ist die Vorschau deshalb aus. Mit dem Haken geht sie von außen nur klein (320 Pixel, 10 Bilder pro Sekunde, etwa 0,3 Mbit/s) und für einen Zuschauer zugleich. Im Heimnetz und im WLAN der Box bleibt alles wie es ist.</div>
+      <div id="pa_err" class="err"></div>
+    </div>
     <div id="prev_msg" class="ph" role="status"></div>
     <div class="actions" style="margin:6px 0 0"><button type="button" id="prev_live" class="livebtn" hidden>Live gehen</button></div>
     <div id="prev_box" hidden><video id="prev_vid" muted playsinline autoplay hidden aria-label="Vorschau des Sendebilds"></video><img id="prev_img" alt="Vorschau des Sendebilds" hidden></div>
@@ -964,6 +968,11 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
         <option value="2">Hauptbild und erstes kleines Bild</option>
         <option value="4">alle Kameras (mehr Rechenlast)</option></select></label>
     <label class="muted piponly" style="display:block;margin-top:12px"><input type="checkbox" id="p_always"> Alle Kameras immer bereit (Beta): Kameras können jederzeit dazukommen, ausfallen und zurückkehren, ohne dass die Sendung neu startet. Fällt die Hauptkamera aus, übernimmt die nächste. Ohne Kamera sendet die Box Schwarz mit Stille. Dafür dekodiert die Box jede Kamera zweimal (mehr Rechenlast).</label>
+    </details>
+    <details class="subsec piponly" id="pipe_facecam"><summary>Facecam</summary>
+      <div class="ph">Wählen Sie das kleine Bild, dessen Kamera die Facecam ist. Der Ton bleibt dann bei dieser Kamera, auch wenn das Hauptbild wechselt (auch wenn die Facecam selbst zum Hauptbild getauscht wird). Mit „Keine Facecam“ folgt der Ton wie bisher immer dem Hauptbild. Die Tonquelle lässt sich jederzeit in der Fußleiste von Hand ändern; beim nächsten Tausch des Hauptbilds geht der Ton wieder zur Facecam. Die Wahl gilt sofort, ohne „Bildaufbau speichern“.</div>
+      <div id="fc_btns" class="fcbtns"></div>
+      <div id="fc_msg" class="ph" role="status"></div>
     </details>
     <div class="actions"><button id="p_save" type="button">Bildaufbau speichern</button><span class="muted" style="margin-left:.75rem">Läuft gerade eine Übertragung, wird sie bei einer Änderung kurz neu gestartet.</span></div>
     <div id="pipeerr" class="err"></div>
@@ -2159,12 +2168,13 @@ async function uaLoad(){ try{ const r=await fetch("/api/uiaccess"); if(r.ok) uaR
   try{ const r=await fetch("/api/previewaccess"); if(r.ok) paRender(await r.json()); }catch(e){} }
 function paRender(d){                                                                                 // Vorschau von außen: der Haken steht überall zur Wahl, auch über Tailscale (Wunsch des Nutzers)
   const c=$("pa_ext"); if(c!==document.activeElement) c.checked=!!d.external;
+  if(window.pbPrevSync) pbPrevSync(false);
 }
 $("pa_help_btn").addEventListener("click",()=>{ const h=$("pa_help"); h.hidden=!h.hidden; $("pa_help_btn").setAttribute("aria-expanded",String(!h.hidden)); });
 $("pa_ext").addEventListener("change",async e=>{
   $("pa_err").textContent="";
-  try{ paRender(await srtlaCall("POST","/api/previewaccess",{external:e.target.checked})); }
-  catch(x){ $("pa_err").textContent=x.message; e.target.checked=!e.target.checked; }
+  try{ paRender(await srtlaCall("POST","/api/previewaccess",{external:e.target.checked})); if(window.pbPrevSync) pbPrevSync(true); }
+  catch(x){ $("pa_err").textContent=x.message; e.target.checked=!e.target.checked; if(window.pbPrevSync) pbPrevSync(false); }
 });
 function uaRender(d){
   const c=$("ua_block"); if(c!==document.activeElement) c.checked=!!d.block_client_wifi;
@@ -2660,9 +2670,26 @@ function pipConstrain(v){
   document.querySelectorAll("#pipecard .camcols>.camcol").forEach((col,k)=>col.classList.toggle("slotoff",!(k<nSlots||(k===2&&pip2)||(k===3&&pip3))));
   renderPreview();
 }
+// Facecam: das kleine Bild wählen, dessen Kamera den Ton behält (gilt sofort, gespeichert wird die Kamera). Angezeigt wird je Knopf die Kamera, die dort gespeichert ist.
+function fcRender(d){
+  const box=$("fc_btns"); if(!box) return;
+  const c=d.config, byKey=Object.fromEntries((d.cameras||[]).map(x=>[x.key,x])), nm=k=>((byKey[k]||{}).name||k), fc=c.facecam||"";
+  const btn=(slot,title,sub,on,off)=>`<button type="button" class="sec fcb${on?" on":""}" data-slot="${slot}" aria-pressed="${on}"${off?" disabled":""}><b>${esc(title)}</b><span class="muted">${esc(sub)}</span></button>`;
+  setHtml(box,[["pip","Kleines Bild 1"],["pip2","Kleines Bild 2"],["pip3","Kleines Bild 3"]].map(([s,t])=>btn(s,t,c[s]?nm(c[s]):"nicht belegt",!!fc&&c[s]===fc,!c[s])).join("")
+    +btn("","Keine Facecam","Der Ton folgt dem Hauptbild",!fc,false));
+}
+async function fcRefresh(){ try{ fcRender(await srtlaCall("GET","/api/pipeline")); }catch(e){} }
+$("fc_btns").addEventListener("click",async e=>{
+  const b=e.target.closest("button.fcb"); if(!b||b.disabled) return; const m=$("fc_msg");
+  m.style.color=""; m.textContent="Wird gesetzt …";
+  try{ const r=await srtlaCall("POST","/api/pipeline/facecam",{slot:b.dataset.slot}); m.textContent=r.note||"Gespeichert. Der Ton wechselt sofort."; }
+  catch(x){ m.style.color="var(--crit)"; m.textContent=x.message; }
+  fcRefresh(); if(typeof sendLoad==="function") setTimeout(sendLoad,600);
+});
 async function pipeLoad(){
   try{ pipeData=await srtlaCall("GET","/api/pipeline"); }catch(e){ return; }
   const d=pipeData, c=d.config;
+  fcRender(d);
   pipCams=d.cameras; pipCorners=d.corners;
   pipLive=d.live||{};
   if(pipeDirty||pipDelayDirty){ $("pipeprev").textContent=d.preview||""; return; }   // ungespeicherte Eingaben nicht überschreiben
@@ -3704,10 +3731,12 @@ $("chat_form").addEventListener("submit",async e=>{
   const keepRow=document.querySelector(".prevkeep"), gear=$("prev_set");
   let gearOpen=false, hintTimer=0;                                                  // hintTimer: blendet den Hinweis "Vorschau von außen: klein …" nach einer Weile aus
   function syncKeep(){                                                              // mit Haken verschwindet das Feld; das Zahnrad in der Kopfzeile holt es zurück (zum Entfernen des Hakens)
-    gear.hidden=!keep.checked; if(!keep.checked) gearOpen=false;
-    keepRow.hidden=keep.checked&&!gearOpen; gear.setAttribute("aria-expanded",String(gearOpen));
+    const ext=$("pa_ext").checked;                                                  // der Schalter "von außen" verhält sich genauso: mit Haken verschwindet er, das Zahnrad holt ihn zurück
+    gear.hidden=!(keep.checked||ext); if(!keep.checked&&!ext) gearOpen=false;
+    keepRow.hidden=keep.checked&&!gearOpen; $("pa_box").hidden=ext&&!gearOpen; gear.setAttribute("aria-expanded",String(gearOpen));
   }
   gear.addEventListener("click",e=>{ e.preventDefault(); gearOpen=!gearOpen; syncKeep(); if(gearOpen) card.open=true; });
+  window.pbPrevSync=close=>{ if(close) gearOpen=false; syncKeep(); };                // aufgerufen, wenn der Stand von "von außen erlauben" von der Box kommt oder geändert wurde
   const running=()=>always()&&store("pb_prev_run")==="1";                          // "dauerhaft an" gewünscht: nach Seitenwechsel, Sendepause oder Verbindungsabbruch von selbst weiter
   function closeVideo(){                                                            // schließt die Verbindung für das Video (der Server beendet die Vorschau sofort)
     clearInterval(keepTimer); clearTimeout(dogTimer);
