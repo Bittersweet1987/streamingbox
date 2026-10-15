@@ -101,7 +101,8 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .cam .grip{display:none;cursor:grab;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;color:var(--muted);padding:4px 8px 4px 0;margin-right:2px;font-size:16px;line-height:1;letter-spacing:-3px;vertical-align:middle}
 .cam .grip:hover,.cam .grip:focus-visible{color:var(--text)}
 .cam.dragging{background:var(--card);box-shadow:0 4px 14px var(--shade);position:relative;z-index:5;border-radius:8px}
-.cam.dropbefore{box-shadow:inset 0 3px 0 var(--accent)}.cam.dropend{box-shadow:inset 0 -3px 0 var(--accent)}
+#cams{position:relative}
+.camdrop{position:absolute;left:0;right:0;height:5px;margin-top:-3px;background:var(--accent);border-radius:3px;z-index:30;pointer-events:none;box-shadow:0 0 0 2px var(--bg),0 0 10px var(--accent)}
 body.camdrag,body.camdrag *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 .cam .top .cn{flex:0 1 270px;min-width:0}
 .cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
@@ -1477,9 +1478,10 @@ $("cams").addEventListener("change",e=>{
 // Kameras per Anfasser (⋮⋮) ziehen. Die Zeile bleibt beim Ziehen an ihrem Platz im Dokument und folgt dem Finger nur per Verschiebung (translate), eine Linie zeigt, wo sie
 // landet; erst beim Loslassen wird die Stelle gespeichert. (Würde man die Zeile im Dokument umhängen, bricht auf dem Handy die Berührung ab.)
 (function camDragInit(){
-  const box=$("cams"); let drag=null;
-  const rows=()=>[...box.querySelectorAll(":scope > .cam")];
-  const clear=()=>{ rows().forEach(r=>r.classList.remove("dropbefore","dropend")); };
+  const box=$("cams"); let drag=null; const DIRKEY=Object.assign(Object.create(null),{ArrowUp:-1,ArrowDown:1});
+  const rows=()=>[...box.children].filter(r=>r.classList.contains("cam"));
+  let bar=null;                                    // Linie, die zeigt, wo die Zeile landet: eigenes Element über allem (am Rand der Zielzeile würde sie die gezogene Zeile verdecken)
+  const clear=()=>{ if(bar){ bar.remove(); bar=null; } };
   async function save(row,beforeId){
     const r=await fetch("/api/cameras/"+row.dataset.cid,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({move_before:beforeId||null})});
     if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verschieben fehlgeschlagen");
@@ -1491,8 +1493,9 @@ $("cams").addEventListener("change",e=>{
     return null;
   }
   function show(){
-    clear(); const row=drag.row, t=target(), all=rows();
-    if(t) t.classList.add("dropbefore"); else all[all.length-1].classList.add("dropend");
+    const row=drag.row, t=target(), all=rows(), last=all[all.length-1];
+    if(!bar){ bar=document.createElement("div"); bar.className="camdrop"; box.appendChild(bar); }
+    bar.style.top=(t?t.offsetTop:last.offsetTop+last.offsetHeight)+"px";
     const dy=drag.y+(window.scrollY||0)-drag.startPage; row.style.transform="translateY("+dy+"px)";
   }
   box.addEventListener("pointerdown",e=>{
@@ -1520,10 +1523,10 @@ $("cams").addEventListener("change",e=>{
   };
   box.addEventListener("pointerup",end); box.addEventListener("pointercancel",end);
   box.addEventListener("keydown",e=>{                           // Tastatur: Anfasser anwählen, Pfeil hoch/runter verschiebt
-    const g=e.target.closest&&e.target.closest(".grip"); if(!g||(e.key!=="ArrowUp"&&e.key!=="ArrowDown")) return;
-    e.preventDefault(); const row=g.closest(".cam"), all=rows(), i=all.indexOf(row), j=i+(e.key==="ArrowUp"?-1:1);
+    const g=e.target.closest&&e.target.closest(".grip"), dir=DIRKEY[e.key]; if(!g||!dir) return;
+    e.preventDefault(); const row=g.closest(".cam"), all=rows(), i=all.indexOf(row), j=i+dir;
     if(j<0||j>=all.length) return;
-    camDragging=true; const before=e.key==="ArrowUp"?all[j]:(all[j+1]||null);
+    camDragging=true; const before=dir<0?all[j]:(all[j+1]||null);
     save(row,before?before.dataset.cid:null).then(()=>{ const n=box.querySelector(`.cam[data-cid="${row.dataset.cid}"] .grip`); if(n) n.focus(); });
   });
 })();
