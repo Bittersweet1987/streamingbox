@@ -895,6 +895,13 @@ class LogModeSwitch(unittest.TestCase):
         self.assertIn("!!c.parked,!!c.is_main,!!c.in_pips", h)                                        # die Liste baut sich bei einer Änderung neu auf
         self.assertIn('c.is_main?" disabled":""', h)                                                  # das Hauptbild lässt sich nicht ausschalten
 
+    def test_switched_off_cameras_are_not_listed_in_the_status_overview(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        i = h.index("function renderCamLights(list){")
+        self.assertIn("list=list.filter(c=>!c.parked);", h[i:i + 400])                              # Status: Übersicht der Kameras
+        self.assertIn('(list||[]).filter(c=>!c.parked).slice(0,4)', h)                              # Punkte in der Chat-Karte
+        self.assertEqual(h.count("c.parked?'<span class=\"tag\">aus (gewollt)</span>'"), 1)        # in der Kameraliste bleibt sie sichtbar, mit Markierung
+
     def test_script_has_no_network_and_no_shell(self):
         src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
         self.assertNotIn("shell=True", src)
