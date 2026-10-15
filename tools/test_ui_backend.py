@@ -642,6 +642,68 @@ class BtDriverButton(unittest.TestCase):
         self.assertEqual(bd.status()["state"], "working")
 
 
+class LayoutViews(unittest.TestCase):
+    """Ansichten Desktop und Mobil auf der Box: je Ansicht Reihenfolge, Ausgeblendetes und Design, streng geprüft."""
+
+    def store(self):
+        return server.LayoutStore(tempfile.mkdtemp())
+
+    def test_empty_box_has_two_default_views_and_is_not_set(self):
+        r = self.store().get()
+        self.assertFalse(r["set"])
+        self.assertEqual(r["desktop"], {"order": [], "hidden": [], "design": ""})
+        self.assertEqual(r["mobile"], r["desktop"])
+
+    def test_the_views_are_stored_separately_and_stay(self):
+        st = self.store()
+        st.put("desktop", {"hidden": ["c_chat", "c_prev"], "design": "kompakt"})
+        st.put("mobile", {"order": ["c_cams", "c_status"]})
+        r = server.LayoutStore(os.path.dirname(st.path)).get()                    # frisch von der Platte
+        self.assertTrue(r["set"])
+        self.assertEqual(r["desktop"], {"order": [], "hidden": ["c_chat", "c_prev"], "design": "kompakt"})
+        self.assertEqual(r["mobile"], {"order": ["c_cams", "c_status"], "hidden": [], "design": ""})
+
+    def test_only_the_given_fields_change(self):
+        st = self.store()
+        st.put("mobile", {"hidden": ["c_chat"], "design": "klar"})
+        r = st.put("mobile", {"order": ["c_cams"]})
+        self.assertEqual(r["mobile"], {"order": ["c_cams"], "hidden": ["c_chat"], "design": "klar"})
+
+    def test_input_is_checked(self):
+        st = self.store()
+        with self.assertRaises(ValueError):
+            st.put("tablet", {})
+        with self.assertRaises(ValueError):
+            st.put("desktop", "x")
+        r = st.put("desktop", {"hidden": ["c_chat", "c_chat", "../x", "A", 5, None, "ok_1", "x" * 41], "order": "kaputt", "design": "bunt"})
+        self.assertEqual(r["desktop"], {"order": [], "hidden": ["c_chat", "ok_1"], "design": ""})
+        r = st.put("desktop", {"hidden": ["m%d" % i for i in range(500)]})
+        self.assertEqual(len(r["desktop"]["hidden"]), server.LayoutStore.MAX_IDS)
+
+    def test_broken_file_gives_defaults(self):
+        st = self.store()
+        with open(st.path, "w") as f:
+            f.write("{kaputt")
+        r = st.get()
+        self.assertFalse(r["set"])
+        self.assertEqual(r["desktop"]["hidden"], [])
+
+    def test_first_start_takes_over_once_and_never_overwrites(self):
+        st = self.store()
+        r = st.init({"desktop": {"hidden": ["c_chat"], "design": "klar"}, "mobile": {"order": ["c_cams"]}})
+        self.assertTrue(r["set"])
+        self.assertEqual((r["desktop"]["hidden"], r["desktop"]["design"], r["mobile"]["order"]), (["c_chat"], "klar", ["c_cams"]))
+        r = st.init({"desktop": {"hidden": ["c_status"]}, "mobile": {}})                    # ein zweites Gerät
+        self.assertEqual(r["desktop"]["hidden"], ["c_chat"])
+        with self.assertRaises(ValueError):
+            self.store().init("x")
+
+    def test_file_is_not_readable_by_everyone(self):
+        st = self.store()
+        st.put("desktop", {})
+        self.assertEqual(stat.S_IMODE(os.stat(st.path).st_mode) & 0o007 if os.name == "posix" else 0, 0)
+
+
 class LogModeSwitch(unittest.TestCase):
     """Protokoll-Modus: Oberfläche legt nur ein festes Stichwort ab, der Root-Helfer stellt um."""
 
