@@ -2,6 +2,12 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.51
+- **Facecam: Der Ton bleibt bei der Facecam, auch wenn das Hauptbild wechselt (Wunsch von Bittersweet, 15. Oktober 2026).** Neues Untermenü **Facecam** unter „Bildaufbau“ mit den Knöpfen „Kleines Bild 1“, „Kleines Bild 2“, „Kleines Bild 3“ und „Keine Facecam“; unter jedem Knopf steht die Kamera, die dort gespeichert ist. Die Wahl gilt sofort (ohne „Bildaufbau speichern“), der Ton wechselt live wie bei der Fußleiste. Gespeichert wird die **Kamera**, nicht der Platz (`facecam` in `pipeline.json`, `POST /api/pipeline/facecam`): Beim Tausch des Hauptbilds bleibt der Ton bei ihr, auch wenn sie selbst zum Hauptbild getauscht wird (der Ton geht mit ihr ins Hauptbild und beim Zurücktauschen wieder mit). Eine von Hand in der Fußleiste gewählte Tonquelle gilt bis zum nächsten Tausch des Hauptbilds, dann geht der Ton wieder zur Facecam. **Ohne Facecam** gilt die bisherige Logik: Der Ton folgt dem wechselnden Hauptbild. Beim Speichern des Bildaufbaus folgt die Facecam ihrem kleinen Bild (eine andere Kamera dort wird die neue Facecam); eine deaktivierte Kamera kann nicht die Facecam sein. Die Facecam allein ändert den Aufbau nicht, die Sendung startet dafür nie neu.
+  - **Zusätzlich:** Liegt der Ton auf einem kleinen Bild, dessen Kamera nicht im Bild ist (ausgefallen oder selbst als Ersatz Hauptbild geworden), spielt die Engine „Alle Kameras immer bereit“ jetzt den Ton des Hauptbilds statt Stille (`pipbox_live.py`).
+  - **Vorschau:** „Vorschau auch von außen erlauben (verbraucht Upload)“ verschwindet mit gesetztem Haken wie der Haken zur Rechenleistung; das Zahnrad ⚙ in der Kopfzeile der Karte holt beide Schalter zurück.
+  - Neue Texte nur Deutsch und Englisch. Tests: `tools/test_ui_backend.py` (`Facecam`, 11), `tools/test_live.py` (`FacecamAudio`, 2), `tools/test_ui_layout.py` (3). Auf der Box von Marco eingespielt (Oberfläche und Knöpfe angesehen; ein Wechsel mit zwei laufenden Kameras wurde noch nicht durchgespielt).
+
 ## 1.0.50
 - Kameraliste am Handy: Die Ziel-Linie beim Ziehen bleibt sichtbar (auch beim Hochziehen); englische Texte für den Anfasser.
 - Behoben: Eine mit „Ausschalten“ getrennte DJI-Kamera blieb nach einem Neustart nicht aus. Der Zustand steht jetzt in der Konfiguration; „Verbinden“ hebt ihn auf.
