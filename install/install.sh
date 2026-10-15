@@ -227,12 +227,14 @@ PY
     for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch belacoder-no-reconfigure.patch belacoder-audio-eos.patch; do
       cmp -s "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp" || bc_changed=1
     done
+    cmp -s "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh || bc_changed=1       # auch das Bauskript: Es trägt die Kennung ("-sb12-eos") und die Reihenfolge der Patches; ändert sich nur es, muss trotzdem neu gebaut werden (1.0.39 blieb sonst auf der Kennung sb13 von 1.0.38)
     [ -x /opt/pipbox/bin/belacoder ] || bc_changed=1
     if [ "$bc_changed" = 1 ]; then
       if sh "$HERE/belacoder/build.sh"; then
         for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch belacoder-no-reconfigure.patch belacoder-audio-eos.patch; do
           install -m 644 "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp"
         done
+        install -m 644 "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh
       else
         echo "WARNUNG: belacoder mit dem toleranten Regler konnte nicht gebaut werden (braucht git, gcc, patch, Internet). Es bleibt das Original."
       fi
