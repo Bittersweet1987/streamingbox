@@ -98,6 +98,11 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .cam .top{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap}
 /* Eine Zeile je Kamera: Name | Verbindung | Signal (fps, Mbit/s) | Entfernen. Die Verbindung steht als Spalte vor dem Signal (spart die eigene Zeile darunter); das Signal hat eine feste Mindestbreite und gleich breite Ziffern, damit nichts wackelt. */
 .cam .top .cl{flex:1 1 200px;min-width:0}
+.cam .grip{display:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--muted);padding:4px 8px 4px 0;margin-right:2px;font-size:16px;line-height:1;letter-spacing:-3px;vertical-align:middle}
+.cam .grip:hover,.cam .grip:focus-visible{color:var(--text)}
+@media(max-width:620px){.cam .grip{display:inline-block;font-size:20px;padding:8px 10px 8px 0}.cam .top .cr .mv{display:none}}        /* Handy: Anfasser statt Pfeile (die Reihenfolge bestimmt dort die Plätze der Kamera-Knöpfe unten); am Rechner bleiben die Pfeile */
+.cam.dragging{background:var(--card);box-shadow:0 4px 14px var(--shade);position:relative;z-index:5;opacity:.92}
+body.camdrag,body.camdrag *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 .cam .top .cn{flex:0 1 270px;min-width:0}
 .cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
 .cam .top .dyn{display:inline-block;min-width:9.6em;text-align:right;font-variant-numeric:tabular-nums}
@@ -1345,7 +1350,9 @@ $("cams").addEventListener("click",async e=>{
   tick(); if(typeof djiLoad==="function") djiLoad();
 });
 const qrCan=c=>!!c.url&&c.via_src!=="hdmi"&&!(c.key||"").startsWith("dji-");   // RTMP-Kameras wie ein Handy; DJI und HDMI richtet die Box selbst ein
+var camDragging=false;
 function renderCams(list){
+  if(camDragging) return;                       // beim Ziehen bleibt die Liste stehen, sonst springt die Zeile unter dem Finger weg
   const box=$("cams");
   lastCams=list;
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
@@ -1353,7 +1360,8 @@ function renderCams(list){
   // Eine Kamera, die nicht mehr sendet (zum Beispiel beim Wechsel des Netzes), bleibt noch zwei Minuten oben und rutscht erst dann nach unten (Wunsch des Nutzers, 12. Oktober 2026)
   const nowMs=Date.now();
   for(const c of list) if(c.state==="live"||c.state==="unknown") camSeenLive[c.id]=nowMs;
-  const quiet=c=>c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1;
+  // Reihenfolge: zuerst Kameras mit Signal (in der gespeicherten Reihenfolge), dann Kameras ohne Signal (rot), ganz unten die gewollt ausgeschalteten (Wunsch des Nutzers, 15. Oktober 2026)
+  const quiet=c=>c.parked?2:(c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1);
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
   const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||"",!!c.parked,!!c.is_main,!!c.in_pips]),netOpts,qrOut,[...qrHelp],connNames]);
@@ -1362,7 +1370,7 @@ function renderCams(list){
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
     box.innerHTML=list.length?list.map((c,i)=>
-      `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}${c.parked?'<span class="tag">aus (gewollt)</span>':""}</span>
+      `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="grip" role="button" tabindex="0" title="Zum Verschieben ziehen" aria-label="Kamera verschieben (ziehen oder mit den Pfeiltasten)">⋮⋮</span><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}${c.parked?'<span class="tag">aus (gewollt)</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
       <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}${camOffBtn(c)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${(c.key||"").startsWith("dji-")?`<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div><div class="netlock" data-lockkey="${esc(c.key)}" hidden></div>`:""}${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro: zuerst den Hotspot der Box einrichten und die GoPro damit verbinden (GoPro-App), dann bei Labs-Firmware die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
@@ -1452,6 +1460,48 @@ $("cams").addEventListener("change",e=>{
   const t=e.target.closest(".qrsel"); if(!t) return;
   qrApp[t.dataset.id]=t.value; delete qrOut[t.dataset.id]; renderCams(lastCams);
 });
+// Kameras per Anfasser (⋮⋮) ziehen: Zeile folgt dem Finger/der Maus, beim Loslassen wird die Stelle gespeichert (vor die Kamera darunter, sonst ans Ende)
+(function camDragInit(){
+  const box=$("cams"); let drag=null;
+  const rows=()=>[...box.querySelectorAll(":scope > .cam")];
+  async function drop(row,keyboardDelta){
+    const all=rows(), i=all.indexOf(row), next=all[i+1];
+    const r=await fetch("/api/cameras/"+row.dataset.cid,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({move_before:next?next.dataset.cid:null})});
+    if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verschieben fehlgeschlagen");
+    box.dataset.sig=""; camDragging=false; await tick();
+  }
+  box.addEventListener("pointerdown",e=>{
+    const g=e.target.closest&&e.target.closest(".grip"); if(!g||(e.pointerType==="mouse"&&e.button!==0)) return;
+    const row=g.closest(".cam"); if(!row||rows().length<2) return;
+    e.preventDefault(); camDragging=true; drag={row,id:e.pointerId,moved:false,y:e.clientY};
+    try{ g.setPointerCapture(e.pointerId); }catch(x){}
+    row.classList.add("dragging"); document.body.classList.add("camdrag");
+  });
+  box.addEventListener("pointermove",e=>{
+    if(!drag||e.pointerId!==drag.id) return;
+    const row=drag.row, all=rows(), y=e.clientY;
+    if(Math.abs(y-drag.y)>3) drag.moved=true;
+    // die Zeile unter dem Zeiger suchen und davor oder dahinter einfügen
+    for(const o of all){ if(o===row) continue; const b=o.getBoundingClientRect();
+      if(y>=b.top&&y<=b.bottom){ const before=y<b.top+b.height/2; if(before) box.insertBefore(row,o); else box.insertBefore(row,o.nextSibling); break; } }
+    if(y<60) window.scrollBy(0,-12); else if(y>innerHeight-60) window.scrollBy(0,12);          // am Rand der Anzeige weiterblättern
+  });
+  const end=e=>{
+    if(!drag||e.pointerId!==drag.id) return;
+    const row=drag.row, moved=drag.moved; drag=null;
+    row.classList.remove("dragging"); document.body.classList.remove("camdrag");
+    if(e.type==="pointercancel"||!moved){ camDragging=false; box.dataset.sig=""; tick(); return; }
+    drop(row);
+  };
+  box.addEventListener("pointerup",end); box.addEventListener("pointercancel",end);
+  box.addEventListener("keydown",e=>{                           // Tastatur: Anfasser fokussieren, Pfeil hoch/runter verschiebt
+    const g=e.target.closest&&e.target.closest(".grip"); if(!g||(e.key!=="ArrowUp"&&e.key!=="ArrowDown")) return;
+    e.preventDefault(); const row=g.closest(".cam"), all=rows(), i=all.indexOf(row), j=i+(e.key==="ArrowUp"?-1:1);
+    if(j<0||j>=all.length) return;
+    camDragging=true; if(e.key==="ArrowUp") box.insertBefore(row,all[j]); else box.insertBefore(row,all[j].nextSibling);
+    drop(row).then(()=>{ const n=box.querySelector(`.cam[data-cid="${row.dataset.cid}"] .grip`); if(n) n.focus(); });
+  });
+})();
 $("cams").addEventListener("click",async e=>{
   const b=e.target.closest(".mv"); if(!b||b.disabled||!b.dataset.with) return;
   const r=await fetch("/api/cameras/"+b.dataset.id,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({swap_with:b.dataset.with})});
