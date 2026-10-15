@@ -517,7 +517,7 @@ class Camera:
         c.update({"addr": self.addr, "state": self.state, "detail": self.detail,
                   "battery": self.battery, "charging": self.charging,
                   "battery_age": int(time.time() - self.battery_at) if self.battery_at else None,
-                  "in_range": time.time() - self.last_seen < 30,
+                  "in_range": time.time() - self.last_seen < 30, "manual_off": bool(self.manual_off),
                   "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked(),
                   "switch_wait": self.switch_wait()})
         return c

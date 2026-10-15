@@ -360,7 +360,8 @@ class OutageWatch:
             self.closed.add((kind, int(t)))
         return True
 
-    def alerts(self, cameras, hdmi=None):
+    def alerts(self, cameras, hdmi=None, parked=()):
+        """parked: Schlüssel von Kameras, die der Nutzer bewusst ausgeschaltet hat (im Bildaufbau deaktiviert, DJI getrennt oder ohne automatisches Verbinden): keine Ausfall-Meldung."""
         now = self.clock()
         out = []
         with self.lock:
@@ -372,6 +373,9 @@ class OutageWatch:
                     continue
                 keys.add(key)
                 state = c.get("state")
+                if key in parked:
+                    self.since.pop(key, None)                       # gewollt aus: kein Ausfall; kommt sie zurück und fällt später aus, beginnt die Zeit neu
+                    continue
                 if state == "live":
                     self.seen[key] = True
                     self.since.pop(key, None)
@@ -4494,15 +4498,24 @@ class DjiService:
         hit = getattr(self, "_extras", None)
         if hit and now - hit[0] < self.EXTRAS_TTL:
             return hit[1]
-        out = {}
+        out, parked = {}, set()
         try:
             for c in self._call({"cmd": "state"}, timeout=2).get("cameras", []):
                 if c.get("rtmp_key") and c.get("battery") is not None:
                     out[c["rtmp_key"]] = {"battery": c["battery"], "battery_age": c.get("battery_age"), "charging": c.get("charging")}
+                # bewusst aus: "Trennen" gedrückt oder ohne automatisches Verbinden, und die Kamera streamt gerade nicht
+                if c.get("rtmp_key") and (c.get("manual_off") or not c.get("autoconnect")) and c.get("state") not in ("streaming", "status"):
+                    parked.add(c["rtmp_key"])
         except (RuntimeError, ValueError):
             pass
         self._extras = (now, out)
+        self._parked = parked
         return out
+
+    def parked_keys(self):
+        """Schlüssel der DJI-Kameras, die der Nutzer bewusst ausgeschaltet hat (aus demselben Zustand wie camera_extras, 3 Sekunden zwischengespeichert)."""
+        self.camera_extras()
+        return set(getattr(self, "_parked", set()))
 
     def _ensure_listed(self, cameras):
         """Jede Kamera des Dienstes steht auch in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
@@ -9302,9 +9315,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             m["cameras"] = self.cams.listing(self.host(), self.djisvc.host_for_key)
+            parked = set()
+            try:                                                           # bewusst ausgeschaltete Kameras: im Bildaufbau deaktiviert oder DJI getrennt
+                pc = self.pipeline.cfg
+                inactive = set(pc.get("inactive") or []) if pc.get("type") == "pip" else set()
+                parked = inactive | self.djisvc.parked_keys()
+                pips = {pc.get(k) for k in ("pip", "pip2", "pip3") if pc.get(k)} if pc.get("type") == "pip" else set()
+                for c in m["cameras"]:
+                    c["parked"] = c.get("key") in parked
+                    c["is_main"] = pc.get("type") == "pip" and c.get("key") == pc.get("main")
+                    c["in_pips"] = c.get("key") in pips
+            except Exception:
+                pass
             try:
                 hs = self.hdmi.status() if self.hdmi else None
-                m["alerts"] = list(m.get("alerts") or []) + self.outages.alerts(m["cameras"], hs)
+                m["alerts"] = list(m.get("alerts") or []) + self.outages.alerts(m["cameras"], hs, parked)
             except Exception:
                 pass
             extras = self.djisvc.camera_extras()
