@@ -2,6 +2,7 @@
 alle Plätze, feste Ausgabe), Befehle für den Steuerkanal (nur Änderungen, oberstes Bild zuletzt), Regler (Zweige starten/stoppen, Wahl von Haupt- und
 kleinen Bildern, anderer Schlüssel ohne Neustart, Ansicht) und die Anbindung an server.py. Die echte Kette wurde mit Messskripten auf der Box geprüft (nicht mehr im Repository, siehe Git-Historie bis 0.9.144)."""
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -560,6 +561,32 @@ class SwapOrder(unittest.TestCase):
         self.assertIn(f"queue name=sbf0_q max-size-buffers={L.BRANCH_QUEUE_BUFFERS} max-size-bytes=0 max-size-time=0 ! pipcomp.sink_0", txt)
         self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1050, "a", uniform=True), {"a": 450, "b": 450})
         self.assertEqual(L.hold_delays({"a": 0, "b": 0}, 1050, "a"), {"a": 450, "b": 50})              # ohne uniform wie bisher
+
+
+class BelacoderLabel(unittest.TestCase):
+    """Die Zahl hinter "-sb" in der Kennung des gebauten belacoder steuert die Engine (engine_level): ab COPY_LEVEL gelten Puffer 1350 ms und 1000 ms Vorlauf für das Hauptbild.
+    Der Kopier-Patch kopiert aber nur vergrößerte Bilder; mit "-sb13" fielen beim Tausch des Hauptbilds die Bilder auf 18,8/s (Testbox, 15. Oktober 2026)."""
+
+    def label(self):
+        sh = open(os.path.join(os.path.dirname(HERE), "belacoder", "build.sh"), encoding="utf-8").read()
+        m = re.search(r'-DVERSION=\\"\$\{COMMIT%\$\{COMMIT#\?+\}\}(-[^"\\]+)\\"', sh)
+        self.assertTrue(m, "Kennung in build.sh nicht gefunden")
+        return "ccce9ca" + m.group(1)
+
+    def test_the_label_of_the_build_stays_below_the_copy_level(self):
+        label = self.label()
+        self.assertEqual(label, "ccce9ca-jt2-sb12-eos")
+        level = int(re.search(r"-sb(\d+)", label).group(1))
+        self.assertLess(level, L.COPY_LEVEL)
+
+    def test_the_engine_reads_twelve_from_that_label(self):
+        label = self.label()
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(L.os, "stat", return_value=mock.Mock(st_mtime=123.0)), \
+                mock.patch.object(L.subprocess, "run", return_value=mock.Mock(stdout=label + "\n")), mock.patch.dict(L._ENG, {"mtime": None, "level": 0}):
+            os.environ.pop("PIPBOX_ENGINE", None)
+            self.assertEqual(L.engine_level(), 12)
+            c = safe({"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0})
+            self.assertEqual(L.buffer_ms(c), L.BUFFER_MIN_MS)                                          # 1050 ms, nicht 1350
 
 
 class ControllerTests(unittest.TestCase):
