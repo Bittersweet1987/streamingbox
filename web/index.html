@@ -98,14 +98,15 @@ header .hdr .updbtn{border-color:var(--warn);background:rgba(245,158,11,.12);col
 .cam .top{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap}
 /* Eine Zeile je Kamera: Name | Verbindung | Signal (fps, Mbit/s) | Entfernen. Die Verbindung steht als Spalte vor dem Signal (spart die eigene Zeile darunter); das Signal hat eine feste Mindestbreite und gleich breite Ziffern, damit nichts wackelt. */
 .cam .top .cl{flex:1 1 200px;min-width:0}
-.cam .grip{display:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--muted);padding:4px 8px 4px 0;margin-right:2px;font-size:16px;line-height:1;letter-spacing:-3px;vertical-align:middle}
+.cam .grip{display:none;cursor:grab;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;color:var(--muted);padding:4px 8px 4px 0;margin-right:2px;font-size:16px;line-height:1;letter-spacing:-3px;vertical-align:middle}
 .cam .grip:hover,.cam .grip:focus-visible{color:var(--text)}
-@media(max-width:620px){.cam .grip{display:inline-block;font-size:20px;padding:8px 10px 8px 0}.cam .top .cr .mv{display:none}}        /* Handy: Anfasser statt Pfeile (die Reihenfolge bestimmt dort die Plätze der Kamera-Knöpfe unten); am Rechner bleiben die Pfeile */
-.cam.dragging{background:var(--card);box-shadow:0 4px 14px var(--shade);position:relative;z-index:5;opacity:.92}
+.cam.dragging{background:var(--card);box-shadow:0 4px 14px var(--shade);position:relative;z-index:5;border-radius:8px}
+.cam.dropbefore{box-shadow:inset 0 3px 0 var(--accent)}.cam.dropend{box-shadow:inset 0 -3px 0 var(--accent)}
 body.camdrag,body.camdrag *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 .cam .top .cn{flex:0 1 270px;min-width:0}
 .cam .top .cr{flex:0 0 auto;margin-left:auto;white-space:nowrap}
 .cam .top .dyn{display:inline-block;min-width:9.6em;text-align:right;font-variant-numeric:tabular-nums}
+@media(max-width:620px){.cam .grip{display:inline-block;font-size:28px;letter-spacing:-4px;padding:8px 18px 8px 2px;margin-right:4px}.cam .top .cr .mv{display:none}.cam .top .cr{flex:1 1 100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:8px;margin-left:0;white-space:normal}.cam .top .cr .dyn{flex:1 1 100%;min-width:0;text-align:left}}        /* Handy: Anfasser statt Pfeile (die Reihenfolge bestimmt dort die Plätze der Kamera-Knöpfe unten); am Rechner bleiben die Pfeile */
 .chatbox .cm.gone .cb{text-decoration:line-through;color:var(--muted)}
 .chatbox .bdg{display:inline-block;box-sizing:border-box;min-width:16px;text-align:center;font-size:10px;font-weight:700;line-height:1;padding:2px 3px;margin-right:5px;border-radius:4px;vertical-align:1px;color:#0f172a}
 .chatbox .bdg.broadcaster{background:#e91916}.chatbox .bdg.moderator{background:#00ad03}.chatbox .bdg.vip{background:#e005b9;color:#fff}
@@ -1460,46 +1461,57 @@ $("cams").addEventListener("change",e=>{
   const t=e.target.closest(".qrsel"); if(!t) return;
   qrApp[t.dataset.id]=t.value; delete qrOut[t.dataset.id]; renderCams(lastCams);
 });
-// Kameras per Anfasser (⋮⋮) ziehen: Zeile folgt dem Finger/der Maus, beim Loslassen wird die Stelle gespeichert (vor die Kamera darunter, sonst ans Ende)
+// Kameras per Anfasser (⋮⋮) ziehen. Die Zeile bleibt beim Ziehen an ihrem Platz im Dokument und folgt dem Finger nur per Verschiebung (translate), eine Linie zeigt, wo sie
+// landet; erst beim Loslassen wird die Stelle gespeichert. (Würde man die Zeile im Dokument umhängen, bricht auf dem Handy die Berührung ab.)
 (function camDragInit(){
   const box=$("cams"); let drag=null;
   const rows=()=>[...box.querySelectorAll(":scope > .cam")];
-  async function drop(row,keyboardDelta){
-    const all=rows(), i=all.indexOf(row), next=all[i+1];
-    const r=await fetch("/api/cameras/"+row.dataset.cid,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({move_before:next?next.dataset.cid:null})});
+  const clear=()=>{ rows().forEach(r=>r.classList.remove("dropbefore","dropend")); };
+  async function save(row,beforeId){
+    const r=await fetch("/api/cameras/"+row.dataset.cid,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({move_before:beforeId||null})});
     if(!r.ok) alert((await r.json().catch(()=>({}))).error||"Verschieben fehlgeschlagen");
     box.dataset.sig=""; camDragging=false; await tick();
+  }
+  function target(){      // Zeile, vor die die gezogene Zeile kommt (null = ans Ende)
+    const row=drag.row, sy=window.scrollY||0, center=drag.centerPage+(drag.y+sy-drag.startPage);
+    for(const o of rows()){ if(o===row) continue; const b=o.getBoundingClientRect(); if(b.top+sy+b.height/2>center) return o; }
+    return null;
+  }
+  function show(){
+    clear(); const row=drag.row, t=target(), all=rows();
+    if(t) t.classList.add("dropbefore"); else all[all.length-1].classList.add("dropend");
+    const dy=drag.y+(window.scrollY||0)-drag.startPage; row.style.transform="translateY("+dy+"px)";
   }
   box.addEventListener("pointerdown",e=>{
     const g=e.target.closest&&e.target.closest(".grip"); if(!g||(e.pointerType==="mouse"&&e.button!==0)) return;
     const row=g.closest(".cam"); if(!row||rows().length<2) return;
-    e.preventDefault(); camDragging=true; drag={row,id:e.pointerId,moved:false,y:e.clientY};
+    e.preventDefault(); camDragging=true;
+    const b=row.getBoundingClientRect(), sy=window.scrollY||0;
+    drag={row,id:e.pointerId,moved:false,y:e.clientY,startPage:e.clientY+sy,centerPage:b.top+sy+b.height/2};
     try{ g.setPointerCapture(e.pointerId); }catch(x){}
     row.classList.add("dragging"); document.body.classList.add("camdrag");
   });
   box.addEventListener("pointermove",e=>{
     if(!drag||e.pointerId!==drag.id) return;
-    const row=drag.row, all=rows(), y=e.clientY;
-    if(Math.abs(y-drag.y)>3) drag.moved=true;
-    // die Zeile unter dem Zeiger suchen und davor oder dahinter einfügen
-    for(const o of all){ if(o===row) continue; const b=o.getBoundingClientRect();
-      if(y>=b.top&&y<=b.bottom){ const before=y<b.top+b.height/2; if(before) box.insertBefore(row,o); else box.insertBefore(row,o.nextSibling); break; } }
-    if(y<60) window.scrollBy(0,-12); else if(y>innerHeight-60) window.scrollBy(0,12);          // am Rand der Anzeige weiterblättern
+    drag.y=e.clientY; if(Math.abs(e.clientY+(window.scrollY||0)-drag.startPage)>3) drag.moved=true;
+    if(drag.moved) show();
+    if(e.clientY<60) window.scrollBy(0,-12); else if(e.clientY>innerHeight-60) window.scrollBy(0,12);          // am Rand der Anzeige weiterblättern
   });
   const end=e=>{
     if(!drag||e.pointerId!==drag.id) return;
-    const row=drag.row, moved=drag.moved; drag=null;
-    row.classList.remove("dragging"); document.body.classList.remove("camdrag");
-    if(e.type==="pointercancel"||!moved){ camDragging=false; box.dataset.sig=""; tick(); return; }
-    drop(row);
+    const row=drag.row, moved=drag.moved, t=moved&&e.type!=="pointercancel"?target():undefined; drag=null;
+    row.classList.remove("dragging"); row.style.transform=""; clear(); document.body.classList.remove("camdrag");
+    const all=rows(), next=all[all.indexOf(row)+1]||null;
+    if(t===undefined||t===next){ camDragging=false; if(moved){ box.dataset.sig=""; tick(); } return; }          // abgebrochen oder an derselben Stelle losgelassen
+    save(row,t?t.dataset.cid:null);
   };
   box.addEventListener("pointerup",end); box.addEventListener("pointercancel",end);
-  box.addEventListener("keydown",e=>{                           // Tastatur: Anfasser fokussieren, Pfeil hoch/runter verschiebt
+  box.addEventListener("keydown",e=>{                           // Tastatur: Anfasser anwählen, Pfeil hoch/runter verschiebt
     const g=e.target.closest&&e.target.closest(".grip"); if(!g||(e.key!=="ArrowUp"&&e.key!=="ArrowDown")) return;
     e.preventDefault(); const row=g.closest(".cam"), all=rows(), i=all.indexOf(row), j=i+(e.key==="ArrowUp"?-1:1);
     if(j<0||j>=all.length) return;
-    camDragging=true; if(e.key==="ArrowUp") box.insertBefore(row,all[j]); else box.insertBefore(row,all[j].nextSibling);
-    drop(row).then(()=>{ const n=box.querySelector(`.cam[data-cid="${row.dataset.cid}"] .grip`); if(n) n.focus(); });
+    camDragging=true; const before=e.key==="ArrowUp"?all[j]:(all[j+1]||null);
+    save(row,before?before.dataset.cid:null).then(()=>{ const n=box.querySelector(`.cam[data-cid="${row.dataset.cid}"] .grip`); if(n) n.focus(); });
   });
 })();
 $("cams").addEventListener("click",async e=>{
