@@ -34,7 +34,10 @@ patch -p1 --quiet < "$HERE/belacoder-no-reconfigure.patch"
 patch -p1 --quiet < "$HERE/belacoder-audio-eos.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
-gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb13\" belacoder.c -o belacoder.new \
+# ACHTUNG Kennung: Die Engine (pipbox_live.py, engine_level) liest die Zahl hinter "-sb" als Fähigkeit des belacoder: ab 13 glaubt sie, das ganzflächige Hauptbild werde kopiert, und
+# nimmt einen größeren Puffer (1350 statt 1050 ms) und mehr Vorlauf für das Hauptbild (1000 statt 600 ms). Der Kopier-Patch kopiert aber nur VERGRÖSSERTE Bilder. Darum bleibt die Zahl 12;
+# neue Patches hängen einen Zusatz an ("-sb12-eos"), sie zählen nie hoch (Testbox, 15. Oktober 2026: mit "-sb13" Einbrüche beim Tausch des Hauptbilds auf 18,8 statt mindestens 27,8 Bilder/s).
+gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12-eos\" belacoder.c -o belacoder.new \
   -I"$R/usr/include/gstreamer-1.0" -I"$R/usr/lib/aarch64-linux-gnu/gstreamer-1.0/include" \
   -I"$R/usr/include/glib-2.0" -I"$R/usr/lib/aarch64-linux-gnu/glib-2.0/include" -I/usr/include/srt \
   -l:libgstapp-1.0.so.0 -l:libgstbase-1.0.so.0 -l:libgstreamer-1.0.so.0 -l:libgobject-2.0.so.0 -l:libglib-2.0.so.0 -lsrt -ldl
