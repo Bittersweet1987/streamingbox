@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.41
+- **Bluetooth: „Treiber jetzt einrichten“ ist neutral, wenn der Treiber schon eingerichtet ist.** Der Knopf war immer blau, auch wenn der Stick oder der Bluetooth-Chip des Boards schon grün („bereit“) lief; das wirkte, als müsse man noch etwas tun. Jetzt bekommt er die neutrale Farbe (wie „Sekundär“-Knöpfe), sobald der Treiber eingerichtet ist (Stand `ok` beim Stick, oder Board-Chip `ok` ohne Stick) und gerade nichts läuft; in allen anderen Fällen (wartet, läuft, fehlgeschlagen, nicht unterstützt) bleibt er blau. Der Knopf selbst bleibt benutzbar. Test in `tools/test_ui_backend.py`.
+
 ## 1.0.40
 - **Das Update baut belacoder auch dann neu, wenn sich nur das Bauskript ändert (Korrektur zu 1.0.39).** `install.sh` verglich bisher nur die Patch-Dateien; 1.0.39 änderte aber nur `build.sh` (Kennung `-sb12-eos` statt `-sb13`), deshalb wurde nichts gebaut, und Boxen, die schon auf 1.0.38 waren, blieben auf dem belacoder mit der falschen Kennung (auf der Testbox gesehen: Version 1.0.39, `belacoder -v` weiter `-sb13`, „buffer 1350 ms“). **Jetzt:** `install.sh` vergleicht auch `build.sh` mit der zuletzt installierten Kopie (`/opt/pipbox/belacoder/build.sh`) und legt sie nach einem erfolgreichen Bau dort ab; beim ersten Update mit dieser Fassung baut jede Box einmal neu. Test in `tools/test_live.py` (`BelacoderLabel`). Das Update baut belacoder (Internet, einige Minuten).
 
