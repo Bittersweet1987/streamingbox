@@ -1635,12 +1635,16 @@ class CameraOrder(unittest.TestCase):
         h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
         self.assertIn('<span class="grip" role="button" tabindex="0"', h)
         self.assertIn("touch-action:none", h[h.index(".cam .grip{"):h.index(".cam .grip{") + 200])      # sonst blättert die Seite statt zu ziehen
-        self.assertIn("JSON.stringify({move_before:next?next.dataset.cid:null})", h)
+        self.assertIn("JSON.stringify({move_before:beforeId||null})", h)
+        self.assertNotIn("box.insertBefore(row", h)                                                  # die gezogene Zeile wird nie umgehängt (sonst bricht die Berührung auf dem Handy ab)
+        self.assertIn('row.style.transform="translateY("', h)
         self.assertIn("if(camDragging) return;", h)                                                  # beim Ziehen baut sich die Liste nicht neu auf
         self.assertIn('e.key!=="ArrowUp"&&e.key!=="ArrowDown"', h)                                   # auch mit der Tastatur
         self.assertIn('class="mv"', h)                                                              # die Pfeile bleiben
-        self.assertIn('@media(max-width:620px){.cam .grip{display:inline-block', h)                   # Handy: Anfasser
+        self.assertIn('@media(max-width:620px){.cam .grip{display:inline-block;font-size:28px', h)                   # Handy: Anfasser
         self.assertIn('.cam .top .cr .mv{display:none}', h)                                           # Handy: ohne Pfeile
+        self.assertIn('.cam .top .cr{flex:1 1 100%;display:flex;flex-wrap:wrap;', h)
+        self.assertIn('.cam .top .cr .dyn{flex:1 1 100%;', h)                                        # Handy: Datenrate in einer eigenen Zeile, die Knöpfe darunter                   # Handy: Datenrate, Ausschalten und Entfernen brechen um und ragen nicht aus der Karte
         self.assertIn('.cam .grip{display:none;', h)                                                  # Rechner: Pfeile, kein Anfasser
 
 
