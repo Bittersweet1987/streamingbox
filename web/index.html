@@ -955,6 +955,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
     </div>
     <div id="dl_warn" class="ph" role="note" hidden style="color:var(--warn)">Mit „Alle Kameras immer bereit“ werden Verzögerungen über 750 ms auf 750 ms begrenzt. Größere Werte ließen das Hauptbild ruckeln.</div>
     <div class="piponly pvwrap"><div class="sech">Vorschau: kleine Bilder verschieben</div><div id="pvbox" class="pvbox"></div><div id="pvnote" class="ph"></div></div>
+    <details class="subsec" id="pipe_switch"><summary>Umschalten und Tausch der Kameras</summary>
     <label class="muted" style="display:block;margin-top:12px"><input type="checkbox" id="p_auto" checked> Automatisch umschalten, wenn eine Kamera ausfällt (nach 5 s ohne Signal; zurück nach 60 s stabilem Signal)</label>
     <label class="muted piponly" style="display:block;margin-top:12px">Hauptbild tauschen ohne Unterbrechung (experimentell)
       <select id="p_swap" style="width:auto;margin-left:6px" title="Der Tausch läuft dann, ohne den Encoder neu zu starten: der Empfänger bekommt weiter Daten. Dafür dekodiert die Box jede Kamera der Gruppe zweimal (groß und klein).">
@@ -962,6 +963,7 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
         <option value="2">Hauptbild und erstes kleines Bild</option>
         <option value="4">alle Kameras (mehr Rechenlast)</option></select></label>
     <label class="muted piponly" style="display:block;margin-top:12px"><input type="checkbox" id="p_always"> Alle Kameras immer bereit (Beta): Kameras können jederzeit dazukommen, ausfallen und zurückkehren, ohne dass die Sendung neu startet. Fällt die Hauptkamera aus, übernimmt die nächste. Ohne Kamera sendet die Box Schwarz mit Stille. Dafür dekodiert die Box jede Kamera zweimal (mehr Rechenlast).</label>
+    </details>
     <div class="actions"><button id="p_save" type="button">Bildaufbau speichern</button><span class="muted" style="margin-left:.75rem">Läuft gerade eine Übertragung, wird sie bei einer Änderung kurz neu gestartet.</span></div>
     <div id="pipeerr" class="err"></div>
     <div id="pipeinfo" class="ph"></div>

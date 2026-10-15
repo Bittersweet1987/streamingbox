@@ -58,6 +58,21 @@ class Views(unittest.TestCase):
         self.assertNotIn('doc["layout"]', SRC)
 
 
+class PipelineSwitchOptions(unittest.TestCase):
+    def test_the_three_switching_options_are_collapsible_and_closed_by_default(self):
+        """Unter "Bildaufbau" stehen das automatische Umschalten, der Tausch ohne Unterbrechung und "Alle Kameras immer bereit" in einem zuklappbaren Bereich, standardmäßig zu."""
+        i = PAGE.index('<details class="subsec" id="pipe_switch">')
+        head = PAGE[i:i + 80]
+        self.assertNotIn(" open", head)
+        block = PAGE[i:PAGE.index("</details>", i)]
+        for need in ('id="p_auto"', 'id="p_swap"', 'id="p_always"'):
+            self.assertIn(need, block, need)
+        self.assertIn("<summary>Umschalten und Tausch der Kameras</summary>", block)
+        save = PAGE.index('id="p_save"')
+        self.assertLess(i, save)                                                             # der Speichern-Knopf bleibt außerhalb, immer sichtbar
+        self.assertLess(PAGE.index("</details>", i), save)
+
+
 class CompactChat(unittest.TestCase):
     def test_idle_line_and_gear_go_away_while_the_chat_runs(self):
         self.assertIn("html.nohead #chat_msg.quiet{display:none}", PAGE)
