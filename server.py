@@ -4664,8 +4664,10 @@ class DjiService:
             for c in self._call({"cmd": "state"}, timeout=2).get("cameras", []):
                 if c.get("rtmp_key") and c.get("battery") is not None:
                     out[c["rtmp_key"]] = {"battery": c["battery"], "battery_age": c.get("battery_age"), "charging": c.get("charging")}
-                # bewusst aus: "Trennen" gedrückt oder ohne automatisches Verbinden, und die Kamera streamt gerade nicht
-                if c.get("rtmp_key") and (c.get("manual_off") or not c.get("autoconnect")) and c.get("state") not in ("streaming", "status"):
+                # bewusst aus: "Trennen" gedrückt oder ohne automatisches Verbinden, und die Kamera streamt gerade nicht. Eine Kamera, die an die Box sendet (auch
+                # ohne automatisches Verbinden, zum Beispiel nach einem Neustart des Bluetooth-Dienstes, der sie weiterlaufen ließ), ist nie "aus (gewollt)".
+                sends = c.get("state") in ("streaming", "status") or (c.get("publishing") is True and not c.get("manual_off"))
+                if c.get("rtmp_key") and (c.get("manual_off") or not c.get("autoconnect")) and not sends:
                     parked.add(c["rtmp_key"])
         except (RuntimeError, ValueError):
             pass

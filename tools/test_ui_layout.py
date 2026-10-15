@@ -100,6 +100,15 @@ class FacecamAndPreviewSwitch(unittest.TestCase):
         self.assertIn("pbPrevSync(true)", PAGE)                                              # nach dem Ändern: einklappen
 
 
+class CameraOrderEverywhere(unittest.TestCase):
+    def test_header_dots_overview_and_list_share_one_order(self):
+        self.assertIn("function camSorted(list){", PAGE)
+        self.assertIn("const l=camSorted(list||[]).filter(c=>!c.parked).slice(0,4);", PAGE)       # Punkte in der Kopfzeile
+        self.assertIn("list=camSorted(list).filter(c=>!c.parked);", PAGE)                          # Übersicht "Kameras"
+        self.assertIn("  list=camSorted(list);", PAGE)                                              # Kameraliste
+        self.assertEqual(PAGE.count("const quiet=c=>"), 1)                                         # die Regel steht nur einmal da
+
+
 class CompactChat(unittest.TestCase):
     def test_idle_line_and_gear_go_away_while_the_chat_runs(self):
         self.assertIn("html.nohead #chat_msg.quiet{display:none}", PAGE)
