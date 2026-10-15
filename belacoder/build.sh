@@ -30,9 +30,11 @@ patch -p1 --quiet < "$HERE/belacoder-live-feeds.patch"
 patch -p1 --quiet < "$HERE/belacoder-frame-copy.patch"
 # Beim Tausch der Größe eines Kamerabilds (Hauptbild wechseln) das "Neu verhandeln" nicht bis zum Hardware-Dekoder zurückgeben: Der Dekoder lieferte sonst etwa 1 s lang keine Bilder (Testbox, 14. Oktober 2026)
 patch -p1 --quiet < "$HERE/belacoder-no-reconfigure.patch"
+# Das Ende einer Kamera (EOS) erreicht den Ton-Umschalter nicht mehr: sonst war der Ton der ganzen Sendung nach einem Ausfall der Hauptkamera für immer weg (Testbox, 15. Oktober 2026)
+patch -p1 --quiet < "$HERE/belacoder-audio-eos.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
-gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12\" belacoder.c -o belacoder.new \
+gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb13\" belacoder.c -o belacoder.new \
   -I"$R/usr/include/gstreamer-1.0" -I"$R/usr/lib/aarch64-linux-gnu/gstreamer-1.0/include" \
   -I"$R/usr/include/glib-2.0" -I"$R/usr/lib/aarch64-linux-gnu/glib-2.0/include" -I/usr/include/srt \
   -l:libgstapp-1.0.so.0 -l:libgstbase-1.0.so.0 -l:libgstreamer-1.0.so.0 -l:libgobject-2.0.so.0 -l:libglib-2.0.so.0 -lsrt -ldl
