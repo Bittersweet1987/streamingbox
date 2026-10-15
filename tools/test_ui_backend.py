@@ -920,6 +920,11 @@ class LogModeSwitch(unittest.TestCase):
             out = subprocess.run(run + [code], capture_output=True, text=True).stdout.strip()
             self.assertEqual(out, "bdface")                                                          # verbunden zuerst, Reihenfolge sonst unverändert
 
+    def test_switched_off_cameras_are_always_at_the_bottom_of_the_camera_list(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('const quiet=c=>c.parked?2:(c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1);', h)
+        self.assertIn("list=list.slice().sort((x,y)=>quiet(x)-quiet(y));", h)                      # stabil: innerhalb der Gruppen bleibt die gespeicherte Reihenfolge
+
     def test_script_has_no_network_and_no_shell(self):
         src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
         self.assertNotIn("shell=True", src)
@@ -1594,6 +1599,49 @@ class CameraOrder(unittest.TestCase):
         with self.assertRaises(KeyError):
             c.swap("00000000", a["id"])
         self.assertEqual(self.keys(c), ["ka", "kb"])
+
+    def test_move_puts_a_camera_before_another_or_at_the_end_and_survives_a_restart(self):
+        d, c = self.store()
+        a, b, x, y = c.add("A", "ka", "extra"), c.add("B", "kb", "extra"), c.add("C", "kc", "extra"), c.add("D", "kd", "extra")
+        c.move(y["id"], a["id"])                                      # D vor A
+        self.assertEqual(self.keys(c), ["kd", "ka", "kb", "kc"])
+        c.move(a["id"], None)                                         # A ans Ende
+        self.assertEqual(self.keys(c), ["kd", "kb", "kc", "ka"])
+        c.move(x["id"], b["id"])                                      # C vor B
+        self.assertEqual(self.keys(c), ["kd", "kc", "kb", "ka"])
+        again = server.CameraStore(os.path.join(d, "cameras.json"), "publish", "", False)
+        self.assertEqual([k["key"] for k in again.cams], ["kd", "kc", "kb", "ka"])
+
+    def test_move_onto_itself_or_unchanged_place_changes_nothing_and_unknown_ids_fail(self):
+        d, c = self.store()
+        a, b = c.add("A", "ka", "extra"), c.add("B", "kb", "extra")
+        c.move(a["id"], a["id"])
+        c.move(a["id"], b["id"])                                      # steht schon vor B
+        c.move(b["id"], None)                                         # steht schon am Ende
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+        with self.assertRaises(KeyError):
+            c.move("00000000", a["id"])
+        with self.assertRaises(KeyError):
+            c.move(a["id"], "00000000")
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+
+    def test_move_keeps_names_roles_and_keys(self):
+        d, c = self.store()
+        a, b = c.add("Haupt", "ka", "main"), c.add("Klein", "kb", "pip")
+        c.move(b["id"], a["id"])
+        self.assertEqual({x["key"]: (x["name"], x["role"]) for x in c.cams}, {"ka": ("Haupt", "main"), "kb": ("Klein", "pip")})
+
+    def test_the_camera_list_has_a_drag_handle_and_saves_the_new_place(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('<span class="grip" role="button" tabindex="0"', h)
+        self.assertIn("touch-action:none", h[h.index(".cam .grip{"):h.index(".cam .grip{") + 200])      # sonst blättert die Seite statt zu ziehen
+        self.assertIn("JSON.stringify({move_before:next?next.dataset.cid:null})", h)
+        self.assertIn("if(camDragging) return;", h)                                                  # beim Ziehen baut sich die Liste nicht neu auf
+        self.assertIn('e.key!=="ArrowUp"&&e.key!=="ArrowDown"', h)                                   # auch mit der Tastatur
+        self.assertIn('class="mv"', h)                                                              # die Pfeile bleiben
+        self.assertIn('@media(max-width:620px){.cam .grip{display:inline-block', h)                   # Handy: Anfasser
+        self.assertIn('.cam .top .cr .mv{display:none}', h)                                           # Handy: ohne Pfeile
+        self.assertIn('.cam .grip{display:none;', h)                                                  # Rechner: Pfeile, kein Anfasser
 
 
 class CameraConnection(unittest.TestCase):
