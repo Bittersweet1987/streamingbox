@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.49
+- **Bildaufbau: Automatisches Umschalten, Tausch ohne Unterbrechung und „Alle Kameras immer bereit“ sind zuklappbar (Wunsch von Bittersweet, 15. Oktober 2026).** Die drei Einstellungen unter „Bildaufbau“ stehen jetzt in einem Bereich „Umschalten und Tausch der Kameras“, der beim Öffnen der Seite **zugeklappt** ist. „Bildaufbau speichern“ bleibt darunter und immer sichtbar. Der Bereich erscheint in Optionen → Menüpunkte anzeigen als Untermenü von „Bildaufbau“ und lässt sich dort ausblenden. Die Einstellungen selbst sind unverändert und gelten wie bisher für die ganze Box (`pipeline.json`). Neue Texte nur Deutsch und Englisch. Test: `tools/test_ui_layout.py` (`PipelineSwitchOptions`).
+
 ## 1.0.48
 - **„Vorschau auch von außen erlauben (verbraucht Upload)“ steht jetzt in der Karte „Vorschau“ (Wunsch von Bittersweet, 15. Oktober 2026).** Der Schalter war bisher unter „Verbindungen → Zugriff auf diese Oberfläche“; jetzt steht er in der Vorschau-Karte unter dem Haken zur Rechenleistung, und der Hinweistext (Upload, 320 Pixel, ein Zuschauer) steht hinter einem „i“ neben dem Schalter. Die Meldung der Vorschau, wenn sie von außen aus ist, verweist auf die Karte „Vorschau“ statt auf die Verbindungen. Die Einstellung selbst (`/api/previewaccess`) ist unverändert. Neue Texte nur Deutsch und Englisch. Test: `tools/test_ui_layout.py` angepasst.
 
