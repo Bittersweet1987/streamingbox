@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.44
+- **Getrennte oder ausgeschaltete DJI-Kameras stehen in der Liste der DJI-Kameras unten (Wunsch des Nutzers, 15. Oktober 2026).** Verbundene Kameras (Stream läuft, Statusmeldungen, Verbindungsaufbau) bleiben oben, alles andere (getrennt, ausgeschaltet, nicht erreichbar) rutscht nach unten; die Reihenfolge innerhalb der beiden Gruppen bleibt wie sie war. Eine ausgeschaltete Kamera, die es im Hintergrund immer wieder versucht, wechselt dabei nicht ständig den Platz. Die Liste baut sich nur neu auf, wenn eine Kamera von einer Gruppe in die andere wechselt.
+
 ## 1.0.43
 - **Ausgeschaltete Kameras stehen nicht mehr in der Übersicht unter „Status“ (Wunsch des Nutzers, 15. Oktober 2026).** Eine Kamera, die man mit „Ausschalten“ (1.0.42) bewusst aus dem Bild genommen hat, stand dort weiter, zum Beispiel die Pocket 3 mit ihrem Akkustand. Jetzt fehlt sie in der **Übersicht „Kameras“ der Karte Status** und bei den **Punkten in der Kopfzeile der Chat-Karte**; in der **Kameraliste** bleibt sie mit der Markierung „aus (gewollt)“ sichtbar (dort lässt sie sich wieder einschalten oder entfernen). Test in `tools/test_ui_backend.py`.
 
