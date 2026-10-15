@@ -279,16 +279,22 @@ class ImportProgress(unittest.TestCase):
         self.assertIn(".chatbox .cm.alt{background:color-mix(in srgb,var(--text) 3%,transparent)}", PAGE[i:i + 1500])
         self.assertIn(".chatbox .cm.alt{background:color-mix(in srgb,var(--text) 6%,transparent)", PAGE)      # Rechner unverändert
 
-    def test_preview_from_outside_has_its_switch_in_the_access_section(self):
-        """Der Schalter "Vorschau auch von außen erlauben" steht unter "Zugriff auf diese Oberfläche", ist auch über Tailscale sichtbar und änderbar (0.9.231) und die Vorschau erklärt, warum sie von außen aus ist."""
-        i = PAGE.index('<details class="subsec" id="net_ua">')
+    def test_preview_from_outside_has_its_switch_in_the_preview_card(self):
+        """Der Schalter "Vorschau auch von außen erlauben" steht in der Karte "Vorschau" (der Hinweis hinter einem "i"), ist auch über Tailscale sichtbar und änderbar (0.9.231) und die Vorschau erklärt, warum sie von außen aus ist."""
+        i = PAGE.index('<details class="card wide" id="c_prev">')
         block = PAGE[i:PAGE.index("</details>", i)]
         self.assertIn('id="pa_ext"', block)
         self.assertIn("Vorschau auch von außen erlauben (verbraucht Upload)", block)
+        self.assertIn('id="pa_help_btn"', block)                                             # der Hinweistext ist hinter einem "i" (Erklärung zeigen)
+        self.assertRegex(block, r'<div class="ph" id="pa_help" hidden>Jede Vorschau braucht rund 1,7 Mbit/s')
+        ua = PAGE[PAGE.index('<details class="subsec" id="net_ua">'):]
+        ua = ua[:ua.index("</details>")]
+        self.assertNotIn("pa_ext", ua)                                                       # unter "Zugriff auf diese Oberfläche" steht er nicht mehr
+        self.assertIn('$("pa_help_btn").addEventListener("click"', PAGE)
         self.assertIn('srtlaCall("POST","/api/previewaccess",{external:e.target.checked})', PAGE)
         self.assertNotIn('$("pa_row").hidden', PAGE)                                         # der Schalter wird nie versteckt, auch über Tailscale nicht
         self.assertNotIn("Ändern lässt sich das nur von dort.", PAGE)
-        self.assertIn("Sie lässt sich unter „Verbindungen → Zugriff auf diese Oberfläche“ erlauben.", PAGE)
+        self.assertIn("Sie lässt sich in dieser Karte („Vorschau“) erlauben.", PAGE)
         self.assertIn('running()&&(st.why==="off"||st.why==="kein-bild")) return waiting();', PAGE)  # "extern" wartet nicht endlos, der Grund steht da
         self.assertIn('extern:"Die Vorschau ist von außen nicht freigegeben.', PAGE)
         self.assertIn('st.origin==="extern"&&!auto', PAGE)                                      # seit 1.0.6: der Hinweis erscheint nur kurz, siehe test_external_preview_hint_disappears_after_a_while
