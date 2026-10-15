@@ -467,6 +467,8 @@ class Layout:
         # Ton und Stumm
         asel = 0
         src = by_pos.get(0) if audio_pos < 0 else by_pos.get(audio_pos + 1)
+        if src is None and audio_pos >= 0:
+            src = by_pos.get(0)                   # die Kamera dieses kleinen Bildes ist nicht im Bild (ausgefallen, oder als Ersatz selbst Hauptbild geworden): Ton des Hauptbildes statt Stille
         if src is not None and src in audio_ok:
             asel = src + 1
         add(("asel",), f"select asel sink_{asel}", 100)

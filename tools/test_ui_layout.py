@@ -73,6 +73,33 @@ class PipelineSwitchOptions(unittest.TestCase):
         self.assertLess(PAGE.index("</details>", i), save)
 
 
+class FacecamAndPreviewSwitch(unittest.TestCase):
+    def test_facecam_area_is_under_the_picture_setup_with_the_four_choices(self):
+        i = PAGE.index('<details class="subsec piponly" id="pipe_facecam">')
+        block = PAGE[i:PAGE.index("</details>", i)]
+        self.assertIn("<summary>Facecam</summary>", block)
+        self.assertIn('id="fc_btns"', block)
+        self.assertLess(PAGE.index('id="pipecard"'), i)
+        self.assertLess(i, PAGE.index('id="p_save"'))
+        for need in ('"Kleines Bild 1"', '"Kleines Bild 2"', '"Kleines Bild 3"', '"Keine Facecam"', "nicht belegt"):
+            self.assertIn(need, PAGE, need)
+
+    def test_facecam_choice_shows_the_camera_of_each_small_picture_and_applies_at_once(self):
+        self.assertIn('c[s]?nm(c[s]):"nicht belegt"', PAGE)                                   # je Knopf die gespeicherte Kamera
+        self.assertIn('srtlaCall("POST","/api/pipeline/facecam",{slot:b.dataset.slot})', PAGE)
+        self.assertIn('if path == "/api/pipeline/facecam":', SRC)
+        self.assertIn("self.send.change_view(audio=aud)", SRC)                                # Ton live umstellen wie über die Fußleiste
+
+    def test_the_gear_of_the_preview_brings_back_both_hidden_switches(self):
+        """"Vorschau auch von außen erlauben" verschwindet mit Haken wie der Haken zur Rechenleistung; das Zahnrad holt beide zurück."""
+        self.assertIn('<div id="pa_box">', PAGE)
+        self.assertIn('$("pa_box").hidden=ext&&!gearOpen', PAGE)
+        self.assertIn("gear.hidden=!(keep.checked||ext)", PAGE)
+        self.assertIn("window.pbPrevSync=close=>", PAGE)
+        self.assertIn("if(window.pbPrevSync) pbPrevSync(false);", PAGE)                      # nach dem Laden vom Stand der Box
+        self.assertIn("pbPrevSync(true)", PAGE)                                              # nach dem Ändern: einklappen
+
+
 class CompactChat(unittest.TestCase):
     def test_idle_line_and_gear_go_away_while_the_chat_runs(self):
         self.assertIn("html.nohead #chat_msg.quiet{display:none}", PAGE)

@@ -1273,6 +1273,116 @@ class SwapMainPip(unittest.TestCase):
             self.assertEqual(st.cfg["main"], "cam-a")
 
 
+class Facecam(unittest.TestCase):
+    """Facecam: das kleine Bild, dessen Kamera den Ton behält, auch wenn das Hauptbild wechselt."""
+
+    BASE = {"type": "pip", "main": "cam-a", "pip": "cam-f", "pip2": "cam-c", "pip3": "cam-d", "audio": "main"}
+
+    def store(self, **kw):
+        st = server.PipelineStore(os.path.join(tempfile.mkdtemp(), "pipeline.json"))
+        st.cfg.update(self.BASE)
+        st.cfg.update(kw)
+        return st
+
+    def test_choosing_a_small_picture_remembers_its_camera_and_gives_the_sound_position(self):
+        st = self.store()
+        self.assertEqual(st.set_facecam("pip"), "pip")
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+        self.assertEqual(st.set_facecam("pip3"), "pip3")
+        self.assertEqual(st.cfg["facecam"], "cam-d")
+        self.assertEqual(st.set_facecam(""), "main")                                  # keine Facecam: der Ton folgt wieder dem Hauptbild
+        self.assertEqual(st.cfg["facecam"], "")
+        with open(st.path) as f:
+            self.assertEqual(json.load(f)["facecam"], "")                             # gespeichert
+
+    def test_wrong_choices_are_refused(self):
+        st = self.store(pip3="")
+        for bad in ("main", "pip4", "x", None, 3):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                st.set_facecam(bad)
+        with self.assertRaises(ValueError):
+            st.set_facecam("pip3")                                                    # nicht belegt
+        with self.assertRaises(ValueError):
+            self.store(type="single").set_facecam("pip")
+        with self.assertRaises(ValueError):
+            self.store(inactive=["cam-f"]).set_facecam("pip")                        # eine deaktivierte Kamera ist nie die Tonquelle
+
+    def test_the_sound_stays_with_the_facecam_when_another_camera_becomes_main(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "pip"
+        st.swap_main_pip("cam-c")                                                     # Hauptbild gegen ein anderes kleines Bild
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-c", "cam-f", "pip"))
+
+    def test_the_sound_follows_the_facecam_when_it_becomes_main_and_comes_back(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "pip"
+        st.swap_main_pip("cam-f")                                                     # die Facecam selbst wird Hauptbild
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-f", "cam-a", "main"))
+        st.swap_main_pip("cam-a")                                                     # und wieder zurück
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-a", "cam-f", "pip"))
+
+    def test_a_manual_sound_choice_holds_until_the_next_swap(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "main"                                                      # von Hand (Fußleiste) auf das Hauptbild gestellt
+        self.assertEqual(st.cfg["audio"], "main")
+        st.swap_main_pip("cam-c")                                                     # beim nächsten Tausch geht der Ton zur Facecam zurück
+        self.assertEqual(st.cfg["audio"], "pip")
+
+    def test_without_a_facecam_nothing_changes(self):
+        st = self.store(audio="pip")
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "pip")                                      # der Ton bleibt am Platz wie bisher
+        st = self.store()
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "main")                                     # und "Hauptbild" folgt dem Hauptbild
+
+    def test_a_deactivated_facecam_never_keeps_the_sound(self):
+        st = self.store(facecam="cam-f", inactive=["cam-f"])
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "main")
+
+    def test_the_facecam_is_dropped_when_its_camera_is_no_longer_in_the_picture(self):
+        st = self.store(facecam="cam-gone")
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["facecam"], "")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **self.BASE, facecam="cam-gone"))
+        self.assertEqual(safe["facecam"], "")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **self.BASE, facecam="cam-f"))
+        self.assertEqual(safe["facecam"], "cam-f")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **dict(self.BASE, type="single"), facecam="cam-f"))
+        self.assertEqual(safe["facecam"], "")
+
+    def test_saving_the_picture_keeps_the_facecam_and_it_follows_its_small_picture(self):
+        st = self.store(facecam="cam-f")
+        keys = ["cam-a", "cam-f", "cam-c", "cam-d", "cam-n"]
+        req = dict(self.BASE, corner=3, corner2=2, corner3=0)
+        st.set(dict(req), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")                                  # unverändert gespeichert
+        st.set(dict(req, pip="cam-n"), keys)                                          # das kleine Bild 1 bekommt eine andere Kamera
+        self.assertEqual(st.cfg["facecam"], "cam-n")                                  # die Facecam bleibt am Platz
+        st.set(dict(req, pip="cam-f", pip2="", pip3=""), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+
+    def test_a_facecam_that_is_main_stays_while_its_camera_is_in_the_picture(self):
+        st = self.store(main="cam-f", pip="cam-a", facecam="cam-f", audio="main")
+        keys = ["cam-a", "cam-f", "cam-c", "cam-d"]
+        st.set(dict(self.BASE, main="cam-f", pip="cam-a", audio="main", corner=3, corner2=2, corner3=0), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+        st.set(dict(self.BASE, main="cam-c", pip="cam-a", pip2="", pip3="", audio="main", corner=3), keys)
+        self.assertEqual(st.cfg.get("facecam", ""), "")                               # die Facecam ist nicht mehr im Bild
+
+    def test_the_facecam_alone_is_no_structural_change(self):
+        a = dict(server.PipelineStore.DEFAULT, **self.BASE)
+        b = dict(a, facecam="cam-f", audio="pip")
+        self.assertTrue(server.view_only_change(a, b))
+        a["always_ready"] = b["always_ready"] = True
+        with mock.patch.object(server.pipbox_live, "supported", lambda: False):               # auch ohne die Engine mit Compositor
+            self.assertTrue(server.always_compatible(a, b))
+
+
 class SeamlessSwap(unittest.TestCase):
     """Tausch ohne Neustart: Pipeline-Text, Umschaltzeile, Verzögerungsreihenfolge und Übergabe an die laufende Sendekette."""
     CFG = dict(server.PipelineStore.DEFAULT, type="pip", main="cam-a", pip="cam-b", pip2="cam-c", pip3="cam-d", corner=4, corner2=2, corner3=3,
