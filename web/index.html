@@ -1192,13 +1192,14 @@ function battHtml(c){
 }
 // Kleine Punkte in der Kopfzeile der Chat-Karte: einer je Kamera (höchstens vier), grün sendet und ist im Bild, gelb sendet noch nicht im Bild, rot kein Signal, grau unbekannt
 function paintCamDots(list){
-  const el=$("cam_dots"); if(!el) return; const l=(list||[]).slice(0,4);
+  const el=$("cam_dots"); if(!el) return; const l=(list||[]).filter(c=>!c.parked).slice(0,4);       // ausgeschaltete Kameras (gewollt) haben keinen Punkt
   setHtml(el,l.map(c=>`<span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>`).join(""));
   el.setAttribute("aria-label",l.length?l.map(c=>c.name).join(", "):"");
 }
 const camSeenLive={};                                  // Kamera-Nummer -> Zeitpunkt (ms), zu dem sie zuletzt sendete (nur im Browser, für die Reihenfolge der Liste)
 const CAM_HOLD_TOP_MS=120000;                          // so lange bleibt eine Kamera, die nicht mehr sendet, oben in der Liste
 function renderCamLights(list){
+  list=list.filter(c=>!c.parked);                      // bewusst ausgeschaltete Kameras stehen nicht mehr in der Übersicht (sie bleiben in der Kameraliste, "aus (gewollt)")
   // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt
   // (Auslassungspunkte), statt die Spalten zu verschieben. Ohne Akkustand bleibt es bei Name und Datenrate.
   const any=list.some(c=>c.battery!=null), box=$("camlights");
