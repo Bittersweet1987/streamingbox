@@ -450,6 +450,18 @@ class Camera:
     STREAM_LOST_SECONDS = 30    # so lange darf er fehlen, bevor die Sitzung neu beginnt
     CONNECT_SETTLE = 1.0     # so lange bleibt das Verbinden nach dem Aufbau noch gesperrt (dem Funkchip einen Moment geben)
 
+    @property
+    def manual_off(self):
+        """"Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden". Steht in der Konfiguration, gilt also auch nach einem Neustart des Dienstes oder der Box."""
+        return bool(self.cfg.get("manual_off"))
+
+    @manual_off.setter
+    def manual_off(self, value):
+        if value:
+            self.cfg["manual_off"] = True
+        else:
+            self.cfg.pop("manual_off", None)
+
     def __init__(self, daemon, addr, cfg):
         self.daemon = daemon
         self.addr = addr
@@ -463,7 +475,6 @@ class Camera:
         self._status_flips = {}       # Byte -> wie oft es sich geändert hat
         self.task = None
         self.stop_requested = False
-        self.manual_off = False      # "Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden"
         self.last_seen = 0
         self.last_rx = 0
         self.fail_count = 0
@@ -1446,6 +1457,7 @@ class Daemon:
             return {"ok": True}
         if cmd == "connect":
             cam.start()                 # eine Verbindung jetzt; der Schalter "automatisch verbinden" bleibt unberührt
+            self.save()                 # "Trennen" gilt nicht mehr (auch nach einem Neustart)
             return {"ok": True}
         if cmd == "disconnect":
             await cam.stop()
@@ -1587,7 +1599,7 @@ class Daemon:
         log.info("bereit auf %s:%d, Kameras: %d", host, port, len(self.cameras))
         await asyncio.sleep(5)           # BlueZ nach dem Start kurz Zeit geben
         for cam in self.cameras.values():
-            if cam.cfg.get("autoconnect"):
+            if cam.cfg.get("autoconnect") and not cam.manual_off:      # eine mit "Trennen" ausgeschaltete Kamera bleibt auch nach dem Neustart aus
                 cam.start()
         asyncio.ensure_future(self.supervise())
         asyncio.ensure_future(self.phones.run())
