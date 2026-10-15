@@ -879,6 +879,12 @@ class LogModeSwitch(unittest.TestCase):
         self.assertIn("pipbox-arp.service pipbox-logrotate.timer", sh)                           # wird aktiviert
         self.assertIn("pipbox-dji.service pipbox-logrotate.timer || true", sh)                  # wird beim Entfernen abgeschaltet
 
+    def test_bluetooth_driver_button_is_neutral_once_the_driver_is_set_up(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('go.className=done?"sec":"";', h)
+        self.assertIn('d.state==="ok"||(!!ch&&ch.state==="ok"&&(d.state==="none"||!d.state))', h)           # Stick oder Board-Chip eingerichtet
+        self.assertIn("!run&&", h[h.index("const done="):h.index("go.className=done")])                      # nicht während der Einrichtung
+
     def test_script_has_no_network_and_no_shell(self):
         src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
         self.assertNotIn("shell=True", src)
