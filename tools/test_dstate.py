@@ -53,6 +53,32 @@ class Outage(unittest.TestCase):
         out = self.go_offline()
         self.assertEqual([a["kind"] for a in out], ["cam"])
 
+    def test_a_deliberately_switched_off_camera_gives_no_alert(self):
+        self.w.alerts(self.cams("live"), parked=())
+        self.now[0] += 1
+        self.assertEqual(self.w.alerts(self.cams("offline"), parked={"cam-phone"}), [])
+        self.now[0] += server.OutageWatch.DOWN + 100
+        self.assertEqual(self.w.alerts(self.cams("offline"), parked={"cam-phone"}), [])         # auch nach langer Zeit keine Meldung
+
+    def test_after_switching_on_again_a_new_outage_counts_from_that_moment(self):
+        self.w.alerts(self.cams("live"))
+        self.now[0] += 1
+        self.w.alerts(self.cams("offline"), parked={"cam-phone"})
+        self.now[0] += 500
+        self.assertEqual(self.w.alerts(self.cams("offline"), parked=()), [])                    # eben wieder an: die Wartezeit beginnt neu
+        self.now[0] += server.OutageWatch.DOWN + 1
+        self.assertEqual([a["kind"] for a in self.w.alerts(self.cams("offline"), parked=())], ["cam"])
+
+    def test_other_cameras_still_alert_while_one_is_switched_off(self):
+        cams = [{"key": "cam-phone", "name": "Handy", "state": "live"}, {"key": "cam-b", "name": "B", "state": "live"}]
+        self.w.alerts(cams)
+        self.now[0] += 1
+        cams = [dict(c, state="offline") for c in cams]
+        self.w.alerts(cams, parked={"cam-phone"})
+        self.now[0] += server.OutageWatch.DOWN + 1
+        out = self.w.alerts(cams, parked={"cam-phone"})
+        self.assertEqual([a["name"] for a in out], ["B"])
+
     def test_closing_removes_it_and_it_stays_away(self):
         out = self.go_offline()
         self.assertTrue(self.w.dismiss("cam", out[0]["t"]))

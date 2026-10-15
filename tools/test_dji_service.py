@@ -2020,6 +2020,17 @@ class DjiServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):                                       # ein doppelter Name wird abgelehnt
             self.svc.command({"cmd": "update", "addr": ADDR2, "name": "brust"})
 
+    def test_cameras_switched_off_on_purpose_are_parked(self):
+        self.srv.cameras = [{"addr": ADDR, "rtmp_key": "dji-000001", "state": "idle", "autoconnect": True, "manual_off": True},          # "Trennen" gedrückt
+                            {"addr": ADDR2, "rtmp_key": "dji-000002", "state": "idle", "autoconnect": False, "manual_off": False},       # ohne automatisches Verbinden
+                            {"addr": "AA:BB:CC:00:00:03", "rtmp_key": "dji-000003", "state": "streaming", "autoconnect": False},         # streamt: nicht aus
+                            {"addr": "AA:BB:CC:00:00:04", "rtmp_key": "dji-000004", "state": "idle", "autoconnect": True, "manual_off": False}]   # wartet auf die Verbindung: ein Ausfall
+        self.svc._extras = None
+        self.assertEqual(self.svc.parked_keys(), {"dji-000001", "dji-000002"})
+        self.srv.cameras = []
+        self.svc._extras = None
+        self.assertEqual(self.svc.parked_keys(), set())
+
     def test_fps_for_key_reads_the_service_config(self):
         with open(os.path.join(self.state, "dji-cameras.json"), "w") as f:
             json.dump({"cameras": {ADDR: {"rtmp_key": "dji-000001", "fps": 25}, ADDR2: {"rtmp_key": "dji-000002", "fps": 60}}}, f)

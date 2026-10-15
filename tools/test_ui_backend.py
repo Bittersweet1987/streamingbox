@@ -885,6 +885,16 @@ class LogModeSwitch(unittest.TestCase):
         self.assertIn('d.state==="ok"||(!!ch&&ch.state==="ok"&&(d.state==="none"||!d.state))', h)           # Stick oder Board-Chip eingerichtet
         self.assertIn("!run&&", h[h.index("const done="):h.index("go.className=done")])                      # nicht während der Einrichtung
 
+    def test_camera_list_has_an_off_switch_that_keeps_the_camera_and_the_remove_button(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn("aus (gewollt)", h)
+        self.assertIn('class="sec camoff"', h)
+        self.assertIn('{key:c.key,active:wasOff}', h)                                                 # dieselbe Schnittstelle wie das lange Drücken in der Fußleiste
+        self.assertIn('{cmd:wasOff?"connect":"disconnect",addr:dc.addr}', h)                          # DJI: verbinden und trennen
+        self.assertIn('${camOffBtn(c)}<button class="del"', h)                                        # "Entfernen" bleibt direkt daneben
+        self.assertIn("!!c.parked,!!c.is_main,!!c.in_pips", h)                                        # die Liste baut sich bei einer Änderung neu auf
+        self.assertIn('c.is_main?" disabled":""', h)                                                  # das Hauptbild lässt sich nicht ausschalten
+
     def test_script_has_no_network_and_no_shell(self):
         src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
         self.assertNotIn("shell=True", src)
