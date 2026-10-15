@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.45
+- **Kameras per Anfasser verschieben (Wunsch des Nutzers, 15. Oktober 2026).** **Am Handy (Breite bis 620 px)** steht in der Liste „Aktive Kameras“ links vor jeder Kamera ein Anfasser (⋮⋮) statt der Pfeile, **am Rechner** bleiben die Pfeile ▲▼ und es gibt keinen Anfasser. Mit dem Finger daran ziehen, die Zeile folgt, beim Loslassen wird die neue Stelle gespeichert (sie bleibt auch nach einem Neustart; die Kamera-Knöpfe der Fußleiste folgen der Reihenfolge). Der Anfasser lässt sich auch mit der Tastatur bedienen (Pfeil hoch oder runter). Am Bildschirmrand blättert die Liste beim Ziehen mit. Neu im Server: `POST /api/cameras/<id>` mit `{"move_before": <id oder null>}` setzt die Kamera vor eine andere oder ans Ende (`CameraStore.move`), alle anderen behalten ihre Reihenfolge. Reihenfolge der Anzeige: zuerst Kameras mit Signal (in deiner Reihenfolge), dann Kameras ohne Signal (rot, nach zwei Minuten, Wunsch vom 12. Oktober), **ganz unten immer die gewollt ausgeschalteten** („aus (gewollt)“); innerhalb jeder Gruppe gilt die gespeicherte Reihenfolge.
+
 ## 1.0.44
 - **Getrennte oder ausgeschaltete DJI-Kameras stehen in der Liste der DJI-Kameras unten (Wunsch des Nutzers, 15. Oktober 2026).** Verbundene Kameras (Stream läuft, Statusmeldungen, Verbindungsaufbau) bleiben oben, alles andere (getrennt, ausgeschaltet, nicht erreichbar) rutscht nach unten; die Reihenfolge innerhalb der beiden Gruppen bleibt wie sie war. Eine ausgeschaltete Kamera, die es im Hintergrund immer wieder versucht, wechselt dabei nicht ständig den Platz. Die Liste baut sich nur neu auf, wenn eine Kamera von einer Gruppe in die andere wechselt.
 

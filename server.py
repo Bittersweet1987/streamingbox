@@ -2483,6 +2483,25 @@ class CameraStore:
                 self.save()
             return self.cams[j]
 
+    def move(self, cam_id, before_id=None):
+        """Eine Kamera an eine andere Stelle der Liste ziehen: direkt vor die Kamera `before_id`, ohne Angabe ans Ende. Alle anderen behalten ihre
+        Reihenfolge; Hauptbild und kleine Bilder bleiben, wie sie sind. Die Liste wird gespeichert, die Reihenfolge der Kamera-Knöpfe in der Fußleiste folgt ihr."""
+        with self.lock:
+            cam = next((c for c in self.cams if c["id"] == cam_id), None)
+            if cam is None:
+                raise KeyError(cam_id)
+            if before_id is not None and before_id != cam_id and not any(c["id"] == before_id for c in self.cams):
+                raise KeyError(before_id)
+            if before_id == cam_id:
+                return cam                                   # auf sich selbst gezogen: nichts zu tun
+            rest = [c for c in self.cams if c is not cam]
+            at = next((n for n, c in enumerate(rest) if c["id"] == before_id), len(rest))
+            rest.insert(at, cam)
+            if [c["id"] for c in rest] != [c["id"] for c in self.cams]:
+                self.cams[:] = rest
+                self.save()
+            return cam
+
     def live_streams(self):
         """Dict Schlüssel -> {fps, mbit} oder None wenn Statistik nicht lesbar."""
         if self.demo:
@@ -9712,6 +9731,10 @@ class Handler(BaseHTTPRequestHandler):
                         if not isinstance(d["swap_with"], str):
                             raise ValueError("Kamera ungültig")
                         return self.reply(200, self.cams.swap(m.group(1), d["swap_with"]))
+                    if "move_before" in d:
+                        if d["move_before"] is not None and not isinstance(d["move_before"], str):
+                            raise ValueError("Kamera ungültig")
+                        return self.reply(200, self.cams.move(m.group(1), d["move_before"]))
                     if d.get("iface") is not None:
                         cam = next((c for c in self.cams.cams if c["id"] == m.group(1)), None)
                         if cam and cam["key"].startswith("dji-"):
