@@ -1691,6 +1691,8 @@ function btdrvRender(d){
   const run=d.state==="working", ch=d.chip||null;       // ch: eingebauter Bluetooth-Chip der ROCK 5B Plus (nur dort vorhanden)
   progSet("btdrvprog",run,d.steps?Math.round(100*(d.step||0)/d.steps):0,d.step_text||"");
   go.disabled=!d.helper_installed||run||!!(ch&&ch.state==="working");
+  const done=!!d.helper_installed&&!run&&(d.state==="ok"||(!!ch&&ch.state==="ok"&&(d.state==="none"||!d.state)));       // Treiber schon eingerichtet und grün: der Knopf ist nur noch für den Notfall da, also neutral statt blau
+  go.className=done?"sec":"";
   let bad=d.state==="failed"||d.state==="unsupported", show;
   if(!d.helper_installed) show="Der Treiber-Helfer ist auf dieser Box noch nicht installiert (install.sh erneut ausführen).";
   else if(ch&&(d.state==="none"||!d.state)){            // kein Stick nötig: den Chip des Boards melden statt "kein Stick"
