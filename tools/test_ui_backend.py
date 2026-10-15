@@ -1,6 +1,7 @@
 """Tests für vier Kameras (drittes kleines Bild), Tonauswahl, Sendeweg-Verteilung und WLAN-Anfragen (server.py)."""
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -901,6 +902,23 @@ class LogModeSwitch(unittest.TestCase):
         self.assertIn("list=list.filter(c=>!c.parked);", h[i:i + 400])                              # Status: Übersicht der Kameras
         self.assertIn('(list||[]).filter(c=>!c.parked).slice(0,4)', h)                              # Punkte in der Chat-Karte
         self.assertEqual(h.count("c.parked?'<span class=\"tag\">aus (gewollt)</span>'"), 1)        # in der Kameraliste bleibt sie sichtbar, mit Markierung
+
+    def test_away_dji_cameras_are_sorted_to_the_bottom(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('const djiAway=c=>!(c.publishing||["streaming","status","starting","configuring","pairing"].includes(c.state));', h)
+        self.assertIn("const cams=djiSorted(d.cameras);", h)
+        self.assertIn('box.innerHTML=cams.length?cams.map(djiCardHtml).join("")', h)               # Karten in sortierter Reihenfolge
+        self.assertIn('+"|"+(djiAway(c)?1:0)),', h)                                                 # Wechsel zwischen unten und oben baut die Liste neu auf
+        js = h[h.index("const djiAway="):h.index("function djiRender(d){")]
+        jsc = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        node = shutil.which("node")
+        run = [node, "-e"] if node else ([jsc, "-e"] if os.path.exists(jsc) else None)
+        if run:
+            code = js + 'const l=[{addr:"a",state:"idle"},{addr:"b",state:"streaming"},{addr:"c",state:"error"},{addr:"d",state:"status"},{addr:"e",state:"connecting"},{addr:"f",state:"idle",publishing:true}];print(djiSorted(l).map(c=>c.addr).join(""))'
+            if node:
+                code = code.replace("print(", "console.log(")
+            out = subprocess.run(run + [code], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out, "bdface")                                                          # verbunden zuerst, Reihenfolge sonst unverändert
 
     def test_script_has_no_network_and_no_shell(self):
         src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
