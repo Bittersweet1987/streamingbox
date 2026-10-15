@@ -1,4 +1,4 @@
-"""Tests für die Menüeinstellung (Optionen): Reihenfolge, Ausblenden und die Überschriften von Chat und Vorschau gelten je Gerät (Browser) und stehen nicht auf der Box."""
+"""Tests für die Menüeinstellung (Optionen): Ansichten Desktop und Mobil mit eigener Reihenfolge, eigenem Ausblenden und eigenem Design, auf der Box gespeichert."""
 import os
 import sys
 import unittest
@@ -9,28 +9,49 @@ sys.path.insert(0, ROOT)
 
 SRC = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
 PAGE = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
-_A = PAGE.index("// ---- Hauptmenüs: Reihenfolge")
+_A = PAGE.index("// ---- Ansichten: Desktop und Mobil")
 BLOCK = PAGE[_A:PAGE.index("\n})();", _A) + 6]                                           # nur dieser Block
 
 
-class PerDevice(unittest.TestCase):
-    def test_page_keeps_the_setting_only_in_the_browser(self):
-        self.assertIn('localStorage.setItem(KEY,JSON.stringify(st))', BLOCK)
-        self.assertIn("je Gerät (Browser) gemerkt, nicht auf der Box", BLOCK)
-        self.assertNotIn("srtlaCall", BLOCK)                                                  # nichts wird auf die Box geschickt oder von ihr geholt
-        self.assertNotIn("/api/layout", PAGE)
-        self.assertNotIn("function pull", BLOCK)
-        self.assertNotIn("function push", BLOCK)
+class Views(unittest.TestCase):
+    """Ansichten Desktop und Mobil: je Ansicht eigene Reihenfolge, Ausblenden und Design, auf der Box gespeichert (gilt für alle Geräte), im Browser nur zwischengemerkt."""
 
-    def test_save_is_the_only_writer(self):
-        self.assertIn("const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} };", BLOCK)
+    def test_two_views_with_the_same_shape(self):
+        self.assertIn("const views={desktop:blank(),mobile:blank()}", BLOCK)
+        self.assertIn('const blank=()=>({order:[],hidden:[],design:""});', BLOCK)
+        self.assertIn('(phoneQ&&phoneQ.matches?"mobile":"desktop")', BLOCK)
+        self.assertIn('matchMedia("(max-width:620px)")', BLOCK)                              # dieselbe Grenze wie bei isPhone()
+        self.assertIn('const isPhone=()=>window.matchMedia("(max-width:620px)").matches;', PAGE)
 
-    def test_applied_at_start_without_asking_the_box(self):
-        self.assertIn("applyOrder(); applyHidden(); buildList();\n})();", BLOCK)
+    def test_saved_on_the_box_and_cached_in_the_browser(self):
+        self.assertIn('srtlaCall("POST","/api/layout",{profile:q,order:views[q].order,hidden:views[q].hidden,design:views[q].design})', BLOCK)
+        self.assertIn('srtlaCall("GET","/api/layout")', BLOCK)
+        self.assertIn('localStorage.setItem(VKEY,JSON.stringify(views))', BLOCK)
 
-    def test_server_has_no_shared_layout_any_more(self):
-        for needle in ("class UiLayout", "/api/layout", "Handler.layout", "ui-layout.json", "self.layout"):
-            self.assertNotIn(needle, SRC, needle)
+    def test_first_start_takes_over_the_old_browser_setting_once(self):
+        self.assertIn('localStorage.getItem(KEY)', BLOCK)                                    # bisheriger Stand (pb_layout) und
+        self.assertIn('localStorage.getItem("pb_design")', BLOCK)                            # Design als Grundlage beider Ansichten
+        self.assertIn('{init:{desktop:views.desktop,mobile:views.mobile}}', BLOCK)           # nur wenn auf der Box noch nichts liegt
+
+    def test_applied_at_start_from_the_cache(self):
+        self.assertIn("applyOrder(); applyHidden(); applyDesign(); buildList(); buildCtl();\n  load();\n})();", BLOCK)
+
+    def test_design_cache_for_the_start_page_follows_the_view_in_use(self):
+        self.assertIn('localStorage.setItem("pb_design",id)', BLOCK)                          # Kopfzeile der Seite und Anmeldeseite lesen weiter pb_design
+
+    def test_menu_names_do_not_carry_help_buttons(self):
+        self.assertIn('c.querySelectorAll("button,.badge,.ibtn").forEach(x=>x.remove())', BLOCK)
+
+    def test_controls_exist(self):
+        for i in ('id="view_ctl"', 'id="view_mode"', 'id="vw_desktop"', 'id="vw_mobile"', 'id="vw_copy"', 'id="vw_msg"'):
+            self.assertIn(i, PAGE, i)
+        self.assertIn('<option value="auto">', PAGE)
+
+    def test_server_stores_the_two_views(self):
+        for needle in ("class LayoutStore", '"/api/layout"', "Handler.layout = LayoutStore(args.state)", '"layout.json"'):
+            self.assertIn(needle, SRC, needle)
+        for old in ("class UiLayout", "ui-layout.json"):
+            self.assertNotIn(old, SRC, old)
 
     def test_backup_does_not_carry_the_menu_setting(self):
         self.assertNotIn('("layout", "Optionen', SRC)

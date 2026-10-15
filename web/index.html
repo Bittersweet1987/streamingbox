@@ -518,6 +518,7 @@ details.card[hidden]{display:none!important}
 .ctlrow.hit{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .optrow{display:flex;align-items:center;gap:8px;padding:5px 0;line-height:1.35;cursor:pointer}.optrow.sub{padding-left:26px}.optrow input{flex:none}
 .optrow.fixed{opacity:.6;cursor:default}
+.vseg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:2px 0 6px}.vseg button{background:transparent;color:var(--text);border:0;border-radius:0;padding:8px 18px;min-height:40px;cursor:pointer}.vseg button+button{border-left:1px solid var(--line)}.vseg button[aria-pressed=true]{background:var(--accent);color:#04202a;font-weight:600}
 #pb_awake[aria-pressed=true]{background:var(--accent);color:#0f172a;border-color:var(--accent)}
 .foot{text-align:center;font-size:12px;color:var(--muted);padding:18px 16px 28px}
 .err{color:var(--crit);font-size:13px;min-height:18px;margin-top:6px}
@@ -1108,9 +1109,19 @@ html[data-design] :is(.pbpick,.langbtns) button.on{background:var(--bar);border-
     <div id="dev_pw_out" class="ph sens" role="status"></div>
   </details>
   <details class="card wide" id="c_layout"><summary><span class="sumh">Optionen</span></summary>
-    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Reihenfolge der Hauptmenüs legen Sie darunter fest. Auswahl und Reihenfolge gelten für alle Geräte an dieser Box.</div>
+    <div class="ph" style="margin-top:0">Hier legen Sie fest, welche Menüpunkte angezeigt werden (Haken weg = ausgeblendet). Ausgeblendet wird nur die Anzeige, an den Einstellungen ändert sich nichts. Die Reihenfolge der Hauptmenüs und das Design legen Sie darunter fest. Es gibt zwei Ansichten, Desktop und Mobil, mit je eigener Auswahl. Sie sind auf der Box gespeichert und gelten für alle Geräte.</div>
+    <div id="view_ctl" class="viewctl">
+      <div id="view_now" class="ph" role="status"></div>
+      <div class="row" style="justify-content:flex-start;gap:6px;flex-wrap:wrap"><label for="view_mode">Ansicht dieses Geräts:</label>
+        <select id="view_mode" aria-label="Ansicht dieses Geräts"><option value="auto">Automatisch (nach Fensterbreite)</option><option value="desktop">Immer Desktop</option><option value="mobile">Immer Mobil</option></select></div>
+      <div class="ph">Automatisch: bis 620 Pixel Breite (Handy, schmales Fenster) gilt Mobil, sonst Desktop. Diese Wahl gilt nur für dieses Gerät.</div>
+      <div class="sech">Einstellungen bearbeiten für</div>
+      <div class="vseg" role="group" aria-label="Ansicht bearbeiten"><button type="button" id="vw_desktop" aria-pressed="true">Desktop</button><button type="button" id="vw_mobile" aria-pressed="false">Mobil</button></div>
+      <div class="actions"><button type="button" id="vw_copy" class="sec">Von Mobil übernehmen</button></div>
+      <div id="vw_msg" class="ph" role="status"></div>
+    </div>
     <details class="subsec" id="opt_design"><summary>Design</summary>
-      <div class="ph" style="margin-top:0">Wählen Sie das Aussehen der Oberfläche. Die Auswahl gilt für diesen Browser. Hell oder dunkel stellen Sie wie bisher oben in der Kopfleiste ein.</div>
+      <div class="ph" style="margin-top:0">Wählen Sie das Aussehen der Oberfläche für die oben gewählte Ansicht (Desktop oder Mobil). Hell oder dunkel stellen Sie wie bisher oben in der Kopfleiste ein, das gilt nur für diesen Browser.</div>
       <div id="design_list" class="designs" role="radiogroup" aria-label="Design"></div>
     </details>
     <details class="subsec" id="opt_menus"><summary>Menüpunkte anzeigen</summary>
@@ -3830,88 +3841,6 @@ $("chat_form").addEventListener("submit",async e=>{
   c.addEventListener("click",show);
 })();
 
-// ---- Hauptmenüs: Reihenfolge (▲ ▼) und Menüpunkte ausblenden, beides unter Optionen; je Gerät (Browser) gemerkt, nicht auf der Box: Handy und Rechner können verschieden aussehen ----
-(function(){
-  const KEY="pb_layout", main=document.querySelector("main"); let st={order:[],hidden:[]};
-  try{ const v=JSON.parse(localStorage.getItem(KEY)||"{}")||{};
-       st.order=(Array.isArray(v.order)?v.order:[]).filter(x=>typeof x==="string"); st.hidden=(Array.isArray(v.hidden)?v.hidden:[]).filter(x=>typeof x==="string"); }catch(e){}
-  const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(st)); }catch(e){} };
-  const allCards=()=>[...main.children].filter(el=>el.matches("details.card[id]"));
-  const movables=()=>allCards().filter(el=>!el.hidden);                    // eine versteckte Karte (Controller-Tasten ohne Controller) steht nicht in den Listen
-  const DEFAULT=allCards().map(e=>e.id);                                   // Standardreihenfolge
-  const hideable=id=>id!=="c_layout"&&id!=="livecard";                      // "Optionen" selbst bleibt immer sichtbar
-  const label=el=>{ const s=el.querySelector(":scope>summary"); if(!s) return el.id; const h=s.querySelector(".sumh"); if(h) return h.textContent.trim();
-                    let t=""; s.childNodes.forEach(n=>{ if(n.nodeType===3) t+=n.textContent; }); return t.trim()||el.id; };
-  function applyOrder(){
-    const res=st.order.filter(id=>DEFAULT.includes(id));
-    DEFAULT.forEach((id,i)=>{ if(res.includes(id)) return; let k=i-1; while(k>=0&&!res.includes(DEFAULT[k])) k--;      // neue Karte hinter ihren Standard-Vorgänger
-                              res.splice(k<0?0:res.indexOf(DEFAULT[k])+1,0,id); });
-    res.forEach(id=>main.appendChild($(id)));
-  }
-  function applyHidden(){
-    document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
-    st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&hideable(id)) e.setAttribute("data-pbhide",""); });
-    document.documentElement.classList.toggle("nohelp",st.hidden.includes("hlp_btn"));                  // "hlp_btn": alle Hilfe-Knöpfe "i" (kein eigenes Element)
-    const compact=st.hidden.includes("heads");                                                          // "heads": Überschrift und Kopfzeile von Chat und Vorschau weg (kein eigenes Element)
-    document.documentElement.classList.toggle("nohead",compact);
-    if(compact) ["c_chat","c_prev"].forEach(id=>{ const e=document.getElementById(id); if(e) e.open=true; });          // ohne Kopfzeile lässt sich die Karte nicht zuklappen
-    buildOrder();
-  }
-  function buildList(){
-    const box=$("lay_list"); box.textContent="";
-    const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="optrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
-                                c.checked=!st.hidden.includes(id); l.appendChild(c); const s=document.createElement("span"); s.textContent=txt; l.appendChild(s); g.appendChild(l); };
-    movables().forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);                  // je Karte eine Gruppe mit ihren Bereichen darunter
-      if(el.id==="c_layout"){                                                                                                                 // "Optionen" selbst bleibt sichtbar (sonst käme man nicht zurück), "Design" und "Reihenfolge" lassen sich ausblenden
-        const c=g.querySelector("input"); c.checked=true; c.disabled=true; g.firstChild.classList.add("fixed");
-        ["opt_design","opt_order"].forEach(id=>{ const sub=$(id); if(sub) row(g,id,label(sub),true); }); }
-      else if(hideable(el.id)) el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true));
-      box.appendChild(g); });
-    { const g=document.createElement("div"); g.className="optgrp"; row(g,"sm_btn","Streammodus",false); box.appendChild(g); }                        // Knopf in der Kopfleiste
-    { const g=document.createElement("div"); g.className="optgrp"; row(g,"hlp_btn","Hilfe-Knöpfe (i)",false); box.appendChild(g); }                  // alle "i"
-    { const g=document.createElement("div"); g.className="optgrp"; row(g,"heads","Überschriften von Chat und Vorschau",false);                       // spart je Karte eine Zeile
-      const b=document.createElement("button"); b.type="button"; b.className="helpbtn"; b.textContent="i"; b.setAttribute("aria-label","Erklärung zeigen"); b.setAttribute("aria-expanded","false"); g.firstChild.appendChild(b);
-      const h=document.createElement("div"); h.className="ph"; h.hidden=true; h.textContent="Blendet bei Chat und Vorschau die Überschrift und die Kopfzeile aus, um Platz zu sparen. Die Knöpfe (Einstellungen des Chats, Start und Stop der Vorschau) bleiben als kleine Symbole oben rechts über dem Inhalt. Beide Karten sind dann immer aufgeklappt. Signalanzeige und Kamerapunkte des Chats erscheinen nur noch in der Kopfleiste am Handy während der Sendung."; g.appendChild(h);
-      b.addEventListener("click",ev=>{ ev.preventDefault(); h.hidden=!h.hidden; b.setAttribute("aria-expanded",String(!h.hidden)); }); box.appendChild(g); }
-    { const g=document.createElement("div"); g.className="optgrp"; const l=document.createElement("label"); l.className="optrow"; const t=document.createElement("span"); t.textContent="Fußleiste am Handy"; l.appendChild(t);
-      const sel=document.createElement("select"); sel.id="foot_mode"; sel.style.marginLeft="8px";
-      for(const [v,txt] of [["auto","Automatisch"],["always","Immer anzeigen"],["hide","Ausblenden bei Chat oder Vorschau"],["off","Immer ausblenden"]]){ const o=document.createElement("option"); o.value=v; o.textContent=txt; sel.appendChild(o); }
-      sel.value=window.pbFootGet?window.pbFootGet():"auto"; sel.addEventListener("change",()=>window.pbFootMode&&window.pbFootMode(sel.value)); l.appendChild(sel); g.appendChild(l);
-      const b=document.createElement("button"); b.type="button"; b.className="helpbtn"; b.textContent="i"; b.setAttribute("aria-label","Erklärung zeigen"); b.setAttribute("aria-expanded","false"); l.appendChild(b);
-      const h=document.createElement("div"); h.className="ph"; h.hidden=true; h.textContent="Die Knöpfe unten am Handy (Live/Stop, Kameras, Ton). Automatisch: Sie gleiten beim Runterscrollen weg und kommen beim Hochscrollen zurück, solange Chat oder Vorschau zu sehen sind; ohne beide bleiben sie immer da. Immer anzeigen: Die Leiste bleibt stehen. Ausblenden bei Chat oder Vorschau: Sie ist weg, solange Chat oder Vorschau zu sehen sind (mehr Platz, zum Beispiel auf dem Motorrad); ohne beide ist sie da. Immer ausblenden: Sie ist nie zu sehen. Gilt nur für dieses Gerät.";
-      g.appendChild(h); b.addEventListener("click",ev=>{ ev.preventDefault(); h.hidden=!h.hidden; b.setAttribute("aria-expanded",String(!h.hidden)); }); box.appendChild(g); }
-  }
-  function buildOrder(focus){
-    const box=$("ord_list"), all=movables(); box.textContent="";
-    all.forEach((el,i)=>{ const r=document.createElement("div"); r.className="ordrow"+(el.hasAttribute("data-pbhide")?" off":"");
-      const t=document.createElement("span"); t.textContent=label(el); r.appendChild(t);
-      const m=document.createElement("span"); m.className="mvs";
-      for(const [dir,txt,tip] of [[-1,"▲","Menü nach oben schieben"],[1,"▼","Menü nach unten schieben"]]){
-        const b=document.createElement("button"); b.type="button"; b.className="mv"; b.dataset.id=el.id; b.dataset.dir=dir; b.textContent=txt; b.title=tip; b.setAttribute("aria-label",tip);
-        b.disabled=dir<0?i===0:i===all.length-1; m.appendChild(b); }
-      r.appendChild(m); box.appendChild(r); });
-    if(focus){ const mine=[...box.querySelectorAll("button.mv")].filter(x=>x.dataset.id===focus.id&&!x.disabled);                   // Fokus bleibt am verschobenen Menü (für die Tastatur)
-               const b=mine.find(x=>+x.dataset.dir===focus.dir)||mine[0]; if(b) b.focus(); }
-  }
-  function move(el,dir){
-    const all=movables(), o=all[all.indexOf(el)+dir]; if(!o) return;
-    if(dir<0) main.insertBefore(el,o); else main.insertBefore(o,el);
-    st.order=movables().map(e=>e.id); save(); buildOrder({id:el.id,dir});
-  }
-  $("ord_list").addEventListener("click",ev=>{
-    const b=ev.target.closest("button.mv[data-id]"); if(!b||b.disabled) return;
-    const el=$(b.dataset.id); if(el) move(el,+b.dataset.dir);
-  });
-  $("lay_list").addEventListener("change",e=>{
-    const c=e.target.closest("input[data-id]"); if(!c) return; const id=c.dataset.id, i=st.hidden.indexOf(id);
-    if(c.checked&&i>=0) st.hidden.splice(i,1); if(!c.checked&&i<0) st.hidden.push(id); save(); applyHidden();
-  });
-  $("lay_showall").addEventListener("click",()=>{ st.hidden=[]; save(); applyHidden(); buildList(); });
-  $("lay_reset").addEventListener("click",()=>{ st.order=[]; save(); applyOrder(); buildOrder(); });
-  document.addEventListener("pb-menus-changed",()=>{ applyOrder(); applyHidden(); buildList(); });
-  applyOrder(); applyHidden(); buildList();
-})();
-
 // ---- Problem melden / Wunsch äußern (Issue #13): fertig ausgefülltes GitHub-Formular, Nummer, Liste "Meine Fälle"; die Box sendet nichts selbst
 // Issue #64: Der Link wird beim Klick aus den aktuellen Feldern gebaut (nie veraltet); der Eintrag in "Meine Fälle" entsteht erst, wenn man das Formular öffnet (nicht schon beim Vorbereiten);
 // ein anderer Titel nach dem Öffnen ist ein neuer Fall mit neuer Nummer; ein Eintrag lässt sich nur in den ersten 30 Minuten entfernen.
@@ -4119,30 +4048,176 @@ function setTheme(t,save){
 $("theme_btn").addEventListener("click",()=>setTheme(curTheme()==="dark"?"light":"dark",true));
 setTheme(curTheme(),false);
 
-// ---- Designs (Optionen): die Auswahl bleibt im Browser; "Standard" ist das bisherige Aussehen ----
+// ---- Ansichten: Desktop und Mobil. Je Ansicht eigene Reihenfolge der Hauptmenüs (▲ ▼), ausgeblendete Menüpunkte und Design, unter Optionen; auf der Box gespeichert (gilt für alle Geräte), im Browser nur zwischengemerkt ----
+// Welche Ansicht ein Gerät zeigt, entscheidet die Breite des Fensters (bis 620 px: Mobil) oder die Wahl dieses Geräts. Gespeichert werden nur Abweichungen vom Standard: neue Menüs erscheinen von selbst in beiden Ansichten.
 (function(){
-  const KEY="pb_design";
+  const KEY="pb_layout", VKEY="pb_views", MKEY="pb_view_mode", main=document.querySelector("main");
+  const blank=()=>({order:[],hidden:[],design:""});
+  const ids=a=>(Array.isArray(a)?a:[]).filter(x=>typeof x==="string");
+  const norm=v=>({order:ids(v&&v.order),hidden:ids(v&&v.hidden),design:(v&&(v.design==="klar"||v.design==="kompakt"))?v.design:""});
+  const views={desktop:blank(),mobile:blank()}; let mode="auto", edit="", legacy=false, saveT=0, savePending=new Set(), loadedAt=0;
+  try{ const c=JSON.parse(localStorage.getItem(VKEY)||"null");
+       if(c&&c.desktop&&c.mobile){ views.desktop=norm(c.desktop); views.mobile=norm(c.mobile); }
+       else{ const o=JSON.parse(localStorage.getItem(KEY)||"{}")||{}, d=localStorage.getItem("pb_design")||"";             // bisheriger Stand dieses Browsers: Grundlage für beide Ansichten
+             views.desktop=norm(Object.assign({},o,{design:d})); views.mobile=norm(Object.assign({},o,{design:d})); legacy=true; } }catch(e){}
+  try{ const m=localStorage.getItem(MKEY); if(m==="desktop"||m==="mobile") mode=m; }catch(e){}
+  const phoneQ=window.matchMedia?matchMedia("(max-width:620px)"):null;
+  const used=()=>mode==="desktop"||mode==="mobile"?mode:(phoneQ&&phoneQ.matches?"mobile":"desktop");
+  const other=p=>p==="desktop"?"mobile":"desktop";
+  const cache=()=>{ try{ localStorage.setItem(VKEY,JSON.stringify(views)); }catch(e){} };
+  const allCards=()=>[...main.children].filter(el=>el.matches("details.card[id]"));
+  const movables=()=>allCards().filter(el=>!el.hidden);                    // eine versteckte Karte (Controller-Tasten ohne Controller) steht nicht in den Listen
+  const DEFAULT=allCards().map(e=>e.id);                                   // Standardreihenfolge
+  const hideable=id=>id!=="c_layout"&&id!=="livecard";                      // "Optionen" selbst bleibt immer sichtbar
+  const label=el=>{ const s=el.querySelector(":scope>summary"); if(!s) return el.id; const h=s.querySelector(".sumh");
+                    if(h){ const c=h.cloneNode(true); c.querySelectorAll("button,.badge,.ibtn").forEach(x=>x.remove()); return c.textContent.trim(); }          // ohne die Hilfe-Knöpfe "i" und Zähler
+                    let t=""; s.childNodes.forEach(n=>{ if(n.nodeType===3) t+=n.textContent; }); return t.trim()||el.id; };
+  const orderOf=v=>{                                                       // eigene Reihenfolge, neue Karten hinter ihren Standard-Vorgänger
+    const res=v.order.filter(id=>DEFAULT.includes(id));
+    DEFAULT.forEach((id,i)=>{ if(res.includes(id)) return; let k=i-1; while(k>=0&&!res.includes(DEFAULT[k])) k--;
+                              res.splice(k<0?0:res.indexOf(DEFAULT[k])+1,0,id); });
+    return res;
+  };
+  function applyOrder(){ orderOf(views[used()]).forEach(id=>main.appendChild($(id))); }
+  function applyHidden(){
+    const st=views[used()];
+    document.querySelectorAll("[data-pbhide]").forEach(e=>e.removeAttribute("data-pbhide"));
+    st.hidden.forEach(id=>{ const e=document.getElementById(id); if(e&&hideable(id)) e.setAttribute("data-pbhide",""); });
+    document.documentElement.classList.toggle("nohelp",st.hidden.includes("hlp_btn"));                  // "hlp_btn": alle Hilfe-Knöpfe "i" (kein eigenes Element)
+    const compact=st.hidden.includes("heads");                                                          // "heads": Überschrift und Kopfzeile von Chat und Vorschau weg (kein eigenes Element)
+    document.documentElement.classList.toggle("nohead",compact);
+    if(compact) ["c_chat","c_prev"].forEach(id=>{ const e=document.getElementById(id); if(e) e.open=true; });          // ohne Kopfzeile lässt sich die Karte nicht zuklappen
+    buildOrder();
+  }
+  function applyDesign(){                                                   // Design der benutzten Ansicht; "pb_design" ist der Zwischenspeicher für den Start (auch die Anmeldeseite liest ihn)
+    const id=views[used()].design, r=document.documentElement;
+    if(id) r.setAttribute("data-design",id); else r.removeAttribute("data-design");
+    try{ if(id) localStorage.setItem("pb_design",id); else localStorage.removeItem("pb_design"); }catch(e){}
+    setTheme(curTheme(),false);
+    document.dispatchEvent(new Event("pb-design-changed"));
+  }
+  function applyAll(){ applyOrder(); applyHidden(); applyDesign(); buildList(); buildCtl(); }
+  // ---- Speichern auf der Box (kurz gesammelt) ----
+  function msg(t,bad){ const e=$("vw_msg"); if(!e) return; e.textContent=t||""; e.style.color=bad?"var(--crit)":""; }
+  function save(p){
+    cache(); savePending.add(p); clearTimeout(saveT);
+    saveT=setTimeout(async()=>{
+      const todo=[...savePending]; savePending.clear();
+      try{ for(const q of todo) await srtlaCall("POST","/api/layout",{profile:q,order:views[q].order,hidden:views[q].hidden,design:views[q].design});
+           msg("✓ Gespeichert (gilt für alle Geräte)"); setTimeout(()=>{ const e=$("vw_msg"); if(e&&e.textContent.startsWith("✓")) e.textContent=""; },3000);
+      }catch(x){ todo.forEach(q=>savePending.add(q)); msg("Nicht auf der Box gespeichert: "+(x&&x.message||"keine Verbindung")+" (gilt vorerst nur in diesem Browser)",true); }
+    },500);
+  }
+  async function load(){
+    if(savePending.size) return;                                            // erst die eigenen Änderungen loswerden
+    try{
+      let r=await srtlaCall("GET","/api/layout");
+      if(!r.set){ r=await srtlaCall("POST","/api/layout",{init:{desktop:views.desktop,mobile:views.mobile}}); }       // erster Start: der bisherige Stand dieses Browsers wird für beide Ansichten übernommen (nur wenn noch nichts da ist)
+      const n={desktop:norm(r.desktop),mobile:norm(r.mobile)};
+      if(JSON.stringify(n)!==JSON.stringify(views)){ views.desktop=n.desktop; views.mobile=n.mobile; cache(); applyAll(); }
+      else if(legacy){ cache(); }
+      legacy=false; loadedAt=Date.now();
+    }catch(e){}
+  }
+  // ---- Anzeige in Optionen ----
+  function buildCtl(){
+    const now=$("view_now"); if(!now) return;
+    const u=used(), n=window.innerWidth;
+    now.textContent=`Dieses Gerät zeigt gerade die Ansicht ${u==="mobile"?"Mobil":"Desktop"} (${mode==="auto"?"automatisch, Fensterbreite "+n+" Pixel":"von Hand gewählt"}).`;
+    $("view_mode").value=mode;
+    for(const p of ["desktop","mobile"]) $("vw_"+p).setAttribute("aria-pressed",String(edit===p));
+    $("vw_copy").textContent=edit==="desktop"?"Von Mobil übernehmen":"Von Desktop übernehmen";
+  }
+  function buildList(){
+    const box=$("lay_list"), v=views[edit]; box.textContent="";
+    const row=(g,id,txt,sub)=>{ const l=document.createElement("label"); l.className="optrow"+(sub?" sub":""); const c=document.createElement("input"); c.type="checkbox"; c.dataset.id=id;
+                                c.checked=!v.hidden.includes(id); l.appendChild(c); const s=document.createElement("span"); s.textContent=txt; l.appendChild(s); g.appendChild(l); };
+    movables().forEach(el=>{ const g=document.createElement("div"); g.className="optgrp"; row(g,el.id,label(el),false);                  // je Karte eine Gruppe mit ihren Bereichen darunter
+      if(el.id==="c_layout"){                                                                                                                 // "Optionen" selbst bleibt sichtbar (sonst käme man nicht zurück), "Design" und "Reihenfolge" lassen sich ausblenden
+        const c=g.querySelector("input"); c.checked=true; c.disabled=true; g.firstChild.classList.add("fixed");
+        ["opt_design","opt_order"].forEach(id=>{ const sub=$(id); if(sub) row(g,id,label(sub),true); }); }
+      else if(hideable(el.id)) el.querySelectorAll("details.subsec[id],#statdet").forEach(sub=>row(g,sub.id,label(sub),true));
+      box.appendChild(g); });
+    { const g=document.createElement("div"); g.className="optgrp"; row(g,"sm_btn","Streammodus",false); box.appendChild(g); }                        // Knopf in der Kopfleiste
+    { const g=document.createElement("div"); g.className="optgrp"; row(g,"hlp_btn","Hilfe-Knöpfe (i)",false); box.appendChild(g); }                  // alle "i"
+    { const g=document.createElement("div"); g.className="optgrp"; row(g,"heads","Überschriften von Chat und Vorschau",false);                       // spart je Karte eine Zeile
+      const b=document.createElement("button"); b.type="button"; b.className="helpbtn"; b.textContent="i"; b.setAttribute("aria-label","Erklärung zeigen"); b.setAttribute("aria-expanded","false"); g.firstChild.appendChild(b);
+      const h=document.createElement("div"); h.className="ph"; h.hidden=true; h.textContent="Blendet bei Chat und Vorschau die Überschrift und die Kopfzeile aus, um Platz zu sparen. Die Knöpfe (Einstellungen des Chats, Start und Stop der Vorschau) bleiben als kleine Symbole oben rechts über dem Inhalt.";
+      b.addEventListener("click",ev=>{ ev.preventDefault(); h.hidden=!h.hidden; b.setAttribute("aria-expanded",String(!h.hidden)); }); g.appendChild(h); box.appendChild(g); }
+    { const g=document.createElement("div"); g.className="optgrp"; const l=document.createElement("label"); l.className="optrow"; const t=document.createElement("span"); t.textContent="Fußleiste am Handy"; l.appendChild(t);
+      const sel=document.createElement("select"); sel.id="foot_mode"; sel.style.marginLeft="8px";
+      for(const [v2,txt] of [["auto","Automatisch"],["always","Immer anzeigen"],["hide","Ausblenden bei Chat oder Vorschau"],["off","Immer ausblenden"]]){ const o=document.createElement("option"); o.value=v2; o.textContent=txt; sel.appendChild(o); }
+      sel.value=window.pbFootGet?window.pbFootGet():"auto"; sel.addEventListener("change",()=>window.pbFootMode&&window.pbFootMode(sel.value)); l.appendChild(sel); g.appendChild(l);
+      const b=document.createElement("button"); b.type="button"; b.className="helpbtn"; b.textContent="i"; b.setAttribute("aria-label","Erklärung zeigen"); b.setAttribute("aria-expanded","false"); l.appendChild(b);
+      const h=document.createElement("div"); h.className="ph"; h.hidden=true; h.textContent="Die Knöpfe unten am Handy (Live/Stop, Kameras, Ton). Automatisch: Sie gleiten beim Runterscrollen weg und kommen beim Hochscrollen zurück, solange Chat oder Vorschau zu sehen sind; ohne beide bleiben sie immer da. Diese Einstellung gilt nur für dieses Gerät.";
+      g.appendChild(h); b.addEventListener("click",ev=>{ ev.preventDefault(); h.hidden=!h.hidden; b.setAttribute("aria-expanded",String(!h.hidden)); }); box.appendChild(g); }
+  }
+  function buildOrder(focus){
+    const box=$("ord_list"), v=views[edit], all=orderOf(v).map(id=>$(id)).filter(el=>el&&!el.hidden); box.textContent="";
+    all.forEach((el,i)=>{ const r=document.createElement("div"); r.className="ordrow"+(v.hidden.includes(el.id)&&hideable(el.id)?" off":"");
+      const t=document.createElement("span"); t.textContent=label(el); r.appendChild(t);
+      const m=document.createElement("span"); m.className="mvs";
+      for(const [dir,txt,tip] of [[-1,"▲","Menü nach oben schieben"],[1,"▼","Menü nach unten schieben"]]){
+        const b=document.createElement("button"); b.type="button"; b.className="mv"; b.dataset.id=el.id; b.dataset.dir=dir; b.textContent=txt; b.title=tip; b.setAttribute("aria-label",tip);
+        b.disabled=dir<0?i===0:i===all.length-1; m.appendChild(b); }
+      r.appendChild(m); box.appendChild(r); });
+    if(focus){ const mine=[...box.querySelectorAll("button.mv")].filter(x=>x.dataset.id===focus.id&&!x.disabled);                   // Fokus bleibt am verschobenen Menü (für die Tastatur)
+               const b=mine.find(x=>+x.dataset.dir===focus.dir)||mine[0]; if(b) b.focus(); }
+  }
+  function move(id,dir){
+    const v=views[edit], all=orderOf(v).filter(x=>$(x)&&!$(x).hidden), i=all.indexOf(id), j=i+dir; if(i<0||j<0||j>=all.length) return;
+    [all[i],all[j]]=[all[j],all[i]];
+    const rest=orderOf(v).filter(x=>!all.includes(x));                       // versteckte Karten behalten ihren Platz am Ende der Liste
+    v.order=all.concat(rest); save(edit);
+    if(edit===used()) applyOrder();
+    buildOrder({id,dir});
+  }
+  function setEdit(p){ edit=p; buildList(); buildOrder(); buildCtl(); document.dispatchEvent(new Event("pb-design-changed")); }
+  $("ord_list").addEventListener("click",ev=>{
+    const b=ev.target.closest("button.mv[data-id]"); if(!b||b.disabled) return;
+    move(b.dataset.id,+b.dataset.dir);
+  });
+  $("lay_list").addEventListener("change",e=>{
+    const c=e.target.closest("input[data-id]"); if(!c) return; const h=views[edit].hidden, id=c.dataset.id, i=h.indexOf(id);
+    if(c.checked&&i>=0) h.splice(i,1); if(!c.checked&&i<0) h.push(id); save(edit); if(edit===used()) applyHidden(); else buildOrder();
+  });
+  $("lay_showall").addEventListener("click",()=>{ views[edit].hidden=[]; save(edit); if(edit===used()) applyHidden(); buildList(); buildOrder(); });
+  $("lay_reset").addEventListener("click",()=>{ views[edit].order=[]; save(edit); if(edit===used()) applyOrder(); buildOrder(); });
+  $("view_mode").addEventListener("change",e=>{ mode=e.target.value; try{ if(mode==="auto") localStorage.removeItem(MKEY); else localStorage.setItem(MKEY,mode); }catch(x){}
+    edit=used(); applyAll(); document.dispatchEvent(new Event("pb-design-changed")); });
+  for(const p of ["desktop","mobile"]) $("vw_"+p).addEventListener("click",()=>setEdit(p));
+  $("vw_copy").addEventListener("click",()=>{ views[edit]=norm(JSON.parse(JSON.stringify(views[other(edit)]))); save(edit);
+    if(edit===used()){ applyOrder(); applyHidden(); applyDesign(); } buildList(); buildOrder(); buildCtl(); });
+  window.pbViews={used:()=>used(), edit:()=>edit, design:()=>views[edit].design,
+    setDesign:id=>{ views[edit].design=(id==="klar"||id==="kompakt")?id:""; save(edit); if(edit===used()) applyDesign(); }};
+  document.addEventListener("pb-menus-changed",()=>{ applyOrder(); applyHidden(); buildList(); });
+  if(phoneQ) phoneQ.addEventListener("change",()=>{ if(mode==="auto"){ applyAll(); } });             // Fenster wird schmal oder breit (Drehen, Größe ändern): die andere Ansicht gilt
+  window.addEventListener("resize",()=>{ if(mode==="auto") buildCtl(); });
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&Date.now()-loadedAt>5000) load(); });                                   // Änderungen von einem anderen Gerät übernehmen
+  edit=used();
+  applyOrder(); applyHidden(); applyDesign(); buildList(); buildCtl();
+  load();
+})();
+
+// ---- Designs (Optionen): je Ansicht (Desktop oder Mobil) eine eigene Wahl, auf der Box gespeichert (siehe Ansichten); "Standard" ist das bisherige Aussehen ----
+(function(){
   const DES=[{id:"",name:"Standard",text:"Das bisherige Aussehen der Oberfläche.",sw:["#0f172a","#1e293b","#06b6d4"]},
     {id:"klar",name:"Klar",text:"Hell, ruhig und großzügig: große Schrift, weiche Karten, viel Platz zum Antippen.",sw:["#f4f6fb","#ffffff","#2457d6"]},
     {id:"kompakt",name:"Kompakt",text:"Dicht und nüchtern: viele Werte auf einen Blick, wenig Abstand, besonders am Rechner praktisch.",sw:["#0b0f14","#121821","#37c8e0"]}];
-  let cur=""; try{ cur=localStorage.getItem(KEY)||""; }catch(e){}
-  if(!DES.some(d=>d.id===cur)) cur="";
-  function apply(id,save){
-    cur=id; const r=document.documentElement;
-    if(id) r.setAttribute("data-design",id); else r.removeAttribute("data-design");
-    if(save){ try{ if(id) localStorage.setItem(KEY,id); else localStorage.removeItem(KEY); }catch(e){} }
+  const cur=()=>window.pbViews?window.pbViews.design():"";
+  function pick(id){
+    window.pbViews.setDesign(id);
     let stored=""; try{ stored=localStorage.getItem("pb_theme")||""; }catch(e){}
-    if(save&&stored!=="light"&&stored!=="dark") setTheme(id==="klar"?"light":"dark",false);        // ohne eigene Wahl: Klar beginnt hell, die anderen dunkel
-    else setTheme(curTheme(),false);                                                               // meta theme-color an die neuen Farben anpassen
+    if(stored!=="light"&&stored!=="dark") setTheme(id==="klar"?"light":"dark",false);        // ohne eigene Wahl: Klar beginnt hell, die anderen dunkel
   }
   const box=$("design_list");
   DES.forEach(d=>{ const l=document.createElement("label"); l.className="dchoice";
-    const i=document.createElement("input"); i.type="radio"; i.name="design"; i.value=d.id; i.checked=d.id===cur; l.appendChild(i);
+    const i=document.createElement("input"); i.type="radio"; i.name="design"; i.value=d.id; i.checked=d.id===cur(); l.appendChild(i);
     const sw=document.createElement("span"); sw.className="dsw"; sw.setAttribute("aria-hidden","true"); d.sw.forEach(c=>{ const e=document.createElement("i"); e.style.background=c; sw.appendChild(e); }); l.appendChild(sw);
     const t=document.createElement("span"); t.className="dtx"; const b=document.createElement("b"); b.textContent=d.name; const x=document.createElement("span"); x.textContent=d.text; t.appendChild(b); t.appendChild(x); l.appendChild(t);
     box.appendChild(l); });
-  box.addEventListener("change",e=>{ const i=e.target.closest("input[name=design]"); if(i&&i.checked) apply(i.value,true); });
-  setTheme(curTheme(),false);
+  document.addEventListener("pb-design-changed",()=>box.querySelectorAll("input[name=design]").forEach(i=>{ i.checked=i.value===cur(); }));
+  box.addEventListener("change",e=>{ const i=e.target.closest("input[name=design]"); if(i&&i.checked) pick(i.value); });
 })();
 
 // Hilfstexte: auf dem Handy hinter einem "i" (Issue #21). Gemeint sind die festen Beschreibungen direkt unter einer Überschrift oder unter dem Kartenkopf.

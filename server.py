@@ -3028,6 +3028,84 @@ class DeviceNames:
             os.replace(tmp, self.path)
 
 
+class LayoutStore:
+    """Ansichten der Oberfläche für Desktop und Mobil, gespeichert auf der Box (gilt für alle Geräte): je Ansicht die eigene Reihenfolge der Hauptmenüs, die
+    ausgeblendeten Menüpunkte und das Design. Beide Ansichten haben denselben Aufbau. Gespeichert werden nur Abweichungen vom Standard (Reihenfolge, Ausgeblendetes),
+    neue Menüs erscheinen darum von selbst in beiden Ansichten. Der Browser wählt die Ansicht nach der Breite des Fensters (und der Wahl des Geräts).
+    Die Datei steht im Zustandsordner; es sind keine Geheimnisse."""
+    PROFILES = ("desktop", "mobile")
+    DESIGNS = ("", "klar", "kompakt")
+    ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+    MAX_IDS = 200
+
+    def __init__(self, state_dir):
+        self.path = os.path.join(state_dir, "layout.json")
+        self.lock = threading.Lock()
+
+    @classmethod
+    def clean(cls, d):
+        """Eine Ansicht prüfen und bereinigen: {"order": [...], "hidden": [...], "design": ""}; Unbrauchbares fällt weg."""
+        d = d if isinstance(d, dict) else {}
+        out = {}
+        for k in ("order", "hidden"):
+            seen, res = set(), []
+            for x in (d.get(k) if isinstance(d.get(k), list) else [])[:cls.MAX_IDS]:
+                if isinstance(x, str) and cls.ID_RE.match(x) and x not in seen:
+                    seen.add(x)
+                    res.append(x)
+            out[k] = res
+        out["design"] = d.get("design") if d.get("design") in cls.DESIGNS else ""
+        return out
+
+    def _read(self):
+        try:
+            with open(self.path) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
+
+    def get(self):
+        """{"set": ob schon gespeichert, "desktop": {...}, "mobile": {...}}"""
+        d = self._read()
+        p = (d or {}).get("profiles") if isinstance((d or {}).get("profiles"), dict) else {}
+        return {"set": d is not None, **{k: self.clean(p.get(k)) for k in self.PROFILES}}
+
+    def _write(self, profiles):
+        tmp = self.path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"version": 1, "profiles": profiles}, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+    def put(self, profile, data):
+        """Eine Ansicht speichern (nur die angegebenen Felder ändern sich)."""
+        if profile not in self.PROFILES:
+            raise ValueError("Ansicht unbekannt")
+        if not isinstance(data, dict):
+            raise ValueError("Angaben ungültig")
+        with self.lock:
+            cur = self.get()
+            new = dict(cur[profile])
+            for k in ("order", "hidden", "design"):
+                if k in data:
+                    new[k] = data[k]
+            profiles = {k: cur[k] for k in self.PROFILES}
+            profiles[profile] = self.clean(new)
+            self._write(profiles)
+        return self.get()
+
+    def init(self, data):
+        """Beim ersten Start: beide Ansichten aus den bisherigen Einstellungen des Browsers anlegen, aber nur, wenn noch nichts gespeichert ist
+        (ein zweites Gerät überschreibt nichts)."""
+        if not isinstance(data, dict):
+            raise ValueError("Angaben ungültig")
+        with self.lock:
+            if self._read() is None:
+                self._write({k: self.clean(data.get(k)) for k in self.PROFILES})
+        return self.get()
+
+
 def label_bluetooth(st, names):
     """Anzeigenamen der Bluetooth-Adapter und der Sticks ohne Adapter in der Antwort des Bluetooth-Dienstes: eigener Name (names), sonst der
     Standardname aus der Meldung des Sticks (Hersteller davor, wenn der Name nur eine Standardbezeichnung ist)."""
@@ -9389,6 +9467,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.ckeys.snapshot())
         if path == "/api/logmode":
             return self.reply(200, self.logmode.status())
+        if path == "/api/layout":
+            return self.reply(200, self.layout.get())
         if path == "/api/btdriver":
             return self.reply(200, self.btdriver.status())
         if path == "/api/logs":
@@ -9512,6 +9592,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logmode":
                 self.logmode.request(d.get("mode"))
                 return self.reply(200, {"ok": True})
+            if path == "/api/layout":
+                if isinstance(d.get("init"), dict):
+                    return self.reply(200, self.layout.init(d["init"]))
+                return self.reply(200, self.layout.put(d.get("profile"), d))
             if path == "/api/btdriver":
                 self.btdriver.request()
                 return self.reply(200, self.btdriver.status())
@@ -9812,6 +9896,7 @@ def main():
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
     Handler.names = DeviceNames(args.state)
+    Handler.layout = LayoutStore(args.state)
     Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names, Handler.srtla)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
