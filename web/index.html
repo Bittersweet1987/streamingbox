@@ -1327,6 +1327,22 @@ async function qrBuild(c,app){
   return qrBox(items,true)+note;        // die GoPro liest QR-Codes nur zuverlässig, wenn sie groß genug sind (GoPro-Seite: 360 Pixel)
 }
 let lastCams=[];
+// Kamera bewusst ausschalten (keine Störungsmeldung): im Bildaufbau deaktivieren und bei DJI trennen; "Einschalten" macht es rückgängig, "Entfernen" löscht die Kamera ganz
+const camOffBtn=c=>{
+  if(!(c.in_pips||c.is_main||(c.key||"").startsWith("dji-"))) return "";
+  const t=c.is_main?"Das Hauptbild lässt sich nicht ausschalten. Zuerst eine andere Kamera zum Hauptbild machen.":(c.parked?"Nimmt die Kamera wieder ins Bild und verbindet sie (DJI).":"Nimmt die Kamera aus dem Bild und trennt sie (DJI), ohne dass eine Störungsmeldung kommt. Sie bleibt gespeichert und lässt sich wieder einschalten.");
+  return `<button type="button" class="sec camoff" data-id="${c.id}" data-on="${c.parked?1:0}" title="${esc(t)}"${c.is_main?" disabled":""}>${c.parked?"Einschalten":"Ausschalten"}</button>`;
+};
+$("cams").addEventListener("click",async e=>{
+  const b=e.target.closest(".camoff"); if(!b||b.disabled) return;
+  const c=lastCams.find(x=>x.id===b.dataset.id); if(!c) return;
+  const wasOff=b.dataset.on==="1"; b.disabled=true;
+  try{
+    if(c.in_pips) await srtlaCall("POST","/api/pipeline/active",{key:c.key,active:wasOff});
+    if((c.key||"").startsWith("dji-")){ const dc=(djiData.cameras||[]).find(x=>x.rtmp_key===c.key); if(dc) await djiCmd({cmd:wasOff?"connect":"disconnect",addr:dc.addr}); }
+  }catch(x){ alert(x.message); }
+  tick(); if(typeof djiLoad==="function") djiLoad();
+});
 const qrCan=c=>!!c.url&&c.via_src!=="hdmi"&&!(c.key||"").startsWith("dji-");   // RTMP-Kameras wie ein Handy; DJI und HDMI richtet die Box selbst ein
 function renderCams(list){
   const box=$("cams");
@@ -1339,15 +1355,15 @@ function renderCams(list){
   const quiet=c=>c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1;
   list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
-  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||""]),netOpts,qrOut,[...qrHelp],connNames]);
+  const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||"",!!c.parked,!!c.is_main,!!c.in_pips]),netOpts,qrOut,[...qrHelp],connNames]);
   // Pfeile: mit dem Nachbarn in der angezeigten Liste die Plätze tauschen (die Fußleiste am Handy folgt dieser Reihenfolge, Issue #32)
   const mv=(c,i,dir)=>{ const o=list[i+dir], t=dir<0?"Kamera nach oben schieben":"Kamera nach unten schieben"; return `<button type="button" class="mv" data-id="${c.id}" data-with="${o?o.id:""}" title="${t}" aria-label="${t}"${o?"":" disabled"}>${dir<0?"▲":"▼"}</button>`; };
   if(box.dataset.sig!==sig){
     box.dataset.sig=sig;
     box.innerHTML=list.length?list.map((c,i)=>
-      `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}</span>
+      `<div class="cam" data-cid="${c.id}"><div class="top"><span class="cl"><span class="dot"></span><a href="#" class="ren" data-id="${c.id}" data-name="${esc(c.name)}">${esc(c.name)}</a><button type="button" class="sec ren" data-id="${c.id}" data-name="${esc(c.name)}" title="Kamera umbenennen" style="padding:2px 8px;font-size:12px;margin-left:6px">Umbenennen</button>${c.auto?'<span class="tag">automatisch erkannt</span>':""}${c.parked?'<span class="tag">aus (gewollt)</span>':""}</span>
       <span class="cn">${camNetHtml(c)}</span>
-      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${(c.key||"").startsWith("dji-")?`<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div><div class="netlock" data-lockkey="${esc(c.key)}" hidden></div>`:""}${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro: zuerst den Hotspot der Box einrichten und die GoPro damit verbinden (GoPro-App), dann bei Labs-Firmware die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
+      <span class="muted cr"><span class="dyn"></span> ${mv(c,i,-1)}${mv(c,i,1)}${camOffBtn(c)}<button class="del" data-id="${c.id}">Entfernen</button></span></div>${(c.key||"").startsWith("dji-")?`<div class="netnote" data-key="${esc(c.key)}" role="status" hidden></div><div class="netlock" data-lockkey="${esc(c.key)}" hidden></div>`:""}${c.url?`<code>${esc(c.url)}</code>`:""}${qrCan(c)?`<div class="qrline"><select class="qrsel" data-id="${c.id}" aria-label="App">${QR_APPS.map(a=>`<option value="${a[0]}"${(qrApp[c.id]||"irlpro")===a[0]?" selected":""}>${a[1]}</option>`).join("")}</select> <button type="button" class="sec qrb" data-id="${c.id}" style="padding:2px 8px;font-size:12px">QR-Code erzeugen</button> <button type="button" class="helpbtn qrhb" data-id="${c.id}" aria-label="Erklärung zeigen" aria-expanded="${qrHelp.has(c.id)}">?</button></div>${qrHelp.has(c.id)?`<div class="ph">IRL Pro und Moblin: den Code mit der Kamera-App des Handys scannen und den Link öffnen. GoPro: zuerst den Hotspot der Box einrichten und die GoPro damit verbinden (GoPro-App), dann bei Labs-Firmware die Codes 1, 2, 3 nacheinander vor die Kamera halten. Das Handy oder die GoPro muss die Box erreichen. Der Code enthält den Kamera-Schlüssel.</div>`:""}${qrOut[c.id]||""}`:""}</div>`).join("")
       :'<div class="muted">Noch keine Kamera angelegt.</div>';
   }
   for(const c of list){
