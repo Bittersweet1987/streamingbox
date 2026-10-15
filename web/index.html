@@ -1776,6 +1776,9 @@ $("ctrlcard").addEventListener("click",async e=>{ const b=e.target.closest(".ct-
   if(confirm("Diesen Controller entfernen? Die Kopplung wird aufgehoben.")&&await djiCmd({cmd:"ctrl_remove",addr:row.dataset.addr})) djiLoad(); });
 $("ctrlfound").addEventListener("click",async e=>{ const b=e.target.closest(".ct-pair"), row=e.target.closest("[data-addr]"); if(!b||!row) return;
   if(await djiCmd({cmd:"ctrl_pair",addr:row.dataset.addr})) djiLoad(); });
+// Getrennte, ausgeschaltete oder nicht erreichbare Kameras stehen in der Liste unten (stabil sortiert); "connecting" und "error" zählen dazu, damit eine ausgeschaltete Kamera mit ihren Wiederholversuchen nicht ständig die Plätze wechselt
+const djiAway=c=>!(c.publishing||["streaming","status","starting","configuring","pairing"].includes(c.state));
+const djiSorted=l=>(l||[]).map((c,i)=>[djiAway(c)?1:0,i,c]).sort((x,y)=>x[0]-y[0]||x[1]-y[1]).map(x=>x[2]);
 function djiRender(d){
   djiData=d; djiRecv=Date.now(); btRender(d); phoneRender(d); ctrlRender(d);
   const note=$("djinote"), box=$("djicams");
@@ -1792,11 +1795,12 @@ function djiRender(d){
     el.style.color=bad?"var(--crit)":""; }
   $("d_scan").disabled=!!d.scanning; $("d_scan").textContent=d.scanning?"Suche läuft …":"Nach DJI-Kameras suchen";
   // Die Karten nur neu aufbauen, wenn sich die Kameras oder Verbindungen ändern (sonst wird das Tippen unterbrochen)
-  const sig=JSON.stringify([(d.cameras||[]).map(c=>c.addr+"|"+(c.saved||[]).join(",")+"|"+c.wifi_ifname+"|"+(c.locked?1:0)),(d.wifi_options||[]).map(o=>[o.ifname,o.ssid,o.type,o.ip,o.secret_missing])]);
+  const cams=djiSorted(d.cameras);
+  const sig=JSON.stringify([cams.map(c=>c.addr+"|"+(c.saved||[]).join(",")+"|"+c.wifi_ifname+"|"+(c.locked?1:0)+"|"+(djiAway(c)?1:0)),(d.wifi_options||[]).map(o=>[o.ifname,o.ssid,o.type,o.ip,o.secret_missing])]);
   const ae=document.activeElement, typing=box.contains(ae)&&(ae.tagName==="TEXTAREA"||ae.tagName==="SELECT"||(ae.tagName==="INPUT"&&!/^(button|checkbox|radio|submit|reset)$/.test(ae.type)));       // nur ein Feld, in das gerade getippt wird, hält den Neuaufbau an; ein Knopf (z. B. "Neu verbinden") nicht
   if(sig!==djiStruct&&!typing){
     djiStruct=sig;
-    box.innerHTML=(d.cameras||[]).length?d.cameras.map(djiCardHtml).join(""):'<div class="muted" style="margin-top:8px">Noch keine DJI-Kamera eingerichtet. Kamera einschalten, Bluetooth aktivieren, nahe an die Box legen und suchen.</div>';
+    box.innerHTML=cams.length?cams.map(djiCardHtml).join(""):'<div class="muted" style="margin-top:8px">Noch keine DJI-Kamera eingerichtet. Kamera einschalten, Bluetooth aktivieren, nahe an die Box legen und suchen.</div>';
   }
   djiDynamic();
   $("djiscan").innerHTML=(d.scan||[]).map(r=>`<div class="dscan"><div>${esc(r.name)} <span class="muted">${esc(r.model)} · ${esc(r.addr)} · ${esc(r.rssi)} dBm</span></div>${r.paired?'<span class="muted">hinzugefügt</span>':`<button type="button" class="d-add" data-addr="${esc(r.addr)}" data-name="${esc(r.name)}" data-model="${esc(r.model)}" data-kind="${esc(r.kind)}">Hinzufügen</button>`}</div>`).join("");
