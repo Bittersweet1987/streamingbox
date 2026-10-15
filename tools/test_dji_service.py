@@ -2054,6 +2054,14 @@ class DjiServiceTests(unittest.TestCase):
         self.svc._extras = None
         self.assertEqual(self.svc.parked_keys(), set())
 
+    def test_a_camera_that_sends_is_never_parked_even_without_auto_connect(self):
+        """Nach einem Neustart des Bluetooth-Dienstes kennt er eine weiterlaufende Kamera nicht mehr (idle), sie sendet aber an die Box: nicht "aus (gewollt)"."""
+        self.srv.cameras = [{"addr": ADDR, "rtmp_key": "dji-000001", "state": "idle", "autoconnect": False, "manual_off": False, "publishing": True},     # sendet
+                            {"addr": ADDR2, "rtmp_key": "dji-000002", "state": "idle", "autoconnect": False, "manual_off": False, "publishing": False},   # sendet nicht
+                            {"addr": "AA:BB:CC:00:00:03", "rtmp_key": "dji-000003", "state": "idle", "autoconnect": True, "manual_off": True, "publishing": True}]  # "Trennen": bleibt aus
+        self.svc._extras = None
+        self.assertEqual(self.svc.parked_keys(), {"dji-000002", "dji-000003"})
+
     def test_fps_for_key_reads_the_service_config(self):
         with open(os.path.join(self.state, "dji-cameras.json"), "w") as f:
             json.dump({"cameras": {ADDR: {"rtmp_key": "dji-000001", "fps": 25}, ADDR2: {"rtmp_key": "dji-000002", "fps": 60}}}, f)

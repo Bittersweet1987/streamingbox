@@ -1221,14 +1221,21 @@ function battHtml(c){
 }
 // Kleine Punkte in der Kopfzeile der Chat-Karte: einer je Kamera (höchstens vier), grün sendet und ist im Bild, gelb sendet noch nicht im Bild, rot kein Signal, grau unbekannt
 function paintCamDots(list){
-  const el=$("cam_dots"); if(!el) return; const l=(list||[]).filter(c=>!c.parked).slice(0,4);       // ausgeschaltete Kameras (gewollt) haben keinen Punkt
+  const el=$("cam_dots"); if(!el) return; const l=camSorted(list||[]).filter(c=>!c.parked).slice(0,4);       // ausgeschaltete Kameras (gewollt) haben keinen Punkt; Reihenfolge wie in der Kameraliste
   setHtml(el,l.map(c=>`<span class="${camDotCls(c)}" title="${esc(camDotTitle(c))}"></span>`).join(""));
   el.setAttribute("aria-label",l.length?l.map(c=>c.name).join(", "):"");
 }
 const camSeenLive={};                                  // Kamera-Nummer -> Zeitpunkt (ms), zu dem sie zuletzt sendete (nur im Browser, für die Reihenfolge der Liste)
 const CAM_HOLD_TOP_MS=120000;                          // so lange bleibt eine Kamera, die nicht mehr sendet, oben in der Liste
+// Reihenfolge der Kameras überall gleich (Kameraliste, Übersicht, Punkte in der Kopfzeile): gespeicherte Reihenfolge, Kameras ohne Signal erst nach zwei Minuten nach unten, gewollt ausgeschaltete ganz unten
+function camSorted(list){
+  const nowMs=Date.now();
+  for(const c of list) if(c.state==="live"||c.state==="unknown") camSeenLive[c.id]=nowMs;
+  const quiet=c=>c.parked?2:(c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1);
+  return list.slice().sort((x,y)=>quiet(x)-quiet(y));                                                   // Array.sort ist stabil: sonst bleibt die Reihenfolge der Anlage
+}
 function renderCamLights(list){
-  list=list.filter(c=>!c.parked);                      // bewusst ausgeschaltete Kameras stehen nicht mehr in der Übersicht (sie bleiben in der Kameraliste, "aus (gewollt)")
+  list=camSorted(list).filter(c=>!c.parked);                      // bewusst ausgeschaltete Kameras stehen nicht mehr in der Übersicht (sie bleiben in der Kameraliste, "aus (gewollt)")
   // Gibt es Akkustände (DJI-Kameras), steht der Akku in einer eigenen Spalte mit der Überschrift "Akku", mittig; ein langer Name wird gekürzt
   // (Auslassungspunkte), statt die Spalten zu verschieben. Ohne Akkustand bleibt es bei Name und Datenrate.
   const any=list.some(c=>c.battery!=null), box=$("camlights");
@@ -1382,11 +1389,8 @@ function renderCams(list){
   camsByKey={}; for(const c of list) camsByKey[c.key]=c;
   // Kameras ohne Signal stehen unten; sonst bleibt die Reihenfolge der Anlage (Array.sort ist stabil)
   // Eine Kamera, die nicht mehr sendet (zum Beispiel beim Wechsel des Netzes), bleibt noch zwei Minuten oben und rutscht erst dann nach unten (Wunsch des Nutzers, 12. Oktober 2026)
-  const nowMs=Date.now();
-  for(const c of list) if(c.state==="live"||c.state==="unknown") camSeenLive[c.id]=nowMs;
-  // Reihenfolge: zuerst Kameras mit Signal (in der gespeicherten Reihenfolge), dann Kameras ohne Signal (rot), ganz unten die gewollt ausgeschalteten (Wunsch des Nutzers, 15. Oktober 2026)
-  const quiet=c=>c.parked?2:(c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1);
-  list=list.slice().sort((x,y)=>quiet(x)-quiet(y));
+  // Reihenfolge: zuerst Kameras mit Signal (in der gespeicherten Reihenfolge), dann Kameras ohne Signal (rot), ganz unten die gewollt ausgeschalteten (Wunsch des Nutzers, 15. Oktober 2026); dieselbe Reihenfolge gilt in der Übersicht und in der Kopfzeile
+  list=camSorted(list);
   // Struktur-Signatur ohne Zahlen, die sich ständig ändern (fps, Datenrate, Status)
   const sig=JSON.stringify([list.map(c=>[c.id,c.name,c.role,c.url,!!c.auto,c.via,c.via_src,c.iface||"",!!c.parked,!!c.is_main,!!c.in_pips]),netOpts,qrOut,[...qrHelp],connNames]);
   // Pfeile: mit dem Nachbarn in der angezeigten Liste die Plätze tauschen (die Fußleiste am Handy folgt dieser Reihenfolge, Issue #32)
