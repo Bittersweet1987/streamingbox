@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.60
+- **Die Adresse der öffentlichen Statistik ändert sich nie mehr von selbst (Meldung von Bittersweet, 16. Oktober 2026).** Der Schlüssel in der Adresse wird zusätzlich in `stats-token` gesichert. Ausschalten und erneutes Einschalten behält ihn; sind die Einstellungen (`stats-share.json`) verloren oder kaputt, wird er aus der Kopie geholt. Einen neuen Schlüssel gibt es nur noch über „Neuen Schlüssel erzeugen“.
+
 ## 1.0.59
 - **Bildrate von Handys schon vor dem Livegang (Meldung von Bittersweet, 16. Oktober 2026).** Verbundene Kameras ohne Bildrate in den Stream-Daten (zum Beispiel Handys) zeigen ihre Bildrate jetzt auch, wenn die Sendung noch nicht läuft: Die Box liest den Stream etwa 6 Sekunden vom eigenen nginx und zählt nur Bilder (kein Dekodieren, höchstens eine Messung gleichzeitig, Wert 2 Minuten gültig, im Hintergrund erneuert). Werte nahe 24, 25, 30, 50 oder 60 werden auf diese Rate gerundet. Bei laufender Sendung gilt weiter die von belacoder gemessene Rate. Gilt für die Statusseite und die Statistik.
 

@@ -161,6 +161,27 @@ class Store(unittest.TestCase):
         self.assertEqual(self.s.check(tok, "1.2.3.4"), "bad")
         self.assertEqual(self.s.status()["token"], tok)
 
+    def test_off_and_on_again_keeps_the_same_address(self):
+        tok = self.s.update(enabled=True)["token"]
+        for _ in range(3):
+            self.s.update(enabled=False)
+            self.assertEqual(server.StatsShare(self.dir).update(enabled=True)["token"], tok)
+
+    def test_lost_or_broken_settings_file_keeps_the_address(self):
+        tok = self.s.update(enabled=True)["token"]
+        os.remove(os.path.join(self.dir, "stats-share.json"))                      # Datei weg
+        self.assertEqual(server.StatsShare(self.dir).update(enabled=True)["token"], tok)
+        with open(os.path.join(self.dir, "stats-share.json"), "w") as f:
+            f.write("{kaputt")                                                      # Datei kaputt
+        self.assertEqual(server.StatsShare(self.dir).update(enabled=True)["token"], tok)
+
+    def test_new_token_replaces_the_backup_too(self):
+        old = self.s.update(enabled=True)["token"]
+        new = self.s.update(new_token=True)["token"]
+        os.remove(os.path.join(self.dir, "stats-share.json"))
+        self.assertEqual(server.StatsShare(self.dir).update(enabled=True)["token"], new)
+        self.assertNotEqual(old, new)
+
     def test_new_token_invalidates_the_old_one(self):
         old = self.s.update(enabled=True)["token"]
         new = self.s.update(new_token=True)["token"]
