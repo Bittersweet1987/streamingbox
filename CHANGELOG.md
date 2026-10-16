@@ -2,6 +2,10 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.58
+- **Statistik: alles, was unter „Status“ steht, einschließlich der Details, und „Box offline“ (Wunsch von Bittersweet, 16. Oktober 2026).** Neu in der Statistik und auf der Seite `statistik.html`: Senden mit allen Details (eingestellte Bitrate, Sendepuffer mit Paketen, Neuübertragungen und Verlust als Anzahl und Prozent, Encoder-Bilder/s), Upload und Download je Netz, alle Temperaturzonen, jeder Prozessorkern mit Takt und Balken, GPU und NPU, Speicherplatz, Lüfter, Speicher gesamt. Jeder Block lässt sich einzeln wählen (neu: „Prozessor-Details“ und „Speicherplatz“; fehlen sie in einer älteren Auswahl, gelten sie als an). **Bereits erzeugte Links und heruntergeladene Dateien laufen weiter:** Es kamen nur Felder dazu, keins wurde umbenannt oder entfernt. Fällt die Verbindung zur Box aus (Box aus, ohne Netz, Verbindung weg, Schlüssel ungültig), zeigt die Seite oben „Box offline“ mit „letzte Daten vor …“, lässt die letzten Werte blass stehen und verbindet sich von selbst neu. Die Seite zeigt die Blöcke bei breitem Fenster in mehreren Spalten.
+- **Bildrate von Kameras ohne Angabe (zum Beispiel Handys):** Meldet eine Kamera keine Bildrate (der nginx kennt sie nur aus den Metadaten), nimmt die Oberfläche und die Statistik die von belacoder am Mischer gemessene (nur bei laufender Sendung in der Betriebsart „Alle Kameras immer bereit“); DJI-Kameras zeigen weiter die eingestellte Rate, wenn nichts gemessen wird.
+
 ## 1.0.57
 - Die Verzögerung der Kameras verschiebt jetzt wirklich Bild und Ton (bis 3000 ms, vorher ohne Wirkung, höchstens 750). Nötig: belacoder wird beim Update neu gebaut.
 

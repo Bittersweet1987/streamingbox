@@ -2,6 +2,7 @@
 alle Plätze, feste Ausgabe), Befehle für den Steuerkanal (nur Änderungen, oberstes Bild zuletzt), Regler (Zweige starten/stoppen, Wahl von Haupt- und
 kleinen Bildern, anderer Schlüssel ohne Neustart, Ansicht) und die Anbindung an server.py. Die echte Kette wurde mit Messskripten auf der Box geprüft (nicht mehr im Repository, siehe Git-Historie bis 0.9.144)."""
 import os
+import shutil
 import re
 import sys
 import tempfile
@@ -277,6 +278,29 @@ class RoundedFrames(unittest.TestCase):
         lines = self.cmds(self.styled(60), {0: 0, 1: 1})
         self.assertFalse(any(" rnd " in l or "_tap" in l for l in lines))
         self.assertIn("pad pipcomp sink_4 alpha 0.40", lines)       # alte Rahmenstreifen (ohne Baustein keine Rundung)
+
+
+class MeasuredFps(unittest.TestCase):
+    """Bildrate je Kamera aus der Statistik von belacoder (für Kameras, die sie nicht melden, zum Beispiel Handys)."""
+
+    LINE = ("t=1 br=12000000 comp=30.7/0/41 in_f0=29.7/0/51 in_f0_lag=-32/-31/-13 in_f1=0.0/0/0 in_f2=0.0/0/0 in_f3=29.9/0/51 in_f3_lag=-64/-62/-45 "
+            "vr_f3=29.7/9/147 dec_f3=30.7/26/263 feed_sbf0=3 feed_sbf1=1 feed_sbf2=1 feed_sbf3=3")
+
+    def read(self, text, age=0):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "live.txt")
+        with open(p, "w") as f:
+            f.write(text + "\n")
+        return L.read_fps(p, now=os.stat(p).st_mtime + age)
+
+    def test_reads_the_input_rate_of_each_branch_with_pictures(self):
+        self.assertEqual(self.read(self.LINE), {0: 29.7, 3: 29.9})             # Zweige ohne Bilder (0.0) fehlen; in_f<N>_lag und vr_/dec_ zählen nicht
+
+    def test_old_or_missing_statistics_give_nothing(self):
+        self.assertEqual(self.read(self.LINE, age=30), {})
+        self.assertEqual(L.read_fps("/nicht/da"), {})
+        self.assertEqual(self.read("t=1 nichts"), {})
 
 
 class AudioQueues(unittest.TestCase):
@@ -639,7 +663,7 @@ class BelacoderLabel(unittest.TestCase):
 
     def test_the_label_of_the_build_stays_below_the_copy_level(self):
         label = self.label()
-        self.assertEqual(label, "ccce9ca-jt2-sb12-eos")
+        self.assertEqual(label, "ccce9ca-jt2-sb12-eos-sh")
         level = int(re.search(r"-sb(\d+)", label).group(1))
         self.assertLess(level, L.COPY_LEVEL)
 

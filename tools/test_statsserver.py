@@ -33,8 +33,11 @@ def sample_metrics():
                     "wlan0": {"rx_mbit": 0.5, "tx_mbit": 0.2}},
             "uplinks": {"eth1": {"state": "an", "srtt": 31}, "eth2": {"state": "aus", "srtt": None}},
             "payload_mbit": 4.0,
-            "details": {"temps": [{"name": "CPU", "c": 61.5}, {"name": "GPU", "c": 55.0}], "send": {"fps": 29.9, "bitrate_kbps": 8000, "rtt_ms": 31, "send_mbps": 8.1, "snd_buf_ms": 80,
-                                                                                                   "loss_pct": 0.0, "retrans_pct": 0.4, "stream_id": "GEHEIM-STREAM-ID", "server": "srt.example.org"}},
+            "details": {"temps": [{"name": "CPU", "c": 61.5}, {"name": "GPU", "c": 55.0}],
+                        "send": {"fps": 29.9, "bitrate_kbps": 8000, "rtt_ms": 31, "send_mbps": 8.1, "snd_buf_ms": 80, "snd_buf_pkts": 55, "retrans_total": 120, "loss_total": 14, "drop_total": 0,
+                                 "sent_total": 90000, "loss_pct": 0.0, "retrans_pct": 0.4, "stream_id": "GEHEIM-STREAM-ID", "server": "srt.example.org"},
+                        "accel": {"gpu": {"load_pct": 12, "mhz": 300}, "npu": {"load_pct": None, "mhz": 1000}},
+                        "disk": {"total_gb": 62.1, "free_gb": 40.2, "used_gb": 21.9, "used_pct": 35.3, "pfad": "/geheim"}},
             "cameras": [{"key": "dji-b8a860", "name": "Haupt", "state": "live", "fps": 30.0, "mbit": 8.0, "battery": 77, "charging": False, "is_main": True, "parked": False,
                          "url": "rtmp://192.168.1.100/publish/dji-b8a860", "ip": "192.168.1.55"},
                         {"key": "cam2", "name": "Handy", "state": "offline", "fps": None, "mbit": None, "is_main": False, "parked": True}],
@@ -59,7 +62,16 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(s["uplink_tx_mbit"], 4.2)
         self.assertEqual(s["send"]["bitrate_kbps"], 8000)
         self.assertEqual(s["cpu"]["avg"], 15.0)
+        self.assertEqual((s["cpu"]["mem_used_pct"], s["cpu"]["mem_avail_mb"], s["cpu"]["mem_total_mb"]), (22.0, 6000, 7900))
         self.assertEqual(s["temp"]["max_c"], 61.5)
+        self.assertEqual([z["name"] for z in s["temp"]["zones"]], ["CPU", "GPU"])
+        self.assertEqual((s["send"]["buf_pkts"], s["send"]["retrans_total"], s["send"]["loss_total"], s["send"]["drop_total"], s["send"]["sent_total"]), (55, 120, 14, 0, 90000))
+        self.assertEqual(s["send"]["shown_mbit"], 4.0)                    # wie neben "Live": nie mehr als auf der Leitung gesendet wird (Summe der Sendewege 4,2, Nutzdaten 4,0)
+        self.assertEqual(s["cores"]["load"], [10.0, 20.0])
+        self.assertEqual(s["cores"]["freq_mhz"], [1800, 2400])
+        self.assertEqual(s["cores"]["gpu"], {"load_pct": 12, "mhz": 300})
+        self.assertEqual(s["cores"]["npu"], {"load_pct": None, "mhz": 1000})
+        self.assertEqual(s["disk"], {"used_gb": 21.9, "free_gb": 40.2, "total_gb": 62.1, "used_pct": 35.3})
         self.assertEqual([c["name"] for c in s["cameras"]], ["Haupt", "Handy"])
         self.assertEqual(s["cameras"][0]["battery"], 77)
         self.assertTrue(s["cameras"][1]["parked"])
@@ -73,7 +85,7 @@ class Snapshot(unittest.TestCase):
 
     def test_nothing_secret_is_in_the_snapshot(self):
         text = json.dumps(self.snap())
-        for secret in ("GEHEIM-STREAM-ID", "srt.example.org", "192.168.1.", "rtmp://", "dji-b8a860", "NIE-AUSGEBEN", "stream_id", '"key"', '"url"', '"ip"'):
+        for secret in ("GEHEIM-STREAM-ID", "srt.example.org", "192.168.1.", "rtmp://", "dji-b8a860", "NIE-AUSGEBEN", "stream_id", '"key"', '"url"', '"ip"', "/geheim", "pfad"):
             self.assertNotIn(secret, text, secret)
 
     def test_groups_switch_parts_off(self):
@@ -81,6 +93,35 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(sorted(s), ["live", "time", "v"])
         s = self.snap({**{g: False for g in server.StatsShare.GROUPS}, "cameras": True})
         self.assertEqual(sorted(s), ["cameras", "live", "time", "v"])
+
+    def test_every_block_of_the_status_page_can_be_chosen(self):
+        self.assertEqual(sorted(server.StatsShare.GROUPS), ["alerts", "cameras", "cores", "cpu", "disk", "net", "send", "temp"])
+        for g in server.StatsShare.GROUPS:                                  # jeder Block lässt sich einzeln übertragen
+            only = {x: x == g for x in server.StatsShare.GROUPS}
+            keys = set(self.snap(only)) - {"v", "time", "live"}
+            self.assertTrue(keys, g)
+        self.assertEqual(set(self.snap({**{x: False for x in server.StatsShare.GROUPS}, "disk": True})) - {"v", "time", "live"}, {"disk"})
+        self.assertEqual(set(self.snap({**{x: False for x in server.StatsShare.GROUPS}, "cores": True})) - {"v", "time", "live"}, {"cores"})
+
+    def test_older_pages_still_find_what_they_use(self):
+        """Schon heruntergeladene statistik.html-Dateien und Seitenadressen lesen diese Felder; sie dürfen sich nie ändern (neue kommen nur dazu)."""
+        s = self.snap()
+        self.assertEqual(s["v"], 1)
+        self.assertTrue({"fps", "bitrate_kbps", "rtt_ms", "send_mbps", "buffer_ms", "loss_pct", "retrans_pct", "payload_mbit"} <= set(s["send"]))
+        self.assertTrue({"id", "name", "rx_mbit", "tx_mbit", "uplink", "state", "srtt_ms"} <= set(s["net"][0]))
+        self.assertIn("uplink_tx_mbit", s)
+        self.assertTrue({"avg", "max", "mem_used_pct", "mem_avail_mb"} <= set(s["cpu"]))
+        self.assertTrue({"max_c", "fan_pct", "zones"} <= set(s["temp"]))
+        self.assertTrue({"name", "state", "fps", "mbit", "battery", "charging", "main", "parked"} <= set(s["cameras"][0]))
+        self.assertTrue({"level", "text"} <= set(s["alerts"][0]))
+
+    def test_groups_missing_in_an_older_settings_file_count_as_on(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with open(os.path.join(d, "stats-share.json"), "w") as f:
+            json.dump({"enabled": True, "token": "x" * 32, "groups": {"send": True, "net": False, "cpu": True, "temp": True, "cameras": True, "alerts": True}}, f)
+        g = server.StatsShare(d).groups()
+        self.assertEqual((g["cores"], g["disk"], g["net"]), (True, True, False))
 
     def test_broken_input_does_not_raise(self):
         s = server.build_stats_snapshot(None, None, None, ALL, now=5)
@@ -429,6 +470,40 @@ class CheapLiveCheck(unittest.TestCase):
         self.assertNotIn("send.status()", body)
 
 
+class MeasuredFpsInStatus(unittest.TestCase):
+    """Kameras ohne Bildrate in den Metadaten (Handys) bekommen die von belacoder gemessene; DJI-Kameras weiter die eingestellte."""
+
+    def make(self, content):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        sc = object.__new__(server.SendControl)
+        sc.demo = False
+        sc.STATUS = os.path.join(d, "status.json")
+        if content is not None:
+            with open(sc.STATUS, "w") as f:
+                json.dump(content, f)
+        return sc
+
+    def test_measured_rates_come_from_the_status_file_of_the_sender(self):
+        sc = self.make({"time": time.time() - 1, "failover": {"fps": {"cam2": 29.9, "dji-a": 30.0, "x": 0, "y": "abc"}}})
+        self.assertEqual(sc.measured_fps(), {"cam2": 29.9, "dji-a": 30.0})
+
+    def test_old_or_missing_status_gives_nothing(self):
+        self.assertEqual(self.make({"time": time.time() - 60, "failover": {"fps": {"cam2": 29.9}}}).measured_fps(), {})
+        self.assertEqual(self.make(None).measured_fps(), {})
+        self.assertEqual(self.make({"time": time.time(), "failover": None}).measured_fps(), {})
+        self.assertEqual(self.make({"time": "x"}).measured_fps(), {})
+
+    def test_wiring(self):
+        s = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
+        body = s.split("def metrics_data", 1)[1].split("return m", 1)[0]
+        self.assertIn("measured_fps()", body)
+        self.assertIn("fps_measured", body)
+        self.assertLess(body.index("measured_fps()"), body.index("fps_for_key"))       # erst gemessen, dann die eingestellte Rate der DJI-Kamera
+        send = open(os.path.join(ROOT, "pipbox_send.py"), encoding="utf-8").read()
+        self.assertIn("pipbox_live.read_fps()", send)
+
+
 class RemoteSplit(unittest.TestCase):
     """Die öffentliche Statistik (Port 8443) und die Oberfläche (Port 443) sind getrennt: jede hat ihren eigenen Zustand."""
 
@@ -545,9 +620,42 @@ class Page(unittest.TestCase):
     def test_the_interface_has_the_section_inside_the_remote_access_card(self):
         idx = self.src_index()
         card = idx.split('id="rcard"', 1)[1].split('id="swcard"', 1)[0]
-        for needle in ('id="statshare"', 'id="ss_on"', 'id="ss_page"', 'id="ss_ws"', 'data-ssg="net"', "/api/statsshare", "/api/statsshare/widget"):
+        for needle in ('id="statshare"', 'id="ss_on"', 'id="ss_page"', 'id="ss_ws"', 'data-ssg="net"', 'data-ssg="cores"', 'data-ssg="disk"', "/api/statsshare", "/api/statsshare/widget"):
             self.assertIn(needle, idx, needle)
         self.assertIn('id="statshare"', card)
+
+    def test_page_shows_every_block_of_the_status_page(self):
+        for needle in ('id="c_net"', 'id="c_send"', 'id="c_cam"', 'id="c_sys"', 'id="c_temps"', 'id="c_cores"', 'id="c_disk"', 'id="c_alerts"', "d.cores", "d.disk", "d.temp.zones", "retrans_total",
+                       "buf_pkts", "shown_mbit", "mem_avail_mb"):
+            self.assertIn(needle, self.html, needle)
+        for flag in ("cores:", "disk:", "zones:", "temp:", "sys:", "cams:", "net:", "send:", "alerts:"):
+            self.assertIn(flag, self.html.split("show: {", 1)[1].split("}", 1)[0], flag)
+
+    def test_page_shows_box_offline_when_nothing_arrives(self):
+        for needle in ('boxOffline: "Box offline"', "offlineWatch", 'id="offline"', "L.boxOffline", "lastData:", "isOffline("):
+            self.assertIn(needle, self.html, needle)
+        self.assertIn("setInterval(offlineWatch, 1000)", self.html)
+
+    def run_js(self, calls):
+        """Die reine Rechnung der Seite (Frist, Alter) mit Node prüfen; ohne Node übersprungen."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js nicht installiert")
+        import subprocess
+        src = self.html.split("<script>", 1)[1]
+        fns = "".join(re.search(r"^function %s\(.*$" % n, src, re.M).group(0) + chr(10) for n in ("offlineAfterMs", "isOffline", "fmtAge"))
+        out = subprocess.run([node, "-e", fns + "console.log(JSON.stringify([" + calls + "]))"], capture_output=True, text=True, timeout=20)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_offline_rule(self):
+        got = self.run_js("offlineAfterMs(1), offlineAfterMs(2), offlineAfterMs(10), "
+                          "isOffline(100000, 99000, 0, 1), isOffline(100000, 90000, 0, 1), isOffline(100000, 0, 99000, 1), isOffline(100000, 0, 90000, 1), isOffline(100000, 90000, 99000, 1)")
+        self.assertEqual(got[:3], [6500, 8000, 20000])               # die Frist wächst mit dem Takt
+        self.assertEqual(got[3:], [False, True, False, True, False])  # frische Daten: online; 10 s ohne Daten: offline; nach dem Wiederaufnehmen zählt ab dort; das Jüngere gilt
+
+    def test_age_text(self):
+        self.assertEqual(self.run_js('fmtAge(5), fmtAge(89), fmtAge(120), fmtAge(3600), fmtAge(7200)'), ["5 s", "89 s", "2 min", "60 min", "2 h"])
 
     @staticmethod
     def src_index():
