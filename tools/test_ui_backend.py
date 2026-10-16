@@ -1,6 +1,7 @@
 """Tests für vier Kameras (drittes kleines Bild), Tonauswahl, Sendeweg-Verteilung und WLAN-Anfragen (server.py)."""
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -259,7 +260,8 @@ class HelperChecks(unittest.TestCase):
             return mock.Mock(returncode=fail, stdout="", stderr=err if fail else "")
         with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: saved), \
                 mock.patch.object(self.h, "check_iface", lambda i: None), mock.patch.object(self.h, "check_not_camera_profile", lambda s: None), \
-                mock.patch.object(self.h, "hotspot_active", lambda i: False):
+                mock.patch.object(self.h, "hotspot_active", lambda i: False), \
+                mock.patch.object(self.h, "hwaddr", lambda i: {"wlan1": "aa:bb:cc:dd:ee:01", "wlan0": "aa:bb:cc:dd:ee:00"}.get(i, "")):
             try:
                 return calls, self.h.do_connect(req), None
             except RuntimeError as e:
@@ -272,10 +274,80 @@ class HelperChecks(unittest.TestCase):
         self.assertIn("gespeichert", msg)
         names = [c[0] for c in calls]
         self.assertNotIn(("con", "delete", "id", "Bittersweet_EXT"), names)                      # nichts gelöscht
-        self.assertIn(("con", "modify", "id", "Bittersweet_EXT", "connection.interface-name", "wlan1"), names)
+        self.assertIn(("con", "modify", "id", "Bittersweet_EXT", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:bb:cc:dd:ee:01"), names)   # an die Karte (Hardware-Adresse) gebunden, nicht an den Namen
         self.assertIn(("con", "up", "id", "Bittersweet_EXT", "ifname", "wlan1"), names)
         self.assertFalse(any(a[0] == "--ask" for a in names))                                    # kein Versuch ohne Passwort
         self.assertTrue(all(c[1] is None for c in calls))                                         # nichts über stdin
+
+    def test_a_new_profile_is_bound_to_the_card_by_hardware_address(self):
+        """11. Oktober 2026: Die Namen wlan0/wlan1 wechseln mit einem Stick; ein an den Namen gebundenes Profil landete auf der falschen Karte. Neue Profile folgen jetzt der Karte."""
+        calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Neu", "password": "abcdefgh"}, ["Heim"])
+        self.assertIsNone(err)
+        names = [c[0] for c in calls]
+        i_connect = next(i for i, n in enumerate(names) if n[:3] == ("--ask", "dev", "wifi"))
+        i_bind = names.index(("con", "modify", "id", "Neu", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:bb:cc:dd:ee:01"))
+        self.assertGreater(i_bind, i_connect)
+
+    def test_without_a_known_hardware_address_the_name_binding_stays(self):
+        calls, msg, err = self.connect({"iface": "wlan7", "ssid": "Heim", "password": ""}, ["Heim"])
+        self.assertIsNone(err)
+        self.assertIn(("con", "modify", "id", "Heim", "connection.interface-name", "wlan7"), [c[0] for c in calls])
+
+    def migrate(self, profiles, cards, camera="", camera_profiles=()):
+        """do_migrate mit nachgebautem nmcli: profiles = {Name: (Art, Schnittstelle, MAC)}, cards = {Schnittstelle: MAC}."""
+        calls = []
+
+        def nm(*args, stdin=None, timeout=60):
+            calls.append(args)
+            if args[:2] == ("-g", "connection.type,connection.interface-name,802-11-wireless.mac-address"):
+                return mock.Mock(returncode=0, stdout="\n".join(profiles[args[-1]]) + "\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def not_camera(n):
+            if n in camera_profiles:
+                raise ValueError("Kameranetz")
+        with mock.patch.object(self.h, "nm", nm), mock.patch.object(self.h, "saved_wifi", lambda: sorted(profiles)), \
+                mock.patch.object(self.h, "hwaddr", lambda i: cards.get(i, "")), mock.patch.object(self.h, "camera_iface", lambda: camera), \
+                mock.patch.object(self.h, "check_not_camera_profile", not_camera), mock.patch("builtins.print"):
+            self.h.do_migrate()
+        return [c for c in calls if c[:2] == ("con", "modify")]
+
+    def test_migration_binds_name_bound_profiles_to_the_card_that_holds_the_name(self):
+        mods = self.migrate({"GL": ("802-11-wireless", "wlan0", ""), "S23": ("802-11-wireless", "wlan1", "")}, {"wlan0": "aa:00", "wlan1": "aa:01"})
+        self.assertEqual(sorted(m[3] for m in mods), ["GL", "S23"])
+        self.assertIn(("con", "modify", "id", "GL", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:00"), mods)
+        self.assertIn(("con", "modify", "id", "S23", "connection.interface-name", "", "802-11-wireless.mac-address", "aa:01"), mods)
+
+    def test_migration_leaves_everything_else_alone(self):
+        profiles = {"schon": ("802-11-wireless", "wlan0", "AA:00"),            # hat schon eine Hardware-Adresse
+                    "alle": ("802-11-wireless", "*", ""),                      # für alle Karten
+                    "ohne": ("802-11-wireless", "", ""),                       # ohne Bindung
+                    "fehlt": ("802-11-wireless", "wlan9", ""),                 # die Karte gibt es gerade nicht
+                    "kabel": ("802-3-ethernet", "eth0", ""),                   # kein WLAN
+                    "kamera": ("802-11-wireless", "wlan0", ""),                # Kameranetz
+                    "camnet": ("802-11-wireless", "wlan2", "")}                # Karte des Kameranetzes
+        mods = self.migrate(profiles, {"wlan0": "aa:00", "wlan2": "aa:02"}, camera="wlan2", camera_profiles=("kamera",))
+        self.assertEqual(mods, [])
+
+    def test_migration_can_run_twice(self):
+        profiles = {"GL": ("802-11-wireless", "wlan0", "")}
+        self.assertEqual(len(self.migrate(profiles, {"wlan0": "aa:00"})), 1)
+        profiles["GL"] = ("802-11-wireless", "", "aa:00")                      # so sieht das Profil nach dem ersten Lauf aus
+        self.assertEqual(self.migrate(profiles, {"wlan0": "aa:00"}), [])
+
+    def test_hwaddr_reads_sys_and_rejects_junk(self):
+        d = tempfile.mkdtemp()
+        for name, text in (("wlan0", "F0:68:E3:BE:06:D4\n"), ("wlan1", "00:00:00:00:00:00\n"), ("wlan2", "kaputt\n")):
+            os.makedirs(os.path.join(d, name))
+            with open(os.path.join(d, name, "address"), "w") as f:
+                f.write(text)
+        with mock.patch.object(self.h, "SYS_NET", d):
+            self.assertEqual(self.h.hwaddr("wlan0"), "f0:68:e3:be:06:d4")
+            self.assertEqual((self.h.hwaddr("wlan1"), self.h.hwaddr("wlan2"), self.h.hwaddr("gibtsnicht")), ("", "", ""))
+
+    def test_install_script_runs_the_migration_once_per_update(self):
+        inst = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        self.assertIn("python3 /opt/pipbox/pipbox-wifi.py migrate || true", inst)
 
     def test_failed_saved_connection_keeps_the_profile_and_says_what_to_do(self):
         calls, msg, err = self.connect({"iface": "wlan1", "ssid": "Heim", "password": ""}, ["Heim"], rc=4, err="Error: Secrets were required")
@@ -466,6 +538,172 @@ class RootHelperHardening(unittest.TestCase):
         self.assertTrue(os.path.isdir(target))               # das Ziel des Verweises bleibt unangetastet
 
 
+class BtDriverButton(unittest.TestCase):
+    """Treiber von Hand einrichten: die Oberfläche legt nur das Stichwort "install" ab und liest den Stand des Root-Helfers."""
+
+    def make(self, status=None, unit=True):
+        d = tempfile.mkdtemp()
+        bd = server.BtDriver(d, demo=False)
+        bd.STATUS = os.path.join(d, "status.json")
+        bd.UNIT = os.path.join(d, "unit") if unit else os.path.join(d, "fehlt")
+        open(os.path.join(d, "unit"), "w").close()
+        if status is not None:
+            with open(bd.STATUS, "w") as f:
+                json.dump(status, f)
+        return bd, d
+
+    def test_request_writes_the_keyword_only(self):
+        bd, d = self.make({"state": "ok"})
+        bd.request()
+        self.assertEqual(open(os.path.join(d, "btdriver-request")).read(), "install\n")
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, "btdriver-request")).st_mode), 0o600)
+
+    def test_request_needs_the_helper_and_refuses_while_working(self):
+        bd, d = self.make({"state": "ok"}, unit=False)
+        with self.assertRaises(ValueError):
+            bd.request()
+        bd, d = self.make({"state": "working", "time": int(time.time())})
+        with self.assertRaises(ValueError):
+            bd.request()
+        self.assertFalse(os.path.exists(os.path.join(d, "btdriver-request")))
+        bd, d = self.make({"state": "working", "time": int(time.time()) - 7200})            # hängengebliebener Stand: neu anstoßen erlaubt
+        bd.request()
+
+    def test_status_passes_only_known_fields(self):
+        bd, _ = self.make({"state": "working", "step": 3, "steps": 5, "step_text": "Treiber wird eingespielt", "message": "m", "manual": True, "time": 5, "geheim": "x"})
+        st = bd.status()
+        self.assertEqual((st["state"], st["step"], st["steps"], st["manual"], st["helper_installed"]), ("working", 3, 5, True, True))
+        self.assertNotIn("geheim", st)
+
+    def test_status_survives_missing_or_broken_file(self):
+        bd, d = self.make()
+        self.assertEqual(bd.status()["state"], "")
+        with open(bd.STATUS, "w") as f:
+            f.write("{kaputt")
+        self.assertEqual(bd.status()["state"], "")
+        with open(bd.STATUS, "w") as f:
+            json.dump({"state": "boese", "step": "x"}, f)
+        self.assertEqual(bd.status()["state"], "")
+
+    def chip(self, bd, d, status=None, unit=True):
+        """Stand des Chip-Helfers der ROCK 5B Plus nachstellen."""
+        bd.CHIP_STATUS = os.path.join(d, "chip-status.json")
+        bd.CHIP_UNIT = os.path.join(d, "chip-unit") if unit else os.path.join(d, "chip-fehlt")
+        open(os.path.join(d, "chip-unit"), "w").close()
+        if status is not None:
+            with open(bd.CHIP_STATUS, "w") as f:
+                json.dump(status, f)
+
+    def test_chip_status_is_passed_with_known_fields_only(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "ok", "message": "eingerichtet", "name": "Realtek", "manual": True, "time": 7, "geheim": "x"})
+        chip = bd.status()["chip"]
+        self.assertEqual((chip["state"], chip["message"], chip["manual"], chip["time"]), ("ok", "eingerichtet", True, 7))
+        self.assertNotIn("geheim", chip)
+
+    def test_no_chip_entry_on_other_devices_or_without_a_valid_status(self):
+        for raw in (None, {"state": "ok", "message": "m"}, {"applies": False, "state": "ok"}, {"applies": True, "state": "boese"}):
+            bd, d = self.make({"state": "none"})
+            self.chip(bd, d, raw)
+            self.assertNotIn("chip", bd.status(), raw)
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d)
+        with open(bd.CHIP_STATUS, "w") as f:
+            f.write("{kaputt")
+        self.assertNotIn("chip", bd.status())
+
+    def test_button_also_asks_the_chip_helper_when_it_is_installed(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "ok"})
+        bd.request()
+        self.assertEqual(open(os.path.join(d, "btchip-request")).read(), "install\n")
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, "btchip-request")).st_mode), 0o600)
+        self.assertEqual(open(os.path.join(d, "btdriver-request")).read(), "install\n")
+
+    def test_button_writes_no_chip_request_without_the_chip_helper(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, None, unit=False)
+        bd.request()
+        self.assertFalse(os.path.exists(os.path.join(d, "btchip-request")))
+        self.assertTrue(os.path.exists(os.path.join(d, "btdriver-request")))
+
+    def test_button_is_refused_while_the_chip_is_being_set_up(self):
+        bd, d = self.make({"state": "none"})
+        self.chip(bd, d, {"applies": True, "state": "working", "time": int(time.time())})
+        with self.assertRaises(ValueError):
+            bd.request()
+        self.assertFalse(os.path.exists(os.path.join(d, "btchip-request")))
+        self.chip(bd, d, {"applies": True, "state": "working", "time": int(time.time()) - 3600})    # hängengebliebener Stand
+        bd.request()
+
+    def test_demo_runs(self):
+        bd = server.BtDriver(tempfile.mkdtemp(), demo=True)
+        bd.request()
+        self.assertEqual(bd.status()["state"], "working")
+
+
+class LayoutViews(unittest.TestCase):
+    """Ansichten Desktop und Mobil auf der Box: je Ansicht Reihenfolge, Ausgeblendetes und Design, streng geprüft."""
+
+    def store(self):
+        return server.LayoutStore(tempfile.mkdtemp())
+
+    def test_empty_box_has_two_default_views_and_is_not_set(self):
+        r = self.store().get()
+        self.assertFalse(r["set"])
+        self.assertEqual(r["desktop"], {"order": [], "hidden": [], "design": ""})
+        self.assertEqual(r["mobile"], r["desktop"])
+
+    def test_the_views_are_stored_separately_and_stay(self):
+        st = self.store()
+        st.put("desktop", {"hidden": ["c_chat", "c_prev"], "design": "kompakt"})
+        st.put("mobile", {"order": ["c_cams", "c_status"]})
+        r = server.LayoutStore(os.path.dirname(st.path)).get()                    # frisch von der Platte
+        self.assertTrue(r["set"])
+        self.assertEqual(r["desktop"], {"order": [], "hidden": ["c_chat", "c_prev"], "design": "kompakt"})
+        self.assertEqual(r["mobile"], {"order": ["c_cams", "c_status"], "hidden": [], "design": ""})
+
+    def test_only_the_given_fields_change(self):
+        st = self.store()
+        st.put("mobile", {"hidden": ["c_chat"], "design": "klar"})
+        r = st.put("mobile", {"order": ["c_cams"]})
+        self.assertEqual(r["mobile"], {"order": ["c_cams"], "hidden": ["c_chat"], "design": "klar"})
+
+    def test_input_is_checked(self):
+        st = self.store()
+        with self.assertRaises(ValueError):
+            st.put("tablet", {})
+        with self.assertRaises(ValueError):
+            st.put("desktop", "x")
+        r = st.put("desktop", {"hidden": ["c_chat", "c_chat", "../x", "A", 5, None, "ok_1", "x" * 41], "order": "kaputt", "design": "bunt"})
+        self.assertEqual(r["desktop"], {"order": [], "hidden": ["c_chat", "ok_1"], "design": ""})
+        r = st.put("desktop", {"hidden": ["m%d" % i for i in range(500)]})
+        self.assertEqual(len(r["desktop"]["hidden"]), server.LayoutStore.MAX_IDS)
+
+    def test_broken_file_gives_defaults(self):
+        st = self.store()
+        with open(st.path, "w") as f:
+            f.write("{kaputt")
+        r = st.get()
+        self.assertFalse(r["set"])
+        self.assertEqual(r["desktop"]["hidden"], [])
+
+    def test_first_start_takes_over_once_and_never_overwrites(self):
+        st = self.store()
+        r = st.init({"desktop": {"hidden": ["c_chat"], "design": "klar"}, "mobile": {"order": ["c_cams"]}})
+        self.assertTrue(r["set"])
+        self.assertEqual((r["desktop"]["hidden"], r["desktop"]["design"], r["mobile"]["order"]), (["c_chat"], "klar", ["c_cams"]))
+        r = st.init({"desktop": {"hidden": ["c_status"]}, "mobile": {}})                    # ein zweites Gerät
+        self.assertEqual(r["desktop"]["hidden"], ["c_chat"])
+        with self.assertRaises(ValueError):
+            self.store().init("x")
+
+    def test_file_is_not_readable_by_everyone(self):
+        st = self.store()
+        st.put("desktop", {})
+        self.assertEqual(stat.S_IMODE(os.stat(st.path).st_mode) & 0o007 if os.name == "posix" else 0, 0)
+
+
 class LogModeSwitch(unittest.TestCase):
     """Protokoll-Modus: Oberfläche legt nur ein festes Stichwort ab, der Root-Helfer stellt um."""
 
@@ -513,8 +751,8 @@ class LogModeSwitch(unittest.TestCase):
         calls = []
         with mock.patch.multiple(m, CONF_DIR=d + "/etc", MODE_FILE=d + "/etc/logmode", JOURNAL_DIR=d + "/j",
                                  JOURNAL_CONF=d + "/j/pipbox-journal.conf", OLD_JOURNAL_CONF=d + "/j/pipbox-persistent.conf",
-                                 RUN=d + "/run", JOURNAL_LOG_DIR=d + "/varlog"), \
-                mock.patch.object(m.subprocess, "run", side_effect=lambda *a, **k: calls.append(a[0])):
+                                 RUN=d + "/run", JOURNAL_LOG_DIR=d + "/varlog", NGINX_DROPIN=d + "/ngx/pipbox-log.conf"), \
+                mock.patch.object(m.subprocess, "run", side_effect=lambda *a, **k: calls.append(a[0]) or mock.Mock(returncode=0)):
             os.makedirs(d + "/j")
             open(d + "/j/pipbox-persistent.conf", "w").write("alt")
             m.apply("sparsam")
@@ -531,6 +769,228 @@ class LogModeSwitch(unittest.TestCase):
             self.assertIn(["journalctl", "--flush"], calls)
             with self.assertRaises(ValueError):
                 m.apply("alles")
+
+    # ---- Zugriffsprotokoll von nginx und Begrenzung großer Protokolle (1.0.36)
+    def nginx_env(self, m, d, running=False, test_ok=True):
+        calls = []
+
+        def run(cmd, **k):
+            calls.append(cmd)
+            return mock.Mock(returncode=0 if (cmd[:2] != ["nginx", "-t"] or test_ok) else 1)
+        os.makedirs(d + "/ngx", exist_ok=True)
+        patches = [mock.patch.object(m, "NGINX_DROPIN", d + "/ngx/pipbox-log.conf"), mock.patch.object(m.subprocess, "run", side_effect=run),
+                   mock.patch.object(m, "sending", lambda: running)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return calls
+
+    def test_sparsam_switches_the_nginx_access_log_off_and_reloads(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d)
+        self.assertEqual(m.apply_nginx("sparsam"), "nginx neu geladen")
+        self.assertEqual(open(d + "/ngx/pipbox-log.conf").read(), m.NGINX_TEXT)
+        self.assertIn("access_log off;", m.NGINX_TEXT)
+        self.assertIn(["nginx", "-t"], calls)
+        self.assertIn(["nginx", "-s", "reload"], calls)
+        calls.clear()
+        self.assertEqual(m.apply_nginx("sparsam"), "unverändert")                            # nichts zu tun: kein Neuladen
+        self.assertEqual(calls, [])
+
+    def test_ausfuehrlich_removes_the_file_and_reloads(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d)
+        m.apply_nginx("sparsam")
+        calls.clear()
+        self.assertEqual(m.apply_nginx("ausfuehrlich"), "nginx neu geladen")
+        self.assertFalse(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertIn(["nginx", "-s", "reload"], calls)
+        self.assertEqual(m.apply_nginx("ausfuehrlich"), "unverändert")
+
+    def test_nginx_is_not_reloaded_while_sending(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d, running=True)
+        self.assertIn("nächsten Start", m.apply_nginx("sparsam"))                            # ein Neuladen trennte die Kameras
+        self.assertTrue(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertNotIn(["nginx", "-s", "reload"], calls)
+        self.assertIn(["nginx", "-t"], calls)                                                  # geprüft wird trotzdem
+
+    def test_a_rejected_nginx_config_is_rolled_back(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        calls = self.nginx_env(m, d, test_ok=False)
+        self.assertIn("zurückgesetzt", m.apply_nginx("sparsam"))
+        self.assertFalse(os.path.exists(d + "/ngx/pipbox-log.conf"))
+        self.assertNotIn(["nginx", "-s", "reload"], calls)
+        open(d + "/ngx/pipbox-log.conf", "w").write(m.NGINX_TEXT)
+        self.assertIn("zurückgesetzt", m.apply_nginx("ausfuehrlich"))
+        self.assertEqual(open(d + "/ngx/pipbox-log.conf").read(), m.NGINX_TEXT)              # der alte Stand ist wieder da
+
+    def test_nginx_step_never_breaks_the_mode_switch(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        with mock.patch.multiple(m, CONF_DIR=d + "/etc", MODE_FILE=d + "/etc/logmode", JOURNAL_DIR=d + "/j", JOURNAL_CONF=d + "/j/x.conf",
+                                 OLD_JOURNAL_CONF=d + "/j/y.conf", RUN=d + "/run", JOURNAL_LOG_DIR=d + "/v"), \
+                mock.patch.object(m, "apply_nginx", side_effect=RuntimeError("kaputt")), \
+                mock.patch.object(m.subprocess, "run", return_value=mock.Mock(returncode=0)):
+            os.makedirs(d + "/j")
+            m.apply("sparsam")
+            self.assertIn("Fehler", json.load(open(d + "/run/status.json"))["nginx"])
+            self.assertEqual(open(d + "/etc/logmode").read(), "sparsam\n")
+
+    def test_apply_nginx_option_uses_the_saved_mode(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        open(d + "/logmode", "w").write("sparsam\n")
+        with mock.patch.object(m, "MODE_FILE", d + "/logmode"), mock.patch.object(m, "apply_nginx", return_value="x") as an:
+            self.assertEqual(m.main(["x", "--apply-nginx"]), 0)
+            an.assert_called_once_with("sparsam")
+        with mock.patch.object(m, "MODE_FILE", d + "/fehlt"), mock.patch.object(m, "apply_nginx") as an:
+            self.assertEqual(m.main(["x", "--apply-nginx"]), 0)
+            an.assert_not_called()
+
+    def test_big_logs_are_compressed_and_cut_in_place(self):
+        import gzip
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/access.log"
+        data = b"127.0.0.1 GET / 200\n" * 1000
+        open(f, "wb").write(data)
+        self.assertFalse(m.rotate_file(f, len(data)))                                          # nicht über der Grenze: nichts passiert
+        self.assertEqual(open(f, "rb").read(), data)
+        self.assertTrue(m.rotate_file(f, len(data) - 1))
+        self.assertEqual(os.path.getsize(f), 0)                                                # an Ort und Stelle gekürzt
+        self.assertEqual(gzip.open(f + ".1.gz").read(), data)                                  # Inhalt komplett gesichert
+        self.assertEqual(os.stat(f + ".1.gz").st_mode & 0o777, 0o640)
+
+    def test_writer_with_the_file_open_keeps_writing_after_rotation(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/access.log"
+        w = open(f, "ab", buffering=0)                                                         # wie nginx: Datei offen, Anhängen
+        w.write(b"a" * 2000)
+        self.assertTrue(m.rotate_file(f, 1000))
+        w.write(b"neu\n")
+        w.close()
+        self.assertEqual(open(f, "rb").read(), b"neu\n")                                      # keine Lücke aus Nullen, sondern der Anfang der neuen Datei
+
+    def test_only_three_old_copies_are_kept_and_the_newest_is_first(self):
+        import gzip
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/x.log"
+        for i in range(1, 6):
+            open(f, "wb").write(("Stand %d\n" % i).encode() * 100)
+            self.assertTrue(m.rotate_file(f, 10))
+        self.assertEqual(sorted(os.listdir(d)), ["x.log", "x.log.1.gz", "x.log.2.gz", "x.log.3.gz"])
+        self.assertIn(b"Stand 5", gzip.open(f + ".1.gz").read())
+        self.assertIn(b"Stand 3", gzip.open(f + ".3.gz").read())
+
+    def test_old_copies_are_removed_after_thirty_days(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        f = d + "/x.log"
+        for n, age in ((1, 5), (2, 40)):
+            open("%s.%d.gz" % (f, n), "wb").write(b"x")
+            t = time.time() - age * 86400
+            os.utime("%s.%d.gz" % (f, n), (t, t))
+        m.rotate_cleanup(f)
+        self.assertEqual(sorted(os.listdir(d)), ["x.log.1.gz"])
+
+    def test_rotate_all_takes_the_known_files_and_survives_missing_ones(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        big = d + "/nginx-access.log"
+        open(big, "wb").write(b"z" * 5000)
+        open(d + "/pipbox-eins.log", "wb").write(b"y" * 5000)
+        open(d + "/pipbox-klein.log", "wb").write(b"y" * 10)
+        with mock.patch.multiple(m, ROTATE_LOCK=d + "/lock", ROTATE_LIMITS=((big, 1000), (d + "/gibtsnicht.log", 1000)),
+                                 ROTATE_GLOBS=((d + "/pipbox-*.log", 1000),)), mock.patch.object(m.os, "nice", lambda n: 0):
+            done = m.rotate_all()
+        self.assertEqual(sorted(os.path.basename(x) for x in done), ["nginx-access.log", "pipbox-eins.log"])
+        self.assertEqual(os.path.getsize(d + "/pipbox-klein.log"), 10)
+
+    def test_rotate_option_runs_and_a_second_run_at_the_same_time_does_nothing(self):
+        m = self.helper("pipbox-logmode")
+        d = tempfile.mkdtemp()
+        import fcntl
+        lock = os.open(d + "/lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with mock.patch.multiple(m, ROTATE_LOCK=d + "/lock", ROTATE_LIMITS=(), ROTATE_GLOBS=()):
+            self.assertEqual(m.rotate_all(), [])                                               # läuft schon: nichts doppelt
+        os.close(lock)
+
+    def test_units_install_the_daily_timer_and_the_script(self):
+        root = os.path.dirname(HERE)
+        svc = open(root + "/install/pipbox-logrotate.service").read()
+        tim = open(root + "/install/pipbox-logrotate.timer").read()
+        self.assertIn("pipbox-logmode.py --rotate", svc)
+        self.assertIn("Nice=19", svc)
+        self.assertIn("OnUnitActiveSec=1d", tim)
+        self.assertIn("OnBootSec=", tim)                                                      # die Box hat keine Echtzeituhr: nur monotone Zeiten
+        self.assertNotIn("OnCalendar", tim)
+
+    def test_install_script_installs_enables_and_removes_the_log_parts(self):
+        sh = open(os.path.join(os.path.dirname(HERE), "install", "install.sh"), encoding="utf-8").read()
+        for line in ('install/pipbox-logrotate.service" /etc/systemd/system/pipbox-logrotate.service', 'install/pipbox-logrotate.timer" /etc/systemd/system/pipbox-logrotate.timer',
+                     "pipbox-logmode.py --apply-nginx", "/etc/nginx/conf.d/pipbox-log.conf"):
+            self.assertIn(line, sh)
+        self.assertGreaterEqual(sh.count("pipbox-logrotate.timer"), 4)           # installieren, aktivieren, abschalten, Datei entfernen
+        self.assertIn("pipbox-arp.service pipbox-logrotate.timer", sh)                           # wird aktiviert
+        self.assertIn("pipbox-dji.service pipbox-logrotate.timer || true", sh)                  # wird beim Entfernen abgeschaltet
+
+    def test_bluetooth_driver_button_is_neutral_once_the_driver_is_set_up(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('go.className=done?"sec":"";', h)
+        self.assertIn('d.state==="ok"||(!!ch&&ch.state==="ok"&&(d.state==="none"||!d.state))', h)           # Stick oder Board-Chip eingerichtet
+        self.assertIn("!run&&", h[h.index("const done="):h.index("go.className=done")])                      # nicht während der Einrichtung
+
+    def test_camera_list_has_an_off_switch_that_keeps_the_camera_and_the_remove_button(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn("aus (gewollt)", h)
+        self.assertIn('class="sec camoff"', h)
+        self.assertIn('{key:c.key,active:wasOff}', h)                                                 # dieselbe Schnittstelle wie das lange Drücken in der Fußleiste
+        self.assertIn('{cmd:wasOff?"connect":"disconnect",addr:dc.addr}', h)                          # DJI: verbinden und trennen
+        self.assertIn('${camOffBtn(c)}<button class="del"', h)                                        # "Entfernen" bleibt direkt daneben
+        self.assertIn("!!c.parked,!!c.is_main,!!c.in_pips", h)                                        # die Liste baut sich bei einer Änderung neu auf
+        self.assertIn('c.is_main?" disabled":""', h)                                                  # das Hauptbild lässt sich nicht ausschalten
+
+    def test_switched_off_cameras_are_not_listed_in_the_status_overview(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        i = h.index("function renderCamLights(list){")
+        self.assertIn("list=list.filter(c=>!c.parked);", h[i:i + 400])                              # Status: Übersicht der Kameras
+        self.assertIn('(list||[]).filter(c=>!c.parked).slice(0,4)', h)                              # Punkte in der Chat-Karte
+        self.assertEqual(h.count("c.parked?'<span class=\"tag\">aus (gewollt)</span>'"), 1)        # in der Kameraliste bleibt sie sichtbar, mit Markierung
+
+    def test_away_dji_cameras_are_sorted_to_the_bottom(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('const djiAway=c=>!(c.publishing||["streaming","status","starting","configuring","pairing"].includes(c.state));', h)
+        self.assertIn("const cams=djiSorted(d.cameras);", h)
+        self.assertIn('box.innerHTML=cams.length?cams.map(djiCardHtml).join("")', h)               # Karten in sortierter Reihenfolge
+        self.assertIn('+"|"+(djiAway(c)?1:0)),', h)                                                 # Wechsel zwischen unten und oben baut die Liste neu auf
+        js = h[h.index("const djiAway="):h.index("function djiRender(d){")]
+        jsc = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        node = shutil.which("node")
+        run = [node, "-e"] if node else ([jsc, "-e"] if os.path.exists(jsc) else None)
+        if run:
+            code = js + 'const l=[{addr:"a",state:"idle"},{addr:"b",state:"streaming"},{addr:"c",state:"error"},{addr:"d",state:"status"},{addr:"e",state:"connecting"},{addr:"f",state:"idle",publishing:true}];print(djiSorted(l).map(c=>c.addr).join(""))'
+            if node:
+                code = code.replace("print(", "console.log(")
+            out = subprocess.run(run + [code], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out, "bdface")                                                          # verbunden zuerst, Reihenfolge sonst unverändert
+
+    def test_switched_off_cameras_are_always_at_the_bottom_of_the_camera_list(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('const quiet=c=>c.parked?2:(c.state==="live"||c.state==="unknown"||nowMs-(camSeenLive[c.id]||0)<CAM_HOLD_TOP_MS?0:1);', h)
+        self.assertIn("list=list.slice().sort((x,y)=>quiet(x)-quiet(y));", h)                      # stabil: innerhalb der Gruppen bleibt die gespeicherte Reihenfolge
+
+    def test_script_has_no_network_and_no_shell(self):
+        src = open(os.path.join(os.path.dirname(HERE), "install", "pipbox-logmode.py"), encoding="utf-8").read()
+        self.assertNotIn("shell=True", src)
+        self.assertNotIn("urllib", src)
 
     def test_helper_ignores_unknown_keyword(self):
         m = self.helper("pipbox-logmode")
@@ -811,6 +1271,116 @@ class SwapMainPip(unittest.TestCase):
             with self.assertRaises(ValueError):
                 st.swap_main_pip()
             self.assertEqual(st.cfg["main"], "cam-a")
+
+
+class Facecam(unittest.TestCase):
+    """Facecam: das kleine Bild, dessen Kamera den Ton behält, auch wenn das Hauptbild wechselt."""
+
+    BASE = {"type": "pip", "main": "cam-a", "pip": "cam-f", "pip2": "cam-c", "pip3": "cam-d", "audio": "main"}
+
+    def store(self, **kw):
+        st = server.PipelineStore(os.path.join(tempfile.mkdtemp(), "pipeline.json"))
+        st.cfg.update(self.BASE)
+        st.cfg.update(kw)
+        return st
+
+    def test_choosing_a_small_picture_remembers_its_camera_and_gives_the_sound_position(self):
+        st = self.store()
+        self.assertEqual(st.set_facecam("pip"), "pip")
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+        self.assertEqual(st.set_facecam("pip3"), "pip3")
+        self.assertEqual(st.cfg["facecam"], "cam-d")
+        self.assertEqual(st.set_facecam(""), "main")                                  # keine Facecam: der Ton folgt wieder dem Hauptbild
+        self.assertEqual(st.cfg["facecam"], "")
+        with open(st.path) as f:
+            self.assertEqual(json.load(f)["facecam"], "")                             # gespeichert
+
+    def test_wrong_choices_are_refused(self):
+        st = self.store(pip3="")
+        for bad in ("main", "pip4", "x", None, 3):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                st.set_facecam(bad)
+        with self.assertRaises(ValueError):
+            st.set_facecam("pip3")                                                    # nicht belegt
+        with self.assertRaises(ValueError):
+            self.store(type="single").set_facecam("pip")
+        with self.assertRaises(ValueError):
+            self.store(inactive=["cam-f"]).set_facecam("pip")                        # eine deaktivierte Kamera ist nie die Tonquelle
+
+    def test_the_sound_stays_with_the_facecam_when_another_camera_becomes_main(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "pip"
+        st.swap_main_pip("cam-c")                                                     # Hauptbild gegen ein anderes kleines Bild
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-c", "cam-f", "pip"))
+
+    def test_the_sound_follows_the_facecam_when_it_becomes_main_and_comes_back(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "pip"
+        st.swap_main_pip("cam-f")                                                     # die Facecam selbst wird Hauptbild
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-f", "cam-a", "main"))
+        st.swap_main_pip("cam-a")                                                     # und wieder zurück
+        self.assertEqual((st.cfg["main"], st.cfg["pip"], st.cfg["audio"]), ("cam-a", "cam-f", "pip"))
+
+    def test_a_manual_sound_choice_holds_until_the_next_swap(self):
+        st = self.store()
+        st.set_facecam("pip")
+        st.cfg["audio"] = "main"                                                      # von Hand (Fußleiste) auf das Hauptbild gestellt
+        self.assertEqual(st.cfg["audio"], "main")
+        st.swap_main_pip("cam-c")                                                     # beim nächsten Tausch geht der Ton zur Facecam zurück
+        self.assertEqual(st.cfg["audio"], "pip")
+
+    def test_without_a_facecam_nothing_changes(self):
+        st = self.store(audio="pip")
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "pip")                                      # der Ton bleibt am Platz wie bisher
+        st = self.store()
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "main")                                     # und "Hauptbild" folgt dem Hauptbild
+
+    def test_a_deactivated_facecam_never_keeps_the_sound(self):
+        st = self.store(facecam="cam-f", inactive=["cam-f"])
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["audio"], "main")
+
+    def test_the_facecam_is_dropped_when_its_camera_is_no_longer_in_the_picture(self):
+        st = self.store(facecam="cam-gone")
+        st.swap_main_pip("cam-c")
+        self.assertEqual(st.cfg["facecam"], "")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **self.BASE, facecam="cam-gone"))
+        self.assertEqual(safe["facecam"], "")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **self.BASE, facecam="cam-f"))
+        self.assertEqual(safe["facecam"], "cam-f")
+        safe = server.PipelineStore._safe_cfg(dict(server.PipelineStore.DEFAULT, **dict(self.BASE, type="single"), facecam="cam-f"))
+        self.assertEqual(safe["facecam"], "")
+
+    def test_saving_the_picture_keeps_the_facecam_and_it_follows_its_small_picture(self):
+        st = self.store(facecam="cam-f")
+        keys = ["cam-a", "cam-f", "cam-c", "cam-d", "cam-n"]
+        req = dict(self.BASE, corner=3, corner2=2, corner3=0)
+        st.set(dict(req), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")                                  # unverändert gespeichert
+        st.set(dict(req, pip="cam-n"), keys)                                          # das kleine Bild 1 bekommt eine andere Kamera
+        self.assertEqual(st.cfg["facecam"], "cam-n")                                  # die Facecam bleibt am Platz
+        st.set(dict(req, pip="cam-f", pip2="", pip3=""), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+
+    def test_a_facecam_that_is_main_stays_while_its_camera_is_in_the_picture(self):
+        st = self.store(main="cam-f", pip="cam-a", facecam="cam-f", audio="main")
+        keys = ["cam-a", "cam-f", "cam-c", "cam-d"]
+        st.set(dict(self.BASE, main="cam-f", pip="cam-a", audio="main", corner=3, corner2=2, corner3=0), keys)
+        self.assertEqual(st.cfg["facecam"], "cam-f")
+        st.set(dict(self.BASE, main="cam-c", pip="cam-a", pip2="", pip3="", audio="main", corner=3), keys)
+        self.assertEqual(st.cfg.get("facecam", ""), "")                               # die Facecam ist nicht mehr im Bild
+
+    def test_the_facecam_alone_is_no_structural_change(self):
+        a = dict(server.PipelineStore.DEFAULT, **self.BASE)
+        b = dict(a, facecam="cam-f", audio="pip")
+        self.assertTrue(server.view_only_change(a, b))
+        a["always_ready"] = b["always_ready"] = True
+        with mock.patch.object(server.pipbox_live, "supported", lambda: False):               # auch ohne die Engine mit Compositor
+            self.assertTrue(server.always_compatible(a, b))
 
 
 class SeamlessSwap(unittest.TestCase):
@@ -1202,6 +1772,55 @@ class CameraOrder(unittest.TestCase):
             c.swap("00000000", a["id"])
         self.assertEqual(self.keys(c), ["ka", "kb"])
 
+    def test_move_puts_a_camera_before_another_or_at_the_end_and_survives_a_restart(self):
+        d, c = self.store()
+        a, b, x, y = c.add("A", "ka", "extra"), c.add("B", "kb", "extra"), c.add("C", "kc", "extra"), c.add("D", "kd", "extra")
+        c.move(y["id"], a["id"])                                      # D vor A
+        self.assertEqual(self.keys(c), ["kd", "ka", "kb", "kc"])
+        c.move(a["id"], None)                                         # A ans Ende
+        self.assertEqual(self.keys(c), ["kd", "kb", "kc", "ka"])
+        c.move(x["id"], b["id"])                                      # C vor B
+        self.assertEqual(self.keys(c), ["kd", "kc", "kb", "ka"])
+        again = server.CameraStore(os.path.join(d, "cameras.json"), "publish", "", False)
+        self.assertEqual([k["key"] for k in again.cams], ["kd", "kc", "kb", "ka"])
+
+    def test_move_onto_itself_or_unchanged_place_changes_nothing_and_unknown_ids_fail(self):
+        d, c = self.store()
+        a, b = c.add("A", "ka", "extra"), c.add("B", "kb", "extra")
+        c.move(a["id"], a["id"])
+        c.move(a["id"], b["id"])                                      # steht schon vor B
+        c.move(b["id"], None)                                         # steht schon am Ende
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+        with self.assertRaises(KeyError):
+            c.move("00000000", a["id"])
+        with self.assertRaises(KeyError):
+            c.move(a["id"], "00000000")
+        self.assertEqual(self.keys(c), ["ka", "kb"])
+
+    def test_move_keeps_names_roles_and_keys(self):
+        d, c = self.store()
+        a, b = c.add("Haupt", "ka", "main"), c.add("Klein", "kb", "pip")
+        c.move(b["id"], a["id"])
+        self.assertEqual({x["key"]: (x["name"], x["role"]) for x in c.cams}, {"ka": ("Haupt", "main"), "kb": ("Klein", "pip")})
+
+    def test_the_camera_list_has_a_drag_handle_and_saves_the_new_place(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('<span class="grip" role="button" tabindex="0"', h)
+        self.assertIn("touch-action:none", h[h.index(".cam .grip{"):h.index(".cam .grip{") + 200])      # sonst blättert die Seite statt zu ziehen
+        self.assertIn("JSON.stringify({move_before:beforeId||null})", h)
+        self.assertNotIn("box.insertBefore(row", h)                                                  # die gezogene Zeile wird nie umgehängt (sonst bricht die Berührung auf dem Handy ab)
+        self.assertIn('row.style.transform="translateY("', h)
+        self.assertIn('bar.className="camdrop"', h)                                                  # die Ziel-Linie ist ein eigenes Element über allem, sie verschwindet nicht unter der gezogenen Zeile
+        self.assertIn('.camdrop{position:absolute;', h)
+        self.assertIn("if(camDragging) return;", h)                                                  # beim Ziehen baut sich die Liste nicht neu auf
+        self.assertIn("{ArrowUp:-1,ArrowDown:1}", h)                                                  # auch mit der Tastatur
+        self.assertIn('class="mv"', h)                                                              # die Pfeile bleiben
+        self.assertIn('@media(max-width:620px){.cam .grip{display:inline-block;font-size:28px', h)                   # Handy: Anfasser
+        self.assertIn('.cam .top .cr .mv{display:none}', h)                                           # Handy: ohne Pfeile
+        self.assertIn('.cam .top .cr{flex:1 1 100%;display:flex;flex-wrap:wrap;', h)
+        self.assertIn('.cam .top .cr .dyn{flex:1 1 100%;', h)                                        # Handy: Datenrate in einer eigenen Zeile, die Knöpfe darunter                   # Handy: Datenrate, Ausschalten und Entfernen brechen um und ragen nicht aus der Karte
+        self.assertIn('.cam .grip{display:none;', h)                                                  # Rechner: Pfeile, kein Anfasser
+
 
 class CameraConnection(unittest.TestCase):
     """Die Adresse jeder Kamera in der Liste gilt für ihre Verbindung (DJI-Karte, eigene Wahl oder Hauptverbindung)."""
@@ -1415,7 +2034,7 @@ class HeaderControls(unittest.TestCase):
     def test_main_connection_has_its_own_heading_not_under_the_dji_one(self):
         """Issue #5: Die Hauptverbindung gilt für alle RTMP-Kameras (Handy, Drohne ...); sie stand fälschlich unter "DJI-Kameras (Bluetooth)"."""
         h = self.html
-        main, dji = h.index('<div class="sech">Hauptverbindung</div>'), h.index('<div class="sech">DJI-Kameras (Bluetooth)</div>')
+        main, dji = h.index('<div class="sech">Hauptverbindung</div>'), h.index('<summary>DJI-Kameras (Bluetooth)</summary>')
         self.assertLess(main, dji)
         self.assertLess(h.index('id="netsel"'), dji)            # Auswahl und Adresszeile gehören zur Hauptverbindung
         self.assertLess(h.index('id="netinfo"'), dji)
@@ -2062,6 +2681,123 @@ class UpdateNotes(unittest.TestCase):
         log = "\n".join("## 0.9.%d (Beta)\n- x\n" % i for i in range(60, 20, -1))
         n = server.SwUpdate._sections_since(log, "0.9.1", max_sections=3)
         self.assertEqual(len([l for l in n.splitlines() if l.startswith("## ")]), 3)
+
+    def test_all_sixteen_versions_of_a_long_jump_are_shown(self):
+        """Issue #57: Von 0.9.169 auf 0.9.183 zeigte die Box nur die neuesten 6 Versionen."""
+        log = "# Änderungen\n\n" + "\n".join("## 0.9.%d (Beta)\n- **Neu:** Punkt %d.\n" % (i, i) for i in range(183, 160, -1))
+        n = server.SwUpdate._sections_since(log, "0.9.169")
+        heads = [l for l in n.splitlines() if l.startswith("## ")]
+        self.assertEqual(len(heads), 14)
+        self.assertEqual((heads[0], heads[-1]), ("## 0.9.183 (Beta)", "## 0.9.170 (Beta)"))
+
+    def test_limits_are_generous_but_finite(self):
+        log = "\n".join("## 0.9.%d (Beta)\n- x\n" % i for i in range(500, 0, -1))
+        n = server.SwUpdate._sections_since(log, "0.0.1")
+        self.assertEqual(len([l for l in n.splitlines() if l.startswith("## ")]), 100)
+        big = "## 1.0.0\n" + ("- " + "y" * 900 + "\n") * 1000
+        self.assertLessEqual(len(server.SwUpdate._sections_since(big, "0.9.0")), 201_000)
+
+    def test_whole_changelog_file_is_read(self):
+        self.assertGreaterEqual(server.SwUpdate.CHANGELOG_MAX, 400_000)                 # die Datei hat heute rund 130 KB; 60 KB schnitten ältere Versionen ab
+
+
+class UpdateHistory(unittest.TestCase):
+    """Issue #57: der ganze Änderungsverlauf mit Suche."""
+
+    def sw(self, sending=False, demo=False):
+        sw = server.SwUpdate(tempfile.mkdtemp(), demo, mock.Mock(_active=lambda: sending))
+        return sw
+
+    def test_loads_the_whole_file_once_and_keeps_it(self):
+        sw = self.sw()
+        calls = []
+
+        def get(name, limit):
+            calls.append((name, limit))
+            return "## 0.9.2\n- b\n\n## 0.9.1\n- a\n" if name == "CHANGELOG.md" else "# Archiv\n\n## 0.8.0\n- z\n"
+        with mock.patch.object(sw, "_get", get):
+            a = sw.history()
+            b = sw.history()
+        self.assertEqual(a, {"text": "## 0.9.2\n- b\n\n## 0.9.1\n- a\n\n# Archiv\n\n## 0.8.0\n- z\n", "error": ""})   # Liste und Archiv zusammen
+        self.assertEqual(b, a)
+        self.assertEqual(calls, [("CHANGELOG.md", server.SwUpdate.CHANGELOG_MAX), ("CHANGELOG-Archiv.md", server.SwUpdate.CHANGELOG_MAX)])        # genau eine Abfrage je Datei
+
+    def test_archive_is_loaded_for_notes_only_when_the_installed_version_is_older_than_the_list(self):
+        """Die Änderungsliste hält nur die letzten Versionen, der Rest steht im Archiv: dessen Einträge kommen nur dazu, wenn die installierte Version älter ist als die Liste."""
+        sw = self.sw()
+        calls = []
+
+        def get(name, limit):
+            calls.append(name)
+            return "# Änderungen\n\n## 0.9.202\n- c\n\n## 0.9.201\n- b\n\n## 0.9.200\n- a\n" if name == "CHANGELOG.md" else "# Archiv\n\n## 0.9.199\n- z\n\n## 0.9.198\n- y\n"
+        with mock.patch.object(sw, "_get", get):
+            t = sw._changelog("0.9.200")                                                   # neuer als alles im Archiv: nur die Liste
+            self.assertEqual(calls, ["CHANGELOG.md"])
+            self.assertNotIn("0.9.199", t)
+            calls.clear()
+            t = sw._changelog("0.9.150")                                                   # älter als die Liste: Archiv dazu
+            self.assertEqual(calls, ["CHANGELOG.md", "CHANGELOG-Archiv.md"])
+            self.assertIn("## 0.9.199", t)
+            n = server.SwUpdate._sections_since(t, "0.9.198")
+            self.assertEqual([l for l in n.splitlines() if l.startswith("## ")], ["## 0.9.202", "## 0.9.201", "## 0.9.200", "## 0.9.199"])
+        self.assertEqual(server.SwUpdate._oldest("## 0.9.5\n\n## 0.9.11\n## x\n"), (0, 9, 5))
+        self.assertIsNone(server.SwUpdate._oldest("kein Abschnitt"))
+
+    def test_history_is_loaded_on_request_even_while_sending(self):
+        """Ein Klick auf das "i" lädt den Verlauf auch während der Übertragung (Download, rund 100 KB, einmal; 30 Minuten gehalten)."""
+        sw = self.sw(sending=True)
+        calls = []
+
+        def get(name, limit):
+            calls.append(name)
+            return "## 0.9.1\n- a\n" if name == "CHANGELOG.md" else "## 0.9.0\n- z\n"
+        with mock.patch.object(sw, "_get", get):
+            r = sw.history()
+            self.assertEqual(r["error"], "")
+            self.assertIn("0.9.1", r["text"])
+            n = len(calls)
+            sw.history()
+            self.assertEqual(len(calls), n)                                       # beim zweiten Mal aus dem Speicher
+
+    def test_history_while_sending_without_network_gives_a_readable_error(self):
+        sw = self.sw(sending=True)
+        with mock.patch.object(sw, "_get", side_effect=OSError("kein Netz")):
+            r = sw.history()
+        self.assertEqual((r["text"], r["error"]), ("", "GitHub ist nicht erreichbar."))
+
+    def test_automatic_checks_stay_blocked_while_sending(self):
+        sw = self.sw(sending=True)
+        with mock.patch.object(sw, "_get", side_effect=AssertionError("kein Zugriff")), \
+                mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("kein Zugriff")):
+            sw.releases()
+
+    def test_error_is_readable_and_not_cached(self):
+        sw = self.sw()
+        with mock.patch.object(sw, "_get", side_effect=OSError("kein Netz")):
+            r = sw.history()
+        self.assertEqual((r["text"], r["error"]), ("", "GitHub ist nicht erreichbar."))
+        with mock.patch.object(sw, "_get", side_effect=lambda n, l: "## 0.9.1\n- a\n" if n == "CHANGELOG.md" else (_ for _ in ()).throw(OSError("kein Archiv"))):
+            self.assertEqual(sw.history()["error"], "")                                    # der nächste Versuch klappt (auch ohne Archiv)
+
+    def test_stale_copy_is_kept_when_github_fails_later(self):
+        sw = self.sw()
+        with mock.patch.object(sw, "_get", side_effect=lambda n, l: "## 0.9.1\n- a\n" if n == "CHANGELOG.md" else (_ for _ in ()).throw(OSError("kein Archiv"))):
+            sw.history()
+        sw.hist_t -= 3600
+        with mock.patch.object(sw, "_get", side_effect=OSError("weg")):
+            self.assertEqual(sw.history()["text"], "## 0.9.1\n- a\n")
+
+    def test_page_search_filters_words_marks_hits_and_never_uses_html(self):
+        h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('fetch("/api/swupdate/history")', h)
+        self.assertIn("toks.every(w=>t.includes(w))", h)                                    # alle Wörter müssen vorkommen
+        self.assertIn("const k=document.createElement(\"mark\"); k.textContent=m[0];", h)     # Treffer als Textknoten, nie als HTML
+        self.assertIn("res.innerHTML=fmtNotes(out)", h)                                    # fmtNotes maskiert den Text
+        self.assertIn('id="sw_histbtn"', h)
+
+    def test_route_exists(self):
+        src = open(os.path.join(os.path.dirname(HERE), "server.py"), encoding="utf-8").read()
+        self.assertIn('if path == "/api/swupdate/history":', src)
 
     def test_update_card_formats_the_notes_and_reloads_by_itself(self):
         h = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()

@@ -1,8 +1,9 @@
 """Tests für die Ansicht im Betrieb (Issue #19, Vorbereitung): kleine Bilder ein-/ausblenden, Tonquelle und stumm ohne Neustart der Sendung.
-Prüft die Seite des Servers und des Senders; der Baustein selbst (gst/gstpbpip.c) wird auf der Box mit tools/boxtest_view*.py geprüft."""
+Prüft die Seite des Servers und des Senders; der Baustein selbst (gst/gstpbpip.c) wurde auf der Box mit Messskripten geprüft (nicht mehr im Repository, siehe Git-Historie bis 0.9.144)."""
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -732,6 +733,112 @@ class Deactivate(unittest.TestCase):
             pl.set_active("cam-d", True)
             self.send.cams.listing = lambda host: cam_listing({"cam-a": "offline", "cam-d": "live", "cam-b": "offline", "cam-c": "offline"})
             self.assertEqual(self.send.reasons(), [])
+
+    def test_status_flags_a_missing_srtla_server(self):
+        """Noch kein SRTLA-Server eingetragen oder ausgewählt: status() meldet no_server, die Oberfläche zeigt oben den Hinweis (Wunsch des Nutzers)."""
+        pl = self.make()
+        self.send._active = lambda: False
+        self.send._detail = lambda: {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        with mock.patch.object(server, "belacoder_running", lambda: False), mock.patch.object(server.os.path, "exists", lambda p: True):
+            self.send.srtla.public = lambda: {"servers": [], "selected": ""}
+            st = self.send.status()
+            self.assertTrue(st["no_server"])
+            self.assertIn("Kein SRTLA-Server ausgewählt", st["reasons"])
+            self.assertFalse(st["can_start"])
+            self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": ""}      # eingetragen, aber keiner ausgewählt
+            self.assertTrue(self.send.status()["no_server"])
+            self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+            st = self.send.status()
+            self.assertFalse(st["no_server"])
+            self.assertNotIn("Kein SRTLA-Server ausgewählt", st["reasons"])
+            self.send._active = lambda: True                                                                                      # während der Sendung nie
+            self.send.srtla.public = lambda: {"servers": [], "selected": ""}
+            self.assertFalse(self.send.status()["no_server"])
+
+    def _pending_status(self, running, delays, active=True):
+        pl = self.make(cfg=dict(CFG, **delays))
+        self.send._active = lambda: active
+        self.send._detail = lambda: {"buffer_ms": running} if running is not None else {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+        with mock.patch.object(server, "belacoder_running", lambda: False):
+            return self.send.status()["pending"]
+
+    def test_pending_names_the_delay_when_the_running_buffer_no_longer_fits(self):
+        """Verzögerungen geändert, Puffer der laufenden Sendekette passt nicht mehr: "Verzögerung" steht bei "noch nicht übernommen" (12. Oktober 2026)."""
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        self.assertEqual(server.pipbox_live.buffer_need_ms(server.PipelineStore._safe_cfg(dict(CFG, **z))), 600)      # alles 0: Mindestwert
+        self.assertEqual(self._pending_status(2860, z), ["Verzögerung"])         # lief mit 2560 ms Verzögerung, jetzt alles 0
+        self.assertEqual(self._pending_status(600, z), [])                       # passt
+        self.assertEqual(self._pending_status(750, z), [])                       # etwas Überschuss ist in Ordnung
+        d = dict(z, pip_delay_ms=750)                                            # braucht 1050 (größte Verzögerung der Engine plus 300)
+        self.assertEqual(self._pending_status(600, d), ["Verzögerung"])          # neue hohe Verzögerung ohne Neustart
+        self.assertEqual(self._pending_status(1050, d), [])
+        self.assertEqual(self._pending_status(600, dict(z, pip_delay_ms=3000)), ["Verzögerung"])     # gespeicherte 3000 zählen wie 750
+        self.assertEqual(self._pending_status(1050, dict(z, pip_delay_ms=3000)), [])
+        self.assertEqual(self._pending_status(750, dict(z, main_delay_ms=450)), [])    # Standard: Hauptbild 450 ms
+
+    def test_pending_ignores_missing_or_odd_buffer_values_and_a_stopped_chain(self):
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        for bad in (None, True, "2860", 2860.0, [2860]):                          # alte Sendekette ohne Wert, Müll: nie eine Meldung
+            self.assertEqual(self._pending_status(bad, z), [], bad)
+        self.assertEqual(self._pending_status(2860, z, active=False), [])         # ohne Sendung gibt es nichts, was laufen könnte
+
+    def test_pending_keeps_the_other_labels_and_adds_the_delay_last(self):
+        z = {"main_delay_ms": 0, "pip_delay_ms": 0, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        pl = self.make(cfg=dict(CFG, **z))
+        self.send._active = lambda: True
+        self.send._detail = lambda: {"buffer_ms": 2860, "applied": {"bitrate": "gestern", "latency": "x"}}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        self.send.srtla.public = lambda: {"servers": [{"id": "x", "name": "n", "host": "h", "port": 1}], "selected": "x"}
+        with mock.patch.object(server, "belacoder_running", lambda: False):
+            p = self.send.status()["pending"]
+        self.assertEqual(p[-1], "Verzögerung")
+        self.assertIn("Bitrate", p)
+
+    def test_status_reports_a_clash_of_address_ranges(self):
+        """Derselbe Adressbereich bei zwei verschiedenen Geräten (Stand des Adress-Wächters): status() meldet net_conflict, auch während der Sendung. LAN und WLAN am selben Router ist keiner."""
+        pl = self.make()
+        self.send._active = lambda: False
+        self.send._detail = lambda: {}
+        self.send.cams.listing = lambda host: cam_listing({k: "live" for k in KEYS})
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "status.json")
+        with mock.patch.object(server, "belacoder_running", lambda: False), mock.patch.object(server, "ARP_STATUS", path):
+            self.assertIsNone(self.send.status()["net_conflict"])                                              # Wächter läuft nicht (keine Datei)
+            json.dump({"overlap": ["eth1", "wlan0"], "conflict": [], "nets": [], "fixed": [], "time": int(time.time())}, open(path, "w"))
+            self.assertIsNone(self.send.status()["net_conflict"])                                              # nur überschneidend, derselbe Router: keine Warnung
+            json.dump({"overlap": ["wlan0", "wlan1"], "conflict": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"], "fixed": [], "time": int(time.time())}, open(path, "w"))
+            self.assertEqual(self.send.status()["net_conflict"], {"cards": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"]})
+            self.send._active = lambda: True
+            self.assertEqual(self.send.status()["net_conflict"]["cards"], ["wlan0", "wlan1"])                  # auch während der Sendung
+
+    def test_net_conflict_reads_the_state_strictly(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "s.json")
+
+        def put(obj, raw=None):
+            with open(path, "w") as f:
+                f.write(raw if raw is not None else json.dumps(obj))
+            return server.net_conflict(path)
+        now = int(time.time())
+        ok = {"conflict": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"], "time": now}
+        self.assertEqual(put(ok), {"cards": ["wlan0", "wlan1"], "nets": ["192.168.8.0/24"]})
+        self.assertIsNone(put(dict(ok, time=now - 600)))                                                       # veraltet: der Wächter läuft nicht mehr
+        self.assertIsNone(put({k: v for k, v in ok.items() if k != "time"}))                                   # ohne Zeit
+        self.assertIsNone(put(dict(ok, conflict=["wlan0"])))                                                   # eine Karte ist kein Konflikt
+        self.assertIsNone(put(dict(ok, conflict=[])))
+        self.assertEqual(put(dict(ok, conflict=["wlan0", "<b>x</b>", 5, "a" * 40, "wlan1"]))["cards"], ["wlan0", "wlan1"])     # nur Kartennamen
+        self.assertEqual(put(dict(ok, conflict=["eth%d" % i for i in range(20)]))["cards"], ["eth%d" % i for i in range(8)])
+        self.assertEqual(put(dict(ok, nets=["192.168.8.0/24", "<script>", 5, "999999999999999/1"]))["nets"], ["192.168.8.0/24"])
+        self.assertEqual(put(dict(ok, nets="x"))["nets"], [])
+        self.assertIsNone(put(None, raw="{kaputt"))
+        self.assertIsNone(put(None, raw="[1,2]"))
+        self.assertIsNone(put(dict(ok, conflict="wlan0")))
+        self.assertIsNone(server.net_conflict(os.path.join(tmp, "gibts-nicht.json")))
 
     def test_export_and_import_carry_it(self):
         pl = self.make()

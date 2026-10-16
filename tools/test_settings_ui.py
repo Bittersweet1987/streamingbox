@@ -36,8 +36,9 @@ class Markup(unittest.TestCase):
         self.assertRegex(PAGE, r'<input type="checkbox" id="bk_secrets" checked>')
         i = PAGE.index('id="c_bk"')
         card = PAGE[i:PAGE.index("</details>", i)]
+        whole = PAGE[i:PAGE.index('<details class="card', i + 10)]                          # Sichern und Einspielen stehen in derselben Karte
         for needle in ("immer mit einem Passwort verschlüsselt", "Nur ohne Sendung"):
-            self.assertIn(needle, card)
+            self.assertIn(needle, whole)
         self.assertLess(len(re.sub(r"<[^>]+>", "", card)), 1200)                           # kein langer Einleitungstext
         self.assertTrue(card.lstrip().startswith("<div class=\"sech\">Sichern</div>") or '<div class="sech">Sichern</div>' in card[:300])
 
@@ -121,7 +122,7 @@ var BK_MIN = 8;
         self.assertFalse(o["btn"])
 
     def test_results_are_escaped(self):
-        src = self.STUBS + func("bkResults") + "\nvar loaded = []; var srtlaLoad = function () { loaded.push('s'); };\n" \
+        src = self.STUBS + func("bkResults") + "\nvar loaded = []; var srtlaLoad = function () { loaded.push('s'); }; var bkTodoShow = function () {};\n" \
               "bkResults({results: [{ok: true, label: 'Kameras', message: '4 eingespielt'}, {ok: false, label: '<b>x</b>', message: '<img src=x onerror=alert(1)>'}]});\n" \
               "print(JSON.stringify({html: $('bk_imsg').html, reload: $('bk_reload').hidden, loaded: loaded}));\n"
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:

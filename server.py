@@ -10,6 +10,7 @@ Fernzugriff von unterwegs läuft über `tailscale serve`.
 import argparse
 import base64
 import binascii
+import glob
 import hashlib
 import ipaddress
 import hmac
@@ -25,6 +26,7 @@ import socket
 import sys
 import ssl
 import stat
+import struct
 import subprocess
 import threading
 import time
@@ -35,9 +37,14 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import controller_keys            # Tasten gekoppelter Bluetooth-Controller und ihre Funktionen
 import dji                         # Namen von USB-Sticks (WLAN, Bluetooth) aus /sys, liegt neben dieser Datei
 import hdmi_daemon                 # Prüfung der HDMI-Einstellungen (dieselbe wie im HDMI-Dienst), liegt neben dieser Datei
 import pipbox_live                 # Engine "alle Kameras immer bereit" mit Compositor und dynamischen Zweigen (Technik von streamingbox), liegt neben dieser Datei
+try:
+    import pipbox_preview          # Vorschau des Sendebilds (Issue #52), liegt neben dieser Datei; fehlt sie (halb eingespieltes Update), gibt es nur keine Vorschau
+except ImportError:
+    pipbox_preview = None
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 # Echte Netzwerkkarten für die Upload-Anzeige (Ethernet, WLAN, USB-/Mobilfunk-Modems). Virtuelles (Tailscale, Docker,
@@ -46,6 +53,32 @@ NET_PREFIXES = ("eth", "en", "wlan", "wl", "usb", "wwan", "ppp", "rndis")
 NET_SKIP = ("docker", "veth", "br-", "virbr", "tailscale", "tun", "tap", "lo")
 
 # Ampelgrenzen (Rohwerte, später anhand echter Messungen festlegen)
+ARP_STATUS = "/run/pipbox-arp/status.json"       # schreibt der Adress-Wächter (install/pipbox-arp.py): welche Karten denselben Adressbereich bei verschiedenen Geräten haben
+ARP_STATUS_MAX_AGE = 60                           # ein älterer Stand gilt nicht (der Wächter läuft nicht mehr)
+IFACE_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+NET_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$")
+
+
+def net_conflict(path=None):
+    """Karten, die denselben Adressbereich bei verschiedenen Geräten benutzen (Stand des Adress-Wächters: die Router haben verschiedene Hardware-Adressen), sonst None.
+    LAN und WLAN am selben Router ist keiner. Streng geprüft: nur Kartennamen und Netze, höchstens 8 und 4, nicht älter als eine Minute."""
+    try:
+        with open(path or ARP_STATUS, "rb") as f:
+            d = json.loads(f.read(4096).decode("utf-8", "replace"))
+        if not isinstance(d, dict) or not isinstance(d.get("time"), int) or abs(time.time() - d["time"]) > ARP_STATUS_MAX_AGE:
+            return None
+        names, nets = d.get("conflict"), d.get("nets")
+        if not isinstance(names, list):
+            return None
+        cards = [n for n in names if isinstance(n, str) and IFACE_NAME_RE.match(n)][:8]
+        if len(cards) < 2:
+            return None
+        nets = [n for n in nets if isinstance(n, str) and NET_RE.match(n)][:4] if isinstance(nets, list) else []
+        return {"cards": cards, "nets": nets}
+    except (OSError, ValueError):
+        return None
+
+
 LIMITS = {"temp_warn": 70.0, "temp_crit": 80.0, "cpu_warn": 85.0, "core_warn": 90.0, "mem_warn": 85.0}
 
 
@@ -96,7 +129,8 @@ def send_stats():
     """Kennzahlen der Sendung aus der Datei von belacoder (Bitrate, Laufzeit, Sendepuffer, Neuübertragungen, Verlust, Encoder-Bilder je Sekunde).
     None, wenn keine frische Datei da ist (Sendung aus oder ältere belacoder-Fassung)."""
     try:
-        if time.time() - os.stat(BC_STATS_FILE).st_mtime > 6:
+        mtime = os.stat(BC_STATS_FILE).st_mtime
+        if time.time() - mtime > 6:
             return None
         d = json.loads(read(BC_STATS_FILE, "") or "{}")
     except (OSError, ValueError):
@@ -105,6 +139,7 @@ def send_stats():
         return None
     sent = d.get("sent_total")
     out = {k: d.get(k) for k in ("fps", "bitrate_kbps", "rtt_ms", "send_mbps", "snd_buf_pkts", "snd_buf_ms", "retrans_total", "loss_total", "drop_total", "sent_total")}
+    out["mtime"] = mtime                    # Zeit der Datei in Sekunden mit Bruchteil (belacoders eigenes Feld "time" ist auf ganze Sekunden abgeschnitten)
     for k in ("retrans", "loss"):
         t = d.get(k + "_total")
         out[k + "_pct"] = round(100.0 * t / sent, 2) if isinstance(t, (int, float)) and isinstance(sent, (int, float)) and sent > 0 and t >= 0 else None
@@ -115,12 +150,20 @@ class UsbWatch:
     """Merkt sich, wenn ein USB-Gerät ausfällt oder abgezogen wird (zum Beispiel der USB-WLAN-Adapter als Sendeweg, ein Router, ein Bluetooth-Stick).
     Quelle ist das Kernel-Protokoll (dmesg, ohne Rechte lesbar): "usb 2-1: USB disconnect", "usb usb2-port1: disabled by hub (EMI?)" und "over-current".
     Die Ereignisse stehen mit Zeit in <state>/usb-events.json (überstehen einen Neustart des Dienstes; ein Ausfall, bei dem die ganze Box stehen bleibt, ist
-    für den Kernel nicht zu sehen). Die Oberfläche zeigt sie 24 Stunden lang als Meldung: Art des Geräts (aus dem Produktnamen) und Uhrzeit."""
+    für den Kernel nicht zu sehen). Die Oberfläche zeigt sie als Meldung: Art des Geräts (aus dem Produktnamen) und Uhrzeit. Kommt das Gerät wieder (der Kernel
+    erkennt am selben Anschluss ein neues Gerät), steht „wieder da“ dabei und die Meldung verschwindet nach BACK_SHOW (5 Minuten ohne neue Trennung); kommt es nicht
+    wieder, bleibt sie bis WINDOW (24 Stunden) oder bis der Nutzer sie mit dem × schließt (dismiss).
+    Issue #58: In den ersten GRACE Sekunden nach dem Start der Box zählen Trennungen nicht (manche Sticks melden sich beim Hochfahren mehrmals neu an, zum
+    Beispiel beim Wechsel des Betriebsmodus); Meldungen aus der Zeit vor dem Neustart erscheinen danach nicht mehr. Die Meldung nennt Namen und Anschluss."""
     WINDOW = 24 * 3600.0
+    BACK_SHOW = 300.0
+    GRACE = 120.0
     EVERY = 20.0
     KEEP = 20
     RE_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.,]+[+-]\d\d:\d\d) (.*)$")
     RE_PROD = re.compile(r"^usb (\d+-[\d.]+): Product: (.{1,80})$")
+    RE_NEW = re.compile(r"^usb (\d+-[\d.]+): new .*USB device number \d+")
+    RE_ID = re.compile(r"^usb (\d+-[\d.]+): New USB device found, idVendor=([0-9a-fA-F]{4}), idProduct=([0-9a-fA-F]{4})")
     RE_GONE = re.compile(r"^usb (\d+-[\d.]+): USB disconnect, device number \d+$")
     RE_HUB = re.compile(r"^usb usb(\d+)-port(\d+): (disabled by hub|over-current condition)")
     CATS = (("wlan", re.compile(r"(?i)802\.11|wlan|wireless|wi-?fi|\bnic\b|rtl88|rtl81|ralink|mediatek.*wlan")),
@@ -128,10 +171,12 @@ class UsbWatch:
             ("net", re.compile(r"(?i)rndis|ethernet|\bcdc\b|router|modem|lte|\b4g\b|\b5g\b|mudi|gl-?inet|tether|android|hotspot|gadget")),
             ("cam", re.compile(r"(?i)camera|uvc|capture|hdmi|video|osmo|action|dji|webcam")))
 
-    def __init__(self, path, runner=None, clock=time.time, demo=False):
+    def __init__(self, path, runner=None, clock=time.time, demo=False, uptime=None):
         self.path, self.runner, self.clock, self.demo = path, runner or self._dmesg, clock, demo
+        self.uptime = uptime or (self._uptime if clock is time.time else (lambda: None))              # mit eigener Uhr (Tests) gibt es keine Startzeit
         self.lock = threading.Lock()
         self.events, self.last = [], 0.0
+        self.demo_t, self.demo_closed = clock() - 2100, False              # Vorschau: eine feste Beispielmeldung, die sich schließen lässt
         try:
             with open(path) as f:
                 saved = json.load(f)
@@ -139,6 +184,21 @@ class UsbWatch:
                 self.events = [e for e in saved if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and isinstance(e.get("cat"), str)][-self.KEEP:]
         except (OSError, ValueError):
             pass
+        boot = self._boot()
+        if boot is not None:
+            self.events = [e for e in self.events if e["t"] >= boot]                                 # aus der Zeit vor dem Neustart: das Gerät kam mit dem Neustart neu
+
+    @staticmethod
+    def _uptime():
+        try:
+            return float(read("/proc/uptime", "").split()[0])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _boot(self):
+        """Zeitpunkt des Starts der Box (Uhr minus Betriebszeit) oder None."""
+        up = self.uptime()
+        return self.clock() - up if isinstance(up, (int, float)) and up >= 0 else None
 
     @staticmethod
     def _dmesg():
@@ -156,7 +216,8 @@ class UsbWatch:
 
     def _parse(self, text):
         import datetime
-        prod, out = {}, []
+        prod, ids, out, backs = {}, {}, [], []
+        boot = self._boot()
         for raw in text.splitlines()[-6000:]:
             m = self.RE_LINE.match(raw)
             if not m:
@@ -170,14 +231,26 @@ class UsbWatch:
             if a:
                 prod[a.group(1)] = a.group(2).strip()
                 continue
+            n = self.RE_NEW.match(msg)
+            if n:
+                backs.append((t, n.group(1)))
+                continue
+            i = self.RE_ID.match(msg)
+            if i:
+                ids[i.group(1)] = "%s:%s" % (i.group(2).lower(), i.group(3).lower())
+                continue
             g = self.RE_GONE.match(msg)
             if g:
-                out.append({"t": round(t, 1), "port": g.group(1), "cat": self.category(prod.get(g.group(1), "")), "why": "gone"})
+                if boot is None or t >= boot + self.GRACE:                                  # in den ersten Sekunden nach dem Start melden sich Geräte oft mehrmals neu an
+                    out.append({"t": round(t, 1), "port": g.group(1), "cat": self.category(prod.get(g.group(1), "")), "why": "gone",
+                                "name": prod.get(g.group(1), ""), "ids": ids.get(g.group(1), "")})
                 continue
             h = self.RE_HUB.match(msg)
             if h:
                 port = "%s-%s" % (h.group(1), h.group(2))
-                out.append({"t": round(t, 1), "port": port, "cat": self.category(prod.get(port, "")), "why": "emi" if h.group(3).startswith("disabled") else "over"})
+                if boot is None or t >= boot + self.GRACE:
+                    out.append({"t": round(t, 1), "port": port, "cat": self.category(prod.get(port, "")), "why": "emi" if h.group(3).startswith("disabled") else "over",
+                                "name": prod.get(port, ""), "ids": ids.get(port, "")})
         merged = []
         for e in sorted(out, key=lambda x: x["t"]):                       # Trennung und abgeschalteter Anschluss kurz hintereinander am selben Anschluss: ein Ereignis
             if merged and merged[-1]["port"] == e["port"] and e["t"] - merged[-1]["t"] < 5:
@@ -185,6 +258,11 @@ class UsbWatch:
                     merged[-1]["why"] = e["why"]
                 continue
             merged.append(e)
+        for e in merged:                                                    # am selben Anschluss wurde danach ein Gerät neu erkannt: wieder da
+            for bt, bport in backs:
+                if bport == e["port"] and 0 < bt - e["t"] < 3600:
+                    e["back"] = round(bt, 1)
+                    break
         return merged
 
     def scan(self):
@@ -199,9 +277,15 @@ class UsbWatch:
         except Exception:
             return
         with self.lock:
-            have = {(round(e["t"]), e.get("port")) for e in self.events}
+            have = {(round(e["t"]), e.get("port")): e for e in self.events}
             new = [e for e in found if (round(e["t"]), e["port"]) not in have]
-            if not new:
+            changed = False
+            for f in found:                                                 # ein schon gemerktes Ereignis bekommt nachträglich "wieder da"
+                old = have.get((round(f["t"]), f["port"]))
+                if old is not None and f.get("back") and not old.get("back"):
+                    old["back"] = f["back"]
+                    changed = True
+            if not new and not changed:
                 return
             self.events = (self.events + new)[-self.KEEP:]
             data = list(self.events)
@@ -215,13 +299,41 @@ class UsbWatch:
             pass
 
     def alerts(self):
-        """Meldungen für die Oberfläche: die jüngsten Ereignisse der letzten 24 Stunden (höchstens zwei), je ein Eintrag mit Art und Zeit."""
+        """Meldungen für die Oberfläche: die jüngsten Ereignisse der letzten 24 Stunden (höchstens zwei), je ein Eintrag mit Art und Zeit. Weg sind Meldungen,
+        die der Nutzer geschlossen hat, und solche, deren Gerät seit mehr als BACK_SHOW Sekunden wieder da ist."""
         if self.demo:
-            return [{"level": "warn", "kind": "usb", "cat": "wlan", "why": "emi", "t": int(self.clock() - 2100)}]
+            return [] if self.demo_closed else [{"level": "warn", "kind": "usb", "cat": "wlan", "why": "emi", "t": int(self.demo_t), "back": False}]
         self.scan()
+        now = self.clock()
         with self.lock:
-            fresh = [e for e in self.events if self.clock() - e["t"] <= self.WINDOW]
-        return [{"level": "warn", "kind": "usb", "cat": e["cat"], "why": e.get("why", "gone"), "t": int(e["t"])} for e in sorted(fresh, key=lambda x: -x["t"])[:2]]
+            fresh = [e for e in self.events if now - e["t"] <= self.WINDOW and not e.get("ack") and not (e.get("back") and now - e["back"] > self.BACK_SHOW)]
+        return [{"level": "warn", "kind": "usb", "cat": e["cat"], "why": e.get("why", "gone"), "t": int(e["t"]), "back": bool(e.get("back")),
+                 "name": str(e.get("name") or "")[:80], "port": str(e.get("port") or "")[:12], "ids": str(e.get("ids") or "")[:9]}
+                for e in sorted(fresh, key=lambda x: -x["t"])[:2]]
+
+    def dismiss(self, t):
+        """Die Meldung mit dieser Zeit (ganze Sekunden, wie in alerts()) schließen. Gibt zurück, ob eine gefunden wurde."""
+        if isinstance(t, bool) or not isinstance(t, (int, float)):
+            raise ValueError("Ungültige Anfrage")
+        if self.demo:
+            self.demo_closed = True
+            return True
+        found = False
+        with self.lock:
+            for e in self.events:
+                if int(e["t"]) == int(t) and not e.get("ack"):
+                    e["ack"] = True
+                    found = True
+            data = list(self.events)
+        if found and not self.demo:
+            try:
+                tmp = self.path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(data, f)
+                os.replace(tmp, self.path)
+            except OSError:
+                pass
+        return found
 
 
 class OutageWatch:
@@ -238,11 +350,22 @@ class OutageWatch:
         self.seen = {}                 # Kamera-Schlüssel -> hat gesendet
         self.since = {}                # Kamera-Schlüssel -> seit wann nicht mehr (Zeit) oder fehlt
         self.hdmi_since = None
+        self.closed = set()            # vom Nutzer mit dem × geschlossene Meldungen: (Art, Zeit des Ausfalls); kommt die Kamera wieder, gilt ein neuer Ausfall wieder
 
-    def alerts(self, cameras, hdmi=None):
+    def dismiss(self, kind, t):
+        """Eine Meldung "Kamera ausgefallen" oder "HDMI: kein Signal" schließen (zum Beispiel nach einem bewussten Abziehen). Gibt zurück, ob die Art bekannt ist."""
+        if kind not in ("cam", "hdmi") or isinstance(t, bool) or not isinstance(t, (int, float)):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            self.closed.add((kind, int(t)))
+        return True
+
+    def alerts(self, cameras, hdmi=None, parked=()):
+        """parked: Schlüssel von Kameras, die der Nutzer bewusst ausgeschaltet hat (im Bildaufbau deaktiviert, DJI getrennt oder ohne automatisches Verbinden): keine Ausfall-Meldung."""
         now = self.clock()
         out = []
         with self.lock:
+            self.closed = {c for c in self.closed if now - c[1] <= self.MAX}                 # alte Einträge fallen weg
             keys = set()
             for c in cameras or []:
                 key = c.get("key")
@@ -250,13 +373,16 @@ class OutageWatch:
                     continue
                 keys.add(key)
                 state = c.get("state")
+                if key in parked:
+                    self.since.pop(key, None)                       # gewollt aus: kein Ausfall; kommt sie zurück und fällt später aus, beginnt die Zeit neu
+                    continue
                 if state == "live":
                     self.seen[key] = True
                     self.since.pop(key, None)
                 elif state == "offline" and self.seen.get(key):
                     self.since.setdefault(key, now)
                     t = self.since[key]
-                    if key != HDMI_KEY and now - t >= self.DOWN and now - t <= self.MAX:
+                    if key != HDMI_KEY and now - t >= self.DOWN and now - t <= self.MAX and ("cam", int(t)) not in self.closed:
                         kind = "dji" if str(key).startswith("dji-") else "cam"
                         out.append({"level": "warn", "kind": "cam", "cam": kind, "name": str(c.get("name") or "")[:40], "t": int(t)})
             for k in list(self.seen):
@@ -272,8 +398,8 @@ class OutageWatch:
             if bad:
                 if self.hdmi_since is None:
                     self.hdmi_since = now
-                if self.DOWN <= now - self.hdmi_since <= self.MAX:
-                    out.append({"level": "warn", "kind": "hdmi", "t": int(self.hdmi_since)})
+                if self.DOWN <= now - self.hdmi_since <= self.MAX and ("hdmi", int(self.hdmi_since)) not in self.closed:
+                    out.append({"level": "warn", "kind": "hdmi", "src": (hdmi.get("settings") or {}).get("source", "hdmi"), "t": int(self.hdmi_since)})
             else:
                 self.hdmi_since = None
         return out
@@ -282,12 +408,97 @@ class OutageWatch:
 class Sampler:
     """Berechnet Raten aus Zählerdifferenzen zwischen zwei Abfragen."""
 
+    # Meldung "n Prozess(e) blockiert (D-State)" (Issue #51): Gezählt wird nicht jede kurze Wartezeit. Beim Start schreibt die Box viel auf die Speicherkarte
+    # (apt-get, Journal), dann warten kurz Threads des Dateisystems; das hat mit der Sendung nichts zu tun. Darum: (1) erst GRACE Sekunden nach dem Start, (2) erst
+    # wenn SUSTAIN Sekunden am Stück etwas blockiert ist (Messungen mit mehr als GAP Sekunden Abstand zählen nicht als am Stück), (3) ohne Threads, die auf die
+    # Speicherkarte oder den CPU-Regler warten. Unbekanntes (zum Beispiel usb-storage, ein Decoder-Treiber) meldet weiter; das Zustandsprotokoll behält alle Namen.
+    D_GRACE, D_SUSTAIN, D_GAP = 120.0, 15.0, 6.0
+    D_BENIGN_NAME = re.compile(r"^(kworker|jbd2|sugov|apt-get|apt|dpkg|mmcqd|kswapd\d*|flush-|ext4|systemd-journal)")
+    D_BENIGN_WCHAN = re.compile(r"(__wait_on_buffer|wait_on_page|io_schedule|mmc_blk|jbd2|generic_file_buffered_read|bit_wait|blk_)")
+
     def __init__(self, demo):
         self.demo = demo
         self.prev_cpu = None
         self.prev_net = None
         self.prev_t = None
+        self.sm_net, self.sm_zero = {}, {}     # geglättete Raten je Netzkarte und Zähler der Messungen ohne Verkehr (smooth_rates)
+        self.pay_prev, self.pay_sm, self.pay_zero = None, None, 0   # Nutzdatenrate der Sendung: letzter Stand (Zeit der Datei, Pakete), geglätteter Wert, Messungen ohne Verkehr (payload_rate)
         self._lock = threading.Lock()
+        self._d_since, self._d_last = None, 0.0
+
+    # Angezeigte Raten der Netzkarten: gleitender Mittelwert statt Rohwert. Der Sender schickt Bilder in Schüben (SRT-Pacing, WLAN), darum zeigte jede einzelne Messung über 1,5 bis 2 s mal 10 und mal 20 Mbit/s,
+    # im Mittel über 10 s waren es 14,5 (Testbox, 13. Oktober 2026).
+    NET_SMOOTH_S = 4.0          # Zeitkonstante: nach einem Sprung der Rate ist die Anzeige nach 4 s noch bei 37 % des Unterschieds, nach 8 s bei 14 %
+    NET_SMOOTH_GAP_S = 15.0     # war die letzte Messung länger her (Seite nicht geöffnet), beginnt die Glättung neu mit dem Rohwert
+    NET_ZERO_MBIT, NET_ZERO_N = 0.1, 2   # Kommt zweimal hintereinander (rund 3 s) fast nichts, ist es ein Ausfall: die Anzeige springt sofort auf den Rohwert, statt 10 bis 20 s auszulaufen
+
+    def smooth_rates(self, raw, dt_s):
+        """Rohe Raten (je Netzkarte rx_mbit/tx_mbit über die Zeit dt_s seit der letzten Messung) glätten; Zeitkonstante NET_SMOOTH_S, unabhängig davon, wie oft abgefragt wird. Ein Ausfall (NET_ZERO_N
+        Messungen hintereinander unter NET_ZERO_MBIT) wird nicht geglättet."""
+        fresh = dt_s is None or dt_s > self.NET_SMOOTH_GAP_S
+        a = 1.0 - math.exp(-max(dt_s or 0.0, 0.0) / self.NET_SMOOTH_S)
+        out, new, zeros = {}, {}, {}
+        for n, r in raw.items():
+            p = None if fresh else self.sm_net.get(n)
+            cur = {}
+            for k in ("rx_mbit", "tx_mbit"):
+                z = (self.sm_zero.get((n, k), 0) + 1) if r[k] < self.NET_ZERO_MBIT else 0
+                zeros[(n, k)] = z
+                cur[k] = r[k] if (p is None or z >= self.NET_ZERO_N) else p[k] + (r[k] - p[k]) * a
+            new[n] = cur
+            out[n] = {k: round(v, 2) for k, v in cur.items()}
+        self.sm_net, self.sm_zero = new, zeros
+        return out
+
+    SRT_PAYLOAD_BYTES = 1316    # Nutzdaten je SRT-Paket (7 TS-Pakete zu 188 Byte; belacoder ohne Option -r)
+
+    def payload_rate(self, send):
+        """Nutzdatenrate der Sendung in Mbit/s (Video und Ton, ohne Kopfdaten (IP, UDP, SRT, SRTLA) und ohne Neuübertragungen): Zuwachs von sent_total - retrans_total aus der Kennzahlen-Datei von belacoder
+        (SRT zählt in sent_total auch die Neuübertragungen, pktSentTotal), mal 1316 Byte je Paket, geteilt durch die Zeit zwischen zwei Ständen der Datei (mtime mit Bruchteil; belacoder schreibt einmal je
+        Sekunde, die Zeit der Abfrage wäre ungenau), danach wie die Netzraten geglättet. Das ist, was belacoder an srtla_send übergibt; die Anzeige nimmt nie mehr als auf der Leitung gesendet wird.
+        Die Summe der Netzkarten (Leitung) lag auf der Testbox bei 14,5 Mbit/s, der Server bekam 11 bis 12 (13. Oktober 2026). None ohne laufende Sendung und bis zum zweiten Stand."""
+        def num(k):
+            v = send.get(k) if isinstance(send, dict) else None
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        t, sent, retr = num("mtime"), num("sent_total"), num("retrans_total")
+        if t is None or sent is None or sent < 0:
+            self.pay_prev, self.pay_sm, self.pay_zero = None, None, 0
+            return None
+        unique = sent - (retr if retr is not None and 0 <= retr <= sent else 0.0)
+        cur, prev = (t, unique), self.pay_prev
+        if prev is not None and t <= prev[0]:
+            return None if self.pay_sm is None else round(self.pay_sm, 2)              # Datei noch nicht erneuert (oder Uhr zurück): der letzte Wert gilt weiter
+        self.pay_prev = cur
+        dt = None if prev is None else t - prev[0]
+        if dt is None or dt > self.NET_SMOOTH_GAP_S or unique < prev[1]:               # erster Wert, lange Pause (Uhrsprung, Sendung lange aus) oder Zähler zurückgesetzt (belacoder neu gestartet)
+            self.pay_sm, self.pay_zero = None, 0
+            return None
+        raw = (unique - prev[1]) * self.SRT_PAYLOAD_BYTES * 8 / dt / 1e6
+        if self.pay_sm is None:
+            self.pay_sm = raw
+        elif raw < self.NET_ZERO_MBIT and self.pay_zero + 1 >= self.NET_ZERO_N:       # zweimal fast nichts: Ausfall, nicht glätten
+            self.pay_sm = raw
+        else:
+            self.pay_sm += (raw - self.pay_sm) * (1.0 - math.exp(-dt / self.NET_SMOOTH_S))
+        self.pay_zero = self.pay_zero + 1 if raw < self.NET_ZERO_MBIT else 0
+        return round(self.pay_sm, 2)
+
+    @classmethod
+    def d_relevant(cls, names):
+        """Aus den Namen blockierter Threads ("Name@Wartestelle") die, die nicht nur auf Speicherkarte oder CPU-Regler warten."""
+        return [n for n in (names or []) if not (cls.D_BENIGN_NAME.match(n) or cls.D_BENIGN_WCHAN.search(n.partition("@")[2]))]
+
+    def _d_alert(self, rel, now, uptime):
+        """Anzahl der Threads für die Meldung: 0 in der Schonzeit nach dem Start und solange nichts lange genug am Stück blockiert war."""
+        if not rel:
+            self._d_since = None
+            return 0
+        if self._d_since is None or now - self._d_last > self.D_GAP:
+            self._d_since = now
+        self._d_last = now
+        if uptime is not None and uptime < self.D_GRACE:
+            return 0
+        return len(rel) if now - self._d_since >= self.D_SUSTAIN else 0
 
     def cpu_times(self):
         out = []
@@ -312,6 +523,23 @@ class Sampler:
             pass
         return None
 
+    @staticmethod
+    def blocked_threads(proc="/proc", limit=20):
+        """Threads im Kernel-Zustand D (nicht unterbrechbar) mit Wartestelle im Kernel: ["usb-storage@usb_sg_wait", ...]. Zeigt, WER hinter der Meldung
+        "n Prozess(e) blockiert" steckt (oft ein USB-Modem, das sich zusätzlich als CD-Laufwerk meldet, oder der Treiber eines Geräts)."""
+        out = []
+        for d in sorted(glob.glob(proc + "/[0-9]*/task/[0-9]*")):
+            t = read(d + "/stat", "") or ""
+            i = t.rfind(")")
+            if i < 0 or t[i + 2:i + 3] != "D":
+                continue
+            name = t[t.find("(") + 1:i].replace(" ", "_")
+            wchan = (read(d + "/wchan", "") or "").strip()
+            out.append("%s@%s" % (name, wchan if wchan and wchan != "0" else "?"))
+            if len(out) >= limit:
+                break
+        return out
+
     def net_bytes(self):
         res = {}
         for line in (read("/proc/net/dev", "") or "").splitlines()[2:]:
@@ -321,6 +549,8 @@ class Sampler:
                     (read(f"/sys/class/net/{name}/operstate", "") or "").strip() in ("up", "unknown"):
                 f = rest.split()
                 res[name] = (int(f[0]), int(f[8]))
+        if pipbox_preview:
+            res = pipbox_preview.TRAFFIC.adjust(res)            # der Verkehr der Vorschau zum Browser zählt nicht zum Upload der Sendung
         return res
 
     def sample(self):
@@ -331,10 +561,10 @@ class Sampler:
         with self._lock:
             hit = getattr(self, "_last", None)
             if hit is not None and time.monotonic() - hit[0] < 1.5:
-                return hit[1]
+                return dict(hit[1])                      # flache Kopie: der Abrufer ergänzt Schlüssel und Meldungen, das darf den Zwischenspeicher nicht verändern (zweiter Tab: Meldungen doppelt)
             val = self.sample_real()
             self._last = (time.monotonic(), val)
-            return val
+            return dict(val)
 
     def sample_real(self):
         now = time.time()
@@ -349,8 +579,9 @@ class Sampler:
             for n, (rx, tx) in net.items():
                 p = self.prev_net.get(n)
                 if p:
-                    rates[n] = {"rx_mbit": round((rx - p[0]) * 8 / dt_s / 1e6, 2),
-                                "tx_mbit": round((tx - p[1]) * 8 / dt_s / 1e6, 2)}
+                    rates[n] = {"rx_mbit": max(0.0, round((rx - p[0]) * 8 / dt_s / 1e6, 2)),
+                                "tx_mbit": max(0.0, round((tx - p[1]) * 8 / dt_s / 1e6, 2))}
+        rates = self.smooth_rates(rates, dt_s)
         self.prev_cpu, self.prev_net, self.prev_t = cpu, net, now
 
         freqs = []
@@ -383,8 +614,10 @@ class Sampler:
             zt = (read(f"/sys/class/thermal/thermal_zone{zi}/type", "") or "").strip()
             zones.append({"name": THERMAL_NAMES.get(zt, zt or f"Zone {zi}"), "c": round(temps[zi], 1)})
         out = self.finish(cores, freqs, max(temps) if temps else None,
-                          total, avail, rates, blocked, self.fan_pwm())
-        out["details"] = {"temps": zones, "accel": devfreq_loads(), "disk": disk_usage("/"), "send": send_stats()}
+                          total, avail, rates, blocked, self.fan_pwm(), self.blocked_threads() if blocked > 0 else None)
+        send = send_stats()
+        out["details"] = {"temps": zones, "accel": devfreq_loads(), "disk": disk_usage("/"), "send": send}
+        out["payload_mbit"] = self.payload_rate(send)
         return out
 
     def sample_demo(self):
@@ -408,7 +641,7 @@ class Sampler:
                      "drop_total": 0, "sent_total": 90210, "retrans_pct": 0.46, "loss_pct": 0.04}}
         return out
 
-    def finish(self, cores, freqs, temp, total_kb, avail_kb, rates, blocked, fan_pwm=None):
+    def finish(self, cores, freqs, temp, total_kb, avail_kb, rates, blocked, fan_pwm=None, blocked_names=None, now=None, uptime=None):
         cpu_avg = round(sum(cores) / len(cores), 1) if cores else None
         cpu_max = max(cores) if cores else None
         mem_used = round(100.0 * (1 - avail_kb / total_kb), 1) if total_kb else None
@@ -423,8 +656,16 @@ class Sampler:
             alerts.append({"level": "warn", "text": f"Ein CPU-Kern ist fast voll ({cpu_max:.0f} %)"})
         if mem_used is not None and mem_used >= LIMITS["mem_warn"]:
             alerts.append({"level": "warn", "text": f"RAM {mem_used:.0f} % belegt"})
-        if blocked > 0:
-            alerts.append({"level": "warn", "text": f"{blocked} Prozess(e) blockiert (D-State)"})
+        rel = self.d_relevant(blocked_names) if blocked > 0 else []
+        up = uptime
+        if up is None and not self.demo:
+            try:
+                up = float((read("/proc/uptime", "") or "").split()[0])
+            except (ValueError, IndexError):
+                up = None
+        n = self._d_alert(rel, time.monotonic() if now is None else now, up)
+        if n > 0:
+            alerts.append({"level": "warn", "text": f"{n} Prozess(e) blockiert (D-State)", "kind": "dstate", "names": rel[:6]})
         return {"time": int(time.time()), "demo": self.demo,
                 "cpu": {"cores": cores, "avg": cpu_avg, "max": cpu_max, "freq_mhz": freqs},
                 "temp_c": None if temp is None else round(temp, 1),
@@ -525,7 +766,8 @@ def _iface_ips_raw():
             sk.close()
         except OSError:
             continue
-        out.append({"iface": name, "ip": ip, "cam_ip": fixed_ip(name) or ip, "label": NET_LABELS.get(name) or net_label(name)})
+        out.append({"iface": name, "ip": ip, "cam_ip": fixed_ip(name) or ip, "label": NET_LABELS.get(name) or net_label(name),
+                    "wifi": os.path.isdir(f"/sys/class/net/{name}/wireless")})     # eine DJI-Kamera verbindet sich nur per WLAN (Kameraliste zeigt nur diese)
     return out
 
 
@@ -591,6 +833,102 @@ class NetChoice:
 
     def status(self):
         return {"options": self.options(), "selected": self.iface, "ip": self.ip()}
+
+
+class IfaceMemory:
+    """Netzwerkkarten folgen der MAC-Adresse, nicht dem Namen (Wunsch des Nutzers, 10. Oktober 2026).
+
+    Der Kernel zählt eth0, eth1, usb0 … in der Reihenfolge, in der die Karten starten; nach dem Neu-Flashen oder einem Neustart können die Namen vertauscht sein.
+    Sendewege, das Netzwerk der Kameras und der Anschluss je Kamera sind aber unter dem Namen gespeichert. Diese Klasse merkt sich, welche MAC zuletzt hinter
+    welchem Namen stand. Steht eine MAC jetzt unter einem anderen Namen, wandern die gespeicherten Verweise mit (die Einstellung gilt dann weiter für dieselbe Karte).
+    Fehlt die alte MAC (Karte abgezogen), geschieht nichts. Verändert nur eigene Einstellungen, nie das System."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def _last(self):
+        try:
+            with open(self.path) as f:
+                d = json.load(f)
+            return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, cur):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cur, f)
+        os.replace(tmp, self.path)
+
+    def reconcile(self, srtla, netchoice, cams, wifi=None, names=None):
+        """Einmal abgleichen. Gibt {alter Name: neuer Name} zurück (leer, wenn nichts zu tun war)."""
+        cur = SettingsTransfer.local_macs()
+        last = self._last()
+        by_mac = {m: n for n, m in cur.items()}
+        mapping = {name: by_mac[mac] for name, mac in last.items() if cur.get(name) != mac and by_mac.get(mac) not in (None, name)}
+        if mapping:
+            self._apply(mapping, srtla, netchoice, cams, wifi, names)
+            print("iface_macs:", ", ".join("%s->%s" % kv for kv in sorted(mapping.items())), flush=True)           # Journal: welche Namen getauscht waren
+        if cur != last:
+            try:
+                self._save(cur)
+            except OSError:
+                pass
+        return mapping
+
+    @staticmethod
+    def _apply(m, srtla, netchoice, cams, wifi=None, names=None):
+        r = lambda n: m.get(n, n)
+        with srtla.lock:
+            st = srtla.data.get("settings") or {}
+            if isinstance(st.get("uplinks"), list):
+                st["uplinks"] = sorted(set(r(u) for u in st["uplinks"]))
+            if isinstance(st.get("min_share"), dict):
+                st["min_share"] = {r(k): v for k, v in st["min_share"].items()}
+            srtla.save()
+        if netchoice is not None and netchoice.iface in m:
+            netchoice.iface = r(netchoice.iface)
+            tmp = netchoice.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"iface": netchoice.iface}, f)
+            os.replace(tmp, netchoice.path)
+        with cams.lock:
+            changed = False
+            for c in cams.cams:
+                if c.get("iface") in m:
+                    c["iface"] = r(c["iface"])
+                    changed = True
+            if changed:
+                cams.save()
+        if wifi is not None and not getattr(wifi, "demo", False):                  # Hotspot-Einstellungen je WLAN-Karte (hotspot.json)
+            hs = wifi.hotspots()
+            if any(k in m for k in hs):
+                out = {r(k): v for k, v in hs.items()}
+                tmp = wifi.hs_file + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    json.dump(out, f)
+                os.replace(tmp, wifi.hs_file)
+        if names is not None:                                                       # eigene Namen der Verbindungen und Sticks, die an einem Kartennamen hängen
+            with names.lock:
+                d = names._all()
+                out = {}
+                for k, v in d.items():
+                    pre = k[:3] if k.startswith("if:") else (k[:4] if k.startswith("net:") else "")
+                    out[pre + r(k[len(pre):]) if pre else k] = v
+                if out != d:
+                    tmp = names.path + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(out, f)
+                    os.replace(tmp, names.path)
+
+    def run(self, srtla, netchoice, cams, wifi=None, names=None, every=30):
+        while True:
+            try:
+                self.reconcile(srtla, netchoice, cams, wifi, names)
+            except Exception as e:                                        # nie die Oberfläche mitnehmen
+                print("iface_macs:", type(e).__name__, flush=True)
+            time.sleep(every)
 
 
 HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
@@ -1024,7 +1362,8 @@ class PipelineStore:
     DEFAULT = {"type": "single", "main": "", "pip": "", "corner": 3, "size_pct": 25, "size_pct2": 25, "size_pct3": 25, "audio": "main",
                "pip2": "", "corner2": 2, "pip3": "", "corner3": 0, "x": 500, "y": 500, "x2": 500, "y2": 500, "x3": 500, "y3": 500, "main_delay_ms": DEFAULT_MAIN_DELAY_MS,
                "pip_delay_ms": DEFAULT_PIP_DELAY_MS, "pip2_delay_ms": DEFAULT_PIP_DELAY_MS,
-               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0, "always_ready": False}
+               "pip3_delay_ms": DEFAULT_PIP_DELAY_MS, "auto_failover": True, "swap_cams": 0, "always_ready": False, "facecam": ""}
+    SLOTS = ("main", "pip", "pip2", "pip3")
     Q = "queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040"
 
     def __init__(self, path):
@@ -1069,6 +1408,62 @@ class PipelineStore:
 
     SLOT_DELAY = {"pip": "pip_delay_ms", "pip2": "pip2_delay_ms", "pip3": "pip3_delay_ms"}
 
+    @classmethod
+    def facecam_slot(cls, c):
+        """Platz der Facecam-Kamera in dieser Einstellung ("main", "pip", "pip2", "pip3") oder None (keine Facecam oder nicht im Bild)."""
+        k = c.get("facecam")
+        if not k or c.get("type") != "pip":
+            return None
+        return next((s for s in cls.SLOTS if c.get(s) == k), None)
+
+    @classmethod
+    def _facecam_keeps_the_sound(cls, c):
+        """Mit einer Facecam bleibt der Ton bei ihrer Kamera, auch wenn sie durch einen Tausch an einen anderen Platz wandert (Hauptbild oder ein anderes
+        kleines Bild). Eine manuell gewählte Tonquelle gilt bis zum nächsten Tausch. Ohne Facecam ändert sich nichts: der Ton bleibt am Platz, bei
+        "Hauptbild" folgt er dem wechselnden Hauptbild. Eine deaktivierte Kamera ist nie die Tonquelle."""
+        if not c.get("facecam"):
+            return
+        slot = cls.facecam_slot(c)
+        if slot is None:
+            c["facecam"] = ""                                                                  # die Kamera ist nicht mehr im Bild
+        elif slot != "main" and c.get(slot) in (c.get("inactive") or []):
+            c["audio"] = "main"
+        else:
+            c["audio"] = slot
+
+    def set_facecam(self, slot):
+        """Das kleine Bild wählen, dessen Kamera die Facecam ist ("" = keine). Gespeichert wird die Kamera, nicht der Platz: Sie behält den Ton auch nach einem
+        Tausch. Gibt die Tonquelle zurück, die jetzt gilt ("main" ohne Facecam, sonst der Platz der Kamera)."""
+        if slot not in ("", "pip", "pip2", "pip3"):
+            raise ValueError("Facecam: eines der kleinen Bilder oder keine")
+        with self.lock:
+            c = self.cfg
+            if c.get("type") != "pip":
+                raise ValueError("Das gibt es nur bei der Art Bild-in-Bild")
+            if slot:
+                key = c.get(slot)
+                if not key:
+                    raise ValueError("Dieses kleine Bild ist nicht belegt")
+                if key in (c.get("inactive") or []):
+                    raise ValueError("Diese Kamera ist deaktiviert und kann nicht die Facecam sein")
+                c["facecam"] = key
+            else:
+                c["facecam"] = ""
+            self.save()
+            return slot or "main"
+
+    def _carry_facecam(self, new):
+        """Die Facecam einer neu gespeicherten Einstellung: Sie folgt ihrem Platz (wer das kleine Bild mit einer anderen Kamera belegt, bekommt dort die neue
+        Facecam); steht ihre Kamera gerade im Hauptbild (nach einem Tausch), bleibt sie, solange sie im Bild ist."""
+        old = self.cfg.get("facecam")
+        if not old or new.get("type") != "pip":
+            return ""
+        slot = self.facecam_slot(self.cfg)
+        here = {new.get(s) for s in self.SLOTS} - {""}
+        if slot in ("pip", "pip2", "pip3"):
+            return new.get(slot) or (old if old in here else "")
+        return old if slot == "main" and old in here else ""
+
     def swap_main_pip(self, with_key=None):
         """Hauptbild gegen eine Kamera tauschen, die gerade als kleines Bild im Bild ist (Szenenwechsel, Stufe 1). Ohne Angabe
         das erste kleine Bild. Kamera und Verzögerung bleiben beisammen (die Verzögerung gehört zur Kamera); Ecke, Größe,
@@ -1092,6 +1487,7 @@ class PipelineStore:
                     c["inactive"] = rest
                 else:
                     c.pop("inactive")
+            self._facecam_keeps_the_sound(c)
             # "Ausgeblendet" gehört zur Kamera: die bisherige Hauptkamera war sichtbar, also ist ihr kleines Bild nach dem Tausch sichtbar
             styles = clean_styles(c.get("styles"))
             idx = STYLE_SLOTS[list(self.SLOT_DELAY).index(slot)]
@@ -1186,6 +1582,9 @@ class PipelineStore:
         inactive = list(dict.fromkeys(k for k in (old if isinstance(old, list) else []) if isinstance(k, str) and k in pips))[:3]
         if t == "pip" and inactive:                                                 # deaktivierte Kameras (Issue #19); ohne sie fehlt der Schlüssel
             cfg["inactive"] = inactive
+        fc = self._carry_facecam(cfg)
+        if fc:
+            cfg["facecam"] = fc
         with self.lock:
             self.cfg = cfg
             self.save()
@@ -1239,6 +1638,8 @@ class PipelineStore:
             out["swap_cams"] = 0
         out["always_ready"] = out.get("always_ready") is True and out.get("type") == "pip"
         out["type"] = "pip" if out.get("type") == "pip" else "single"
+        fc = out.get("facecam")
+        out["facecam"] = fc if (out["type"] == "pip" and isinstance(fc, str) and KEY_RE.match(fc) and fc in [out.get(s) for s in cls.SLOTS]) else ""
         out["styles"] = clean_styles(out.get("styles"))
         if "inactive" in out:
             ina = out["inactive"]
@@ -1599,6 +2000,7 @@ def view_only_change(a, b):
     Sendekette ohne Neustart umschalten."""
     def norm(c):
         c = dict(c)
+        c.pop("facecam", None)
         c["audio"] = "main"
         c["styles"] = clean_styles(c.get("styles"))
         for k in STYLE_SLOTS:
@@ -1617,7 +2019,7 @@ def always_compatible(a, b):
             c[k] = bool(c.get(k))
         for k in DELAY_KEYS:
             c.pop(k, None)
-        for k in ("audio", "inactive", "auto_failover", "swap_cams"):
+        for k in ("audio", "inactive", "auto_failover", "swap_cams", "facecam"):
             c.pop(k, None)
         c["styles"] = clean_styles(c.get("styles"))
         for k in STYLE_SLOTS:
@@ -1728,9 +2130,17 @@ class SendControl:
         applied = d.get("applied") if active else None
         cur = srtla_signature(self.srtla.data)
         out["pending"] = [lab for k, lab in PENDING_LABELS if isinstance(applied, dict) and k in applied and applied[k] != cur[k]]
+        running = d.get("buffer_ms") if active else None
+        if isinstance(running, int) and not isinstance(running, bool):                       # Verzögerungen geändert: der Puffer der laufenden Sendekette passt nicht mehr (hilft nur ein Neustart)
+            need = pipbox_live.buffer_need_ms(PipelineStore._safe_cfg(self.pipeline.cfg))
+            if pipbox_live.buffer_mismatch(running, need):
+                out["pending"].append("Verzögerung")
         out["reasons"] = [] if active else self.reasons()
         if not active and belacoder_running():
             out["reasons"].append("Es läuft schon ein belacoder (z. B. über die BELABOX-Oberfläche)")
+        out["no_layout"] = not active and not self.pipeline.cfg.get("main")
+        out["no_server"] = not active and not pub["selected"]            # noch kein SRTLA-Server eingetragen oder ausgewählt: Live ist grau, die Live-Karte sagt es und führt zum Server
+        out["net_conflict"] = net_conflict()                                   # derselbe Adressbereich bei zwei verschiedenen Geräten (nicht: LAN und WLAN am selben Router): kleine Warnung in der Live-Karte, auch während der Sendung
         out["can_start"] = not active and not out["reasons"]
         return out
 
@@ -1876,8 +2286,8 @@ class SendControl:
         else:
             (hide, apos), mute = PipelineStore.view_values(c), False
         src = {v: k for k, v in PipelineStore.AUDIO_POS.items()}.get(apos, "main")
-        if not place.get(src):
-            src = "main"
+        if not place.get(src) or (src != "main" and place[src] in (c.get("inactive") or [])):
+            src = "main"                                  # eine deaktivierte Kamera ist nie die Tonquelle
         slot_of = {}
         for i, k in enumerate(order):
             if place[k]:
@@ -2005,9 +2415,15 @@ class CameraStore:
         self.cams = []
         self.ipfn = lan_ip
         self.ifaces = iface_ips     # in Tests ersetzbar
+        self.forgotten = set()      # Schlüssel entfernter Kameras: ein noch sendender Stream wird nicht von selbst wieder aufgenommen
         try:
             with open(path) as f:
                 self.cams = json.load(f)
+        except (OSError, ValueError):
+            pass
+        try:
+            with open(path + ".removed") as f:
+                self.forgotten = {k for k in json.load(f) if isinstance(k, str)}
         except (OSError, ValueError):
             pass
 
@@ -2017,6 +2433,19 @@ class CameraStore:
         with open(tmp, "w") as f:
             json.dump(self.cams, f, indent=1)
         os.replace(tmp, self.path)
+
+    def _save_forgotten(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".removed.tmp"
+        with open(tmp, "w") as f:
+            json.dump(sorted(self.forgotten)[-200:], f)
+        os.replace(tmp, self.path + ".removed")
+
+    def forget(self, key):
+        """Nach "Kamera entfernen": ein Stream mit diesem Schlüssel kommt nicht von selbst wieder in die Liste (Hinzufügen von Hand oder eine neu eingerichtete DJI-Kamera heben das auf)."""
+        if key and key not in self.forgotten:
+            self.forgotten.add(key)
+            self._save_forgotten()
 
     def add(self, name, key, role):
         name = (name or "").strip()[:40]
@@ -2030,6 +2459,9 @@ class CameraStore:
         with self.lock:
             if any(c["key"] == key for c in self.cams):
                 raise ValueError("Schlüssel existiert schon")
+            if key in self.forgotten:
+                self.forgotten.discard(key)
+                self._save_forgotten()
             if role in ("main", "pip") and any(c["role"] == role for c in self.cams):
                 raise ValueError("Diese Rolle ist schon vergeben")
             cam = {"id": secrets.token_hex(4), "name": name, "key": key, "role": role}
@@ -2052,7 +2484,7 @@ class CameraStore:
         with self.lock:
             known = {c["key"] for c in self.cams}
             for key in sorted(live):
-                if key in known or not KEY_RE.match(key) or key.startswith("test-"):
+                if key in known or key in self.forgotten or not KEY_RE.match(key) or key.startswith("test-"):
                     continue   # "test-…" sind Testquellen und gehören nicht in die Kameraliste
                 roles = {c["role"] for c in self.cams}
                 role = "main" if "main" not in roles else "pip" if "pip" not in roles else "extra"
@@ -2114,6 +2546,25 @@ class CameraStore:
                 self.cams[i], self.cams[j] = self.cams[j], self.cams[i]
                 self.save()
             return self.cams[j]
+
+    def move(self, cam_id, before_id=None):
+        """Eine Kamera an eine andere Stelle der Liste ziehen: direkt vor die Kamera `before_id`, ohne Angabe ans Ende. Alle anderen behalten ihre
+        Reihenfolge; Hauptbild und kleine Bilder bleiben, wie sie sind. Die Liste wird gespeichert, die Reihenfolge der Kamera-Knöpfe in der Fußleiste folgt ihr."""
+        with self.lock:
+            cam = next((c for c in self.cams if c["id"] == cam_id), None)
+            if cam is None:
+                raise KeyError(cam_id)
+            if before_id is not None and before_id != cam_id and not any(c["id"] == before_id for c in self.cams):
+                raise KeyError(before_id)
+            if before_id == cam_id:
+                return cam                                   # auf sich selbst gezogen: nichts zu tun
+            rest = [c for c in self.cams if c is not cam]
+            at = next((n for n, c in enumerate(rest) if c["id"] == before_id), len(rest))
+            rest.insert(at, cam)
+            if [c["id"] for c in rest] != [c["id"] for c in self.cams]:
+                self.cams[:] = rest
+                self.save()
+            return cam
 
     def live_streams(self):
         """Dict Schlüssel -> {fps, mbit} oder None wenn Statistik nicht lesbar."""
@@ -2641,44 +3092,82 @@ class DeviceNames:
             os.replace(tmp, self.path)
 
 
-class UiLayout:
-    """Reihenfolge der Hauptmenüs und ausgeblendete Menüpunkte (Optionen): gilt für alle Geräte an dieser Box (Handy, Rechner). Die Datei steht im
-    Zustandsordner; es sind keine Geheimnisse. Ohne Datei gilt das Standardaussehen (und die Oberfläche übernimmt einmal den Stand des ersten Geräts)."""
-    ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")
-    MAX = 80
+class LayoutStore:
+    """Ansichten der Oberfläche für Desktop und Mobil, gespeichert auf der Box (gilt für alle Geräte): je Ansicht die eigene Reihenfolge der Hauptmenüs, die
+    ausgeblendeten Menüpunkte und das Design. Beide Ansichten haben denselben Aufbau. Gespeichert werden nur Abweichungen vom Standard (Reihenfolge, Ausgeblendetes),
+    neue Menüs erscheinen darum von selbst in beiden Ansichten. Der Browser wählt die Ansicht nach der Breite des Fensters (und der Wahl des Geräts).
+    Die Datei steht im Zustandsordner; es sind keine Geheimnisse."""
+    PROFILES = ("desktop", "mobile")
+    DESIGNS = ("", "klar", "kompakt")
+    ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+    MAX_IDS = 200
 
     def __init__(self, state_dir):
-        self.path = os.path.join(state_dir, "ui-layout.json")
+        self.path = os.path.join(state_dir, "layout.json")
         self.lock = threading.Lock()
 
     @classmethod
-    def _ids(cls, raw):
-        if not isinstance(raw, list) or len(raw) > cls.MAX:
-            raise ValueError("Die Liste der Menüs ist ungültig")
-        out = []
-        for x in raw:
-            if not isinstance(x, str) or not cls.ID_RE.match(x):
-                raise ValueError("Ein Menü ist ungültig")
-            if x not in out:
-                out.append(x)
+    def clean(cls, d):
+        """Eine Ansicht prüfen und bereinigen: {"order": [...], "hidden": [...], "design": ""}; Unbrauchbares fällt weg."""
+        d = d if isinstance(d, dict) else {}
+        out = {}
+        for k in ("order", "hidden"):
+            seen, res = set(), []
+            for x in (d.get(k) if isinstance(d.get(k), list) else [])[:cls.MAX_IDS]:
+                if isinstance(x, str) and cls.ID_RE.match(x) and x not in seen:
+                    seen.add(x)
+                    res.append(x)
+            out[k] = res
+        out["design"] = d.get("design") if d.get("design") in cls.DESIGNS else ""
         return out
 
-    def get(self):
+    def _read(self):
         try:
-            with open(self.path, encoding="utf-8") as f:
+            with open(self.path) as f:
                 d = json.load(f)
-            return {"set": True, "order": self._ids(d.get("order", [])), "hidden": self._ids(d.get("hidden", []))}
-        except (OSError, ValueError, AttributeError):
-            return {"set": False, "order": [], "hidden": []}
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
 
-    def set(self, order, hidden):
-        d = {"order": self._ids(order), "hidden": self._ids(hidden)}
+    def get(self):
+        """{"set": ob schon gespeichert, "desktop": {...}, "mobile": {...}}"""
+        d = self._read()
+        p = (d or {}).get("profiles") if isinstance((d or {}).get("profiles"), dict) else {}
+        return {"set": d is not None, **{k: self.clean(p.get(k)) for k in self.PROFILES}}
+
+    def _write(self, profiles):
+        tmp = self.path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"version": 1, "profiles": profiles}, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+    def put(self, profile, data):
+        """Eine Ansicht speichern (nur die angegebenen Felder ändern sich)."""
+        if profile not in self.PROFILES:
+            raise ValueError("Ansicht unbekannt")
+        if not isinstance(data, dict):
+            raise ValueError("Angaben ungültig")
         with self.lock:
-            tmp = self.path + ".tmp"
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(d, f, indent=1, ensure_ascii=False)
-            os.replace(tmp, self.path)
+            cur = self.get()
+            new = dict(cur[profile])
+            for k in ("order", "hidden", "design"):
+                if k in data:
+                    new[k] = data[k]
+            profiles = {k: cur[k] for k in self.PROFILES}
+            profiles[profile] = self.clean(new)
+            self._write(profiles)
+        return self.get()
+
+    def init(self, data):
+        """Beim ersten Start: beide Ansichten aus den bisherigen Einstellungen des Browsers anlegen, aber nur, wenn noch nichts gespeichert ist
+        (ein zweites Gerät überschreibt nichts)."""
+        if not isinstance(data, dict):
+            raise ValueError("Angaben ungültig")
+        with self.lock:
+            if self._read() is None:
+                self._write({k: self.clean(data.get(k)) for k in self.PROFILES})
+        return self.get()
 
 
 def label_bluetooth(st, names):
@@ -2702,7 +3191,8 @@ class Wifi:
     verbindet, liegt nur dort und wird nie gespeichert oder ausgegeben; nmcli legt das Profil an. Das Passwort des eigenen Hotspots ist
     zum Weitergeben an Kameras und Handys gedacht und liegt in hotspot.json (Benutzer pipbox, 0600)."""
     STATUS = "/run/pipbox-wifi/status.json"
-    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save")
+    DRIVER_STATUS = "/run/pipbox-wlandriver/status.json"        # schreibt der Root-Helfer pipbox-wlandriver.py (Treiber für WLAN-Sticks mit AIC8800D80)
+    ACTIONS = ("scan", "connect", "forget", "disconnect", "hotspot_start", "hotspot_stop", "hotspot_save", "hotspot_delete")
     HS_PREFIX = "pipbox-hotspot-"
     HS_BANDS = {"bg": tuple(range(1, 14)), "a": (36, 40, 44, 48)}
 
@@ -2712,6 +3202,10 @@ class Wifi:
         self.demo, self.netchoice, self.names, self.srtla = demo, netchoice, names, srtla
         self.fake_hs = {}
         self.fake_msg = ("", "")
+        # Die Auslösedatei des Helfers ist nur eine Datei: Schreibt eine zweite Anfrage (zum Beispiel die Suche nach WLANs) hinein, solange
+        # die erste noch nicht gelesen ist, geht eine davon verloren oder ihr Ergebnis wird überschrieben ("Helfer hat nicht rechtzeitig geantwortet").
+        # Darum läuft immer nur eine Anfrage gleichzeitig; eine zweite wird abgewiesen.
+        self.lock = threading.Lock()
 
     def hotspots(self):
         """Gespeicherte Hotspot-Einstellungen {Karte: {ssid, password, band, channel}}."""
@@ -2769,8 +3263,9 @@ class Wifi:
                     con = con.replace("\\:", ":")
                     for c in out:
                         if c["iface"] == dev and c["ip"]:
-                            if con == self.HS_PREFIX + dev:        # der Hotspot dieser Box: kein Netz, mit dem die Karte verbunden ist
+                            if con.startswith(self.HS_PREFIX):     # der Hotspot dieser Box (sein Name trägt den Kartennamen von damals): kein Netz, mit dem die Karte verbunden ist
                                 c["hotspot_running"] = True
+                                c["hotspot_con"] = con
                             else:
                                 c["ssid"] = con
                 for c in out:
@@ -2784,6 +3279,16 @@ class Wifi:
                 pass
         for c in out:
             h = hs.get(c["iface"])
+            con = c.pop("hotspot_con", "")
+            if not h and con:                          # läuft ein Hotspot ohne gespeicherte Einstellungen (Profil von früher): Name und Band aus dem Profil, damit die Karte "an" zeigt
+                try:
+                    r = subprocess.run(["nmcli", "-t", "-g", "802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel", "connection", "show", con],
+                                       capture_output=True, text=True, timeout=4)
+                    v = (r.stdout.splitlines() + ["", "", ""])[:3]
+                    ch = int(v[2]) if v[2].isdigit() else 0
+                    h = {"ssid": v[0], "band": v[1] if v[1] in ("a", "bg") else "bg", "channel": ch}
+                except (OSError, subprocess.TimeoutExpired):
+                    h = {"ssid": "", "band": "bg", "channel": 0}
             c["hotspot"] = ({"ssid": str(h.get("ssid", "")), "band": h.get("band", "bg"), "channel": h.get("channel", 0),
                              "running": bool(c.pop("hotspot_running", False))} if h else None)
             c.pop("hotspot_running", None)
@@ -2795,6 +3300,39 @@ class Wifi:
         default = dji.device_label(card.get("name", ""), card.get("vendor", ""), card.get("usb_id", ""))
         card["label"] = self.names.label(card["key"], default) if self.names else default
         card["custom"] = bool(self.names and card["label"] != default)
+
+    SYS_NET = "/sys/class/net"
+
+    def labels(self):
+        """{Schnittstelle: Anzeigename} der WLAN-Karten für die Anzeige im Status ("wlan0 (TP-Link Archer T2U)"): eigener Name der Karte, sonst der Name,
+        den der Stick meldet. Leicht (nur /sys, der Stand der Sticks 10 s gemerkt), weil die Statusseite oft fragt."""
+        if self.demo:
+            return {"wlan0": dji.device_label("802.11ac NIC", "Realtek", "0bda:c811"), "wlan1": dji.device_label("802.11ac NIC", "Realtek", "2357:011e")}
+
+        def raw():
+            out = []
+            try:
+                names = sorted(os.listdir(self.SYS_NET))
+            except OSError:
+                return out
+            for n in names:
+                if os.path.isdir(f"{self.SYS_NET}/{n}/wireless") and not n.startswith("p2p"):
+                    info = dji.netdev_info(n, self.SYS_NET)
+                    out.append((n, info["usb_id"], dji.device_label(info["name"], info["vendor"], info["usb_id"])))
+            return out
+        res = {}
+        for n, usb_id, default in ttl_cached("wifi_labels", 10.0, raw) or []:
+            res[n] = (self.names.label(DeviceNames.key(usb_id, n), default) if self.names else default) or ""
+        return {n: v for n, v in res.items() if v}
+
+    def driver_status(self):
+        """Was der Treiber-Helfer für WLAN-Sticks gerade tut ("working", "waiting", "failed", "unsupported", "ok") und sagt, sonst leer."""
+        try:
+            with open(self.DRIVER_STATUS) as f:
+                raw = json.load(f)
+            return {"state": str(raw.get("state", "")), "message": str(raw.get("message", ""))[:300]}
+        except (OSError, ValueError, AttributeError):
+            return {}
 
     def status(self):
         if self.demo:
@@ -2820,7 +3358,7 @@ class Wifi:
             h = {}
         return {"helper_installed": os.path.exists("/etc/systemd/system/pipbox-wifi.path"), "cards": self.cards(),
                 "state": h.get("state", "idle"), "message": h.get("message", ""), "action": h.get("action", ""), "scan": h.get("scan") or {},
-                "saved": h.get("saved") or [], "time": h.get("time", 0)}
+                "saved": h.get("saved") or [], "time": h.get("time", 0), "driver": self.driver_status()}
 
     def _hotspot_request(self, d, st, card):
         """Prüft Starten, Beenden und Speichern der Einstellungen eines Hotspots; gibt die Anfrage für den Helfer zurück. Fehlen bei "hotspot_start"
@@ -2832,6 +3370,12 @@ class Wifi:
         if action == "hotspot_stop":
             if not (card.get("hotspot") or {}):
                 raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+            return req
+        if action == "hotspot_delete":
+            if not (card.get("hotspot") or {}):
+                raise ValueError("Auf dieser Karte ist kein Hotspot eingerichtet")
+            if running:
+                raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann löschen")
             return req
         if action == "hotspot_save" and running:
             raise ValueError("Der Hotspot läuft: bitte zuerst ausschalten, dann einstellen")
@@ -2867,6 +3411,14 @@ class Wifi:
         return req
 
     def request(self, d):
+        if not self.lock.acquire(blocking=False):
+            raise ValueError("Es läuft schon eine Aktion")
+        try:
+            return self._request(d)
+        finally:
+            self.lock.release()
+
+    def _request(self, d):
         action = d.get("action")
         if action not in self.ACTIONS:
             raise ValueError("Unbekannte Aktion")
@@ -2911,6 +3463,9 @@ class Wifi:
             elif action == "hotspot_stop" and iface in self.fake_hs:
                 self.fake_hs[iface]["running"] = False
                 self.fake_msg = (action, "Hotspot beendet (Vorschau)")
+            elif action == "hotspot_delete":
+                self.fake_hs.pop(iface, None)
+                self.fake_msg = (action, "Hotspot gelöscht (Vorschau)")
             return
         fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -2919,6 +3474,14 @@ class Wifi:
     EXPORT_MAX = 262144
 
     def helper_call(self, req, wait=40):
+        if not self.lock.acquire(timeout=10):
+            raise ValueError("Es läuft schon eine WLAN-Aktion")
+        try:
+            return self._helper_call(req, wait)
+        finally:
+            self.lock.release()
+
+    def _helper_call(self, req, wait=40):
         """Eine Aktion für den Root-Helfer auslösen und auf sein Ergebnis warten (status.json mit unserer Marke)."""
         st = self.status()
         if not st["helper_installed"]:
@@ -3186,6 +3749,76 @@ class LogMode:
             f.write(mode + "\n")
 
 
+class BtDriver:
+    """Bluetooth-Treiber (Realtek- und Barrot-Sticks) von Hand einrichten und den Fortschritt zeigen. Dieser Dienst hat keine Root-Rechte: er legt nur
+    das Stichwort "install" in eine Auslösedatei, der Root-Helfer pipbox-btdriver.py baut und lädt den Treiber und schreibt seinen Stand nach
+    /run/pipbox-btdriver/status.json (hier nur gelesen). Die Anzeige liest von hier und nicht aus dem Bluetooth-Dienst, weil der beim Neuladen kurz fehlt."""
+    STATUS = "/run/pipbox-btdriver/status.json"
+    UNIT = "/etc/systemd/system/pipbox-btdriver.path"
+    STATES = ("working", "waiting", "failed", "unsupported", "ok", "none")
+    CHIP_STATUS = "/run/pipbox-btchip/status.json"          # Helfer für den eingebauten Bluetooth-Chip der ROCK 5B Plus (schreibt nur dort)
+    CHIP_UNIT = "/etc/systemd/system/pipbox-btchip.path"
+    CHIP_STATES = ("working", "waiting", "failed", "unsupported", "ok")
+
+    def __init__(self, state_dir, demo):
+        self.req = os.path.join(state_dir, "btdriver-request")
+        self.chip_req = os.path.join(state_dir, "btchip-request")
+        self.demo = demo
+        self.fake = {}
+
+    def status(self):
+        if self.demo:
+            return {"helper_installed": True, "state": "", "message": "", **self.fake}
+        out = {"helper_installed": os.path.exists(self.UNIT), "state": "", "message": ""}
+        try:
+            with open(self.STATUS) as f:
+                raw = json.load(f)
+            if raw.get("state") in self.STATES:
+                out.update(state=raw["state"], message=str(raw.get("message", ""))[:300], manual=bool(raw.get("manual")),
+                           step=int(raw.get("step") or 0), steps=int(raw.get("steps") or 0), step_text=str(raw.get("step_text", ""))[:80],
+                           time=int(raw.get("time") or 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        chip = self.chip_status()
+        if chip:
+            out["chip"] = chip
+        return out
+
+    def chip_status(self):
+        """Stand des eingebauten Bluetooth-Chips der ROCK 5B Plus, oder None (anderes Gerät, Helfer fehlt, noch nichts geschrieben)."""
+        if self.demo:
+            return None
+        try:
+            with open(self.CHIP_STATUS) as f:
+                raw = json.load(f)
+            if raw.get("applies") is True and raw.get("state") in self.CHIP_STATES:
+                return {"state": raw["state"], "message": str(raw.get("message", ""))[:300], "name": str(raw.get("name", ""))[:80],
+                        "manual": bool(raw.get("manual")), "time": int(raw.get("time") or 0)}
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return None
+
+    def request(self):
+        st = self.status()
+        if not st["helper_installed"]:
+            raise ValueError("Der Helfer ist nicht installiert (Software-Update einspielen oder install.sh erneut ausführen)")
+        if st.get("state") == "working" and time.time() - st.get("time", 0) < 1800:
+            raise ValueError("Der Treiber wird gerade eingerichtet")
+        chip = st.get("chip") or {}
+        if chip.get("state") == "working" and time.time() - chip.get("time", 0) < 600:
+            raise ValueError("Der Bluetooth-Chip auf dem Board wird gerade eingerichtet")
+        if self.demo:
+            self.fake = {"state": "working", "manual": True, "step": 2, "steps": 5, "step_text": "Treiber wird gebaut", "message": "Treiber für TP-Link UB500 wird gebaut und eingerichtet (einige Minuten) …"}
+            return
+        fd = os.open(self.req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("install\n")
+        if os.path.exists(self.CHIP_UNIT):                                  # der Chip-Helfer prüft selbst, ob dieses Gerät die ROCK 5B Plus ist
+            fd = os.open(self.chip_req, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write("install\n")
+
+
 class LogBundle:
     """Protokolle zum Herunterladen: eine einzige Textdatei mit den Journalen der IRL4YOU-Dienste, dem Zustandsprotokoll und
     den Einstellungen, von Passwörtern, Stream-ID, WLAN-Namen und Adressen bereinigt. Dieser Dienst hat keine Root-Rechte und
@@ -3413,13 +4046,16 @@ class SwUpdate:
     API = "https://api.github.com/repos/" + UPDATE_REPO + "/releases?per_page=30"
     STATUS = "/run/pipbox-swupdate/status.json"
     BACKUP = "/var/lib/pipbox-backup"
-    STAGE = "Beta"
+    STAGE = ""
+    CHANGELOG_MAX = 600_000          # die ganze Datei (heute rund 130 KB; früher nur die ersten 60 KB: ältere Versionen fehlten schon)
+    HISTORY_TTL = 30 * 60
 
     def __init__(self, state_dir, demo, send):
         self.req = os.path.join(state_dir, "swupdate-request")
         self.demo, self.send = demo, send
         self.lock = threading.Lock()
         self.cache, self.cache_t = None, 0.0
+        self.hist, self.hist_t = None, 0.0
         self.started = time.time()
         self.rel_cache, self.rel_t = [], 0.0
         here = os.path.dirname(os.path.abspath(__file__))
@@ -3456,15 +4092,39 @@ class SwUpdate:
                 break
         return "\n".join(out)
 
+    @staticmethod
+    def _oldest(text):
+        """Die älteste Versionsnummer, die als Überschrift im Text steht (als Zahlentripel), sonst None."""
+        out = None
+        for m in re.finditer(r"(?m)^##\s+(\d+)\.(\d+)\.(\d+)", text):
+            v = tuple(int(x) for x in m.groups())
+            out = v if out is None or v < out else out
+        return out
+
+    def _changelog(self, current=None):
+        """Der Text der Änderungsliste: CHANGELOG.md; die ältere Hälfte steht in CHANGELOG-Archiv.md und wird nur dazugeladen, wenn sie gebraucht wird (current:
+        die installierte Version ist älter als die älteste Überschrift der Liste; ohne current: immer, für die Suche im ganzen Verlauf). Fehlt das Archiv, bleibt die Liste."""
+        text = self._get("CHANGELOG.md", self.CHANGELOG_MAX)
+        oldest = self._oldest(text)
+        m = re.match(r"^(\d+)\.(\d+)\.(\d+)", current or "")
+        cur = tuple(int(x) for x in m.groups()) if m else None
+        need = current is None or cur is None or (oldest is not None and cur < oldest)
+        if need:
+            try:
+                text = text.rstrip("\n") + "\n\n" + self._get(b"CHANGELOG-Archiv.md".decode(), self.CHANGELOG_MAX)
+            except OSError:
+                pass
+        return text
+
     @classmethod
-    def _sections_since(cls, text, current, max_sections=6, max_lines=160):
+    def _sections_since(cls, text, current, max_sections=100, max_lines=4000, max_chars=200_000):
         """Die Änderungen aller Versionen, die neuer sind als die installierte (neueste zuerst), aus dem Text der CHANGELOG.md. Wer mehrere
-        Versionen übersprungen hat, sieht so alles, was neu ist. Ist keine neuer (oder die Überschriften sind unbekannt), gilt der erste Abschnitt."""
+        Versionen übersprungen hat, sieht so alles, was neu ist (Issue #57: früher nur die neuesten 6 Versionen; jetzt bis zu 100, höchstens 200 KB). Ist keine neuer (oder die Überschriften sind unbekannt), gilt der erste Abschnitt."""
         def num(v):
             m = re.match(r"^(\d+)\.(\d+)\.(\d+)", v or "")
             return tuple(int(x) for x in m.groups()) if m else None
         cur = num(current)
-        out, keep, sections = [], False, 0
+        out, keep, sections, chars = [], False, 0, 0
         for l in text.splitlines():
             if l.startswith("## "):
                 m = re.match(r"^##\s+(\d+\.\d+\.\d+)", l)
@@ -3476,7 +4136,8 @@ class SwUpdate:
                         break
             if keep:
                 out.append(l.rstrip())
-                if len(out) >= max_lines:
+                chars += len(l) + 1
+                if len(out) >= max_lines or chars >= max_chars:
                     break
         return "\n".join(out) if out else cls._first_section(text)
 
@@ -3509,13 +4170,32 @@ class SwUpdate:
                     # installierte Version ist dann die neueste, die wir kennen; nach wenigen Minuten wird noch einmal gefragt.
                     res["latest"], res["stale"] = self.version, True
                 try:
-                    res["notes"] = self._sections_since(self._get("CHANGELOG.md", 60000), self.version)
+                    res["notes"] = self._sections_since(self._changelog(self.version), self.version)
                 except OSError:
                     res["notes"] = ""
             except (OSError, ValueError):
                 res["error"] = "GitHub ist nicht erreichbar oder lieferte keine gültige Versionsnummer."
         with self.lock:
             self.cache, self.cache_t = res, time.time()
+        return res
+
+    def history(self):
+        """Der ganze Änderungsverlauf (CHANGELOG.md von GitHub) für die Suche in der Oberfläche: {"text", "error"}. Nur auf Wunsch geladen (ein Klick auf das "i"),
+        30 Minuten gehalten, auch während einer Übertragung: Der Abruf ist einmalig (Änderungsliste mit Archiv rund 400 KB Download, kein Upload), die automatischen
+        Prüfungen (check, releases) bleiben während der Übertragung gesperrt. Der Fehlertext ist fertig lesbar."""
+        with self.lock:
+            if self.hist and time.time() - self.hist_t < self.HISTORY_TTL:
+                return self.hist
+        if self.demo:
+            res = {"text": "## 0.9.1 (Demo)\n- Beispiel für eine neue Version.\n\n## 0.9.0 (Demo)\n- Erste Version.", "error": ""}
+        else:
+            try:
+                res = {"text": self._changelog(), "error": ""}
+            except OSError:
+                with self.lock:
+                    return self.hist or {"text": "", "error": "GitHub ist nicht erreichbar."}
+        with self.lock:
+            self.hist, self.hist_t = res, time.time()
         return res
 
     def auto_loop(self):
@@ -3842,7 +4522,7 @@ class Updates:
 
 
 DJI_COMMANDS = ("state", "wifi_options", "scan", "add", "update", "use_saved", "delete_saved", "remove",
-                "connect", "disconnect", "reconnect")
+                "connect", "disconnect", "reconnect", "phone_pair", "phone_pair_stop", "phone_read", "phone_remove", "ctrl_scan", "ctrl_pair", "ctrl_remove")
 DJI_FIELDS = ("addr", "name", "model", "kind", "wifi_ifname", "ssid", "password", "ip", "resolution", "fps", "bitrate",
               "stabilization", "autoconnect", "status_only")
 
@@ -3926,6 +4606,25 @@ class DjiService:
         except (OSError, ValueError):
             return {}
 
+    def addr_for_key(self, key):
+        """Geräteadresse der DJI-Kamera mit diesem Stream-Schlüssel (dji-xxxxxx) oder None. Nur-Akku-Kameras (Schlüssel des HDMI-Eingangs) zählen nicht."""
+        if not (isinstance(key, str) and key.startswith("dji-")):
+            return None
+        for addr, cfg in self._config().items():
+            if cfg.get("rtmp_key") == key and not cfg.get("status_only"):
+                return addr
+        return None
+
+    def remove_for_key(self, key):
+        """Die DJI-Kamera mit diesem Schlüssel aus dem Kamera-Dienst entfernen (für "Kamera entfernen" in der Kameraliste). True, wenn es sie gab."""
+        addr = self.addr_for_key(key)
+        if not addr:
+            return False
+        try:
+            return not self._call({"cmd": "remove", "addr": addr}).get("error")
+        except (RuntimeError, ValueError):
+            return False
+
     def fps_for_key(self, key):
         """Eingestellte Bildrate einer DJI-Kamera (Schlüssel dji-xxxxxx), sonst None. Manche DJI-Modelle melden in ihren
         Stream-Metadaten keine Bildrate; dann zeigen wir den Wert, mit dem wir sie starten."""
@@ -3963,15 +4662,26 @@ class DjiService:
         hit = getattr(self, "_extras", None)
         if hit and now - hit[0] < self.EXTRAS_TTL:
             return hit[1]
-        out = {}
+        out, parked = {}, set()
         try:
             for c in self._call({"cmd": "state"}, timeout=2).get("cameras", []):
                 if c.get("rtmp_key") and c.get("battery") is not None:
                     out[c["rtmp_key"]] = {"battery": c["battery"], "battery_age": c.get("battery_age"), "charging": c.get("charging")}
+                # bewusst aus: "Trennen" gedrückt oder ohne automatisches Verbinden, und die Kamera streamt gerade nicht. Eine Kamera, die an die Box sendet (auch
+                # ohne automatisches Verbinden, zum Beispiel nach einem Neustart des Bluetooth-Dienstes, der sie weiterlaufen ließ), ist nie "aus (gewollt)".
+                sends = c.get("state") in ("streaming", "status") or (c.get("publishing") is True and not c.get("manual_off"))
+                if c.get("rtmp_key") and (c.get("manual_off") or not c.get("autoconnect")) and not sends:
+                    parked.add(c["rtmp_key"])
         except (RuntimeError, ValueError):
             pass
         self._extras = (now, out)
+        self._parked = parked
         return out
+
+    def parked_keys(self):
+        """Schlüssel der DJI-Kameras, die der Nutzer bewusst ausgeschaltet hat (aus demselben Zustand wie camera_extras, 3 Sekunden zwischengespeichert)."""
+        self.camera_extras()
+        return set(getattr(self, "_parked", set()))
 
     def _ensure_listed(self, cameras):
         """Jede Kamera des Dienstes steht auch in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
@@ -3989,7 +4699,8 @@ class DjiService:
 
     def status(self):
         out = {"available": False, "reason": "", "cameras": [], "scan": [], "scanning": False, "scan_error": "",
-               "wifi_options": [], "adapters": [], "adapter_problems": [], "driver": {}, "bleak": True}
+               "wifi_options": [], "adapters": [], "adapter_problems": [], "driver": {}, "bleak": True,
+               "phones": [], "phone_pairing": {}, "controllers": [], "ctrl_found": [], "ctrl_scan": {}, "ctrl_message": ""}
         try:
             out.update(self._call({"cmd": "state"}))
             out["wifi_options"] = self._call({"cmd": "wifi_options"}).get("wifi_options", [])
@@ -4028,6 +4739,11 @@ class DjiService:
                 cam = None                                    # die Kamera der Liste gehört dem HDMI-Eingang, nicht umbenennen
             if cam and str(req["name"]).strip() and cam["name"] != str(req["name"]).strip()[:40]:
                 self.cams.update(cam["id"], name=str(req["name"]))
+        gone_key = None
+        if cmd == "remove" and self.cams:
+            cfg = self._config().get(str(req.get("addr", "")).upper()) or {}
+            if not cfg.get("status_only"):
+                gone_key = cfg.get("rtmp_key")
         old_key = None
         if cmd == "update" and req.get("status_only") is True and self.cams:
             old_key = (self._config().get(str(req.get("addr", "")).upper()) or {}).get("rtmp_key")
@@ -4037,6 +4753,12 @@ class DjiService:
             cam = next((c for c in self.cams.cams if c["key"] == old_key), None)
             if cam:
                 self.cams.remove(cam["id"])
+        if gone_key and not res.get("error") and self.cams:
+            # "Entfernen" heißt entfernen: auch der Eintrag in der Kameraliste verschwindet, und ein noch sendender Stream kommt nicht von selbst zurück
+            cam = next((c for c in self.cams.cams if c["key"] == gone_key), None)
+            if cam:
+                self.cams.remove(cam["id"])
+            self.cams.forget(gone_key)
         if cmd == "add" and res.get("key") and self.cams:
             self._ensure_listed([{"rtmp_key": res["key"], "model": req.get("model"), "name": req.get("name")}])
         return {k: v for k, v in res.items() if k not in ("reply_to", "token")}
@@ -4057,8 +4779,46 @@ class DjiService:
                                                      resolution="720p", bitrate=4000, retry_in=0, battery=18, battery_age=95, charging=False,
                                                      detail="Kamera nicht gefunden. Ist sie an, Bluetooth aktiv und nicht mit dem Handy verbunden?")
         if cmd == "state":
+            pair = f.get("pair_until", 0) - time.time()
+            if f.get("pair_until") and pair <= 0 and not f.get("phones_seeded"):
+                f["phones_seeded"] = True                 # Vorschau: nach der Kopplungszeit steht ein Handy in der Liste
+                f.setdefault("phones", []).append({"addr": "7C:A1:77:00:00:09", "name": "Pixel von Marco", "percent": 60, "steps": 5,
+                                                   "age": 0, "error": "", "reading": False})
             return {"cameras": list(f["cameras"].values()), "scan": f["scan"], "scanning": f["scanning"], "scan_error": "",
-                    "bleak": True}
+                    "bleak": True, "phones": f.get("phones", []),
+                    "phone_pairing": {"active": pair > 0, "left": max(0, int(pair)), "message": ""},
+                    "controllers": f.get("controllers", []),
+                    "ctrl_scan": {"active": 0 < f.get("ctrl_scan_until", 0) - time.time(), "left": max(0, int(f.get("ctrl_scan_until", 0) - time.time())), "message": ""},
+                    "ctrl_found": [] if f.get("ctrl_scan_until", 0) - time.time() > 0 or not f.get("ctrl_scan_until") else
+                    [r for r in ({"addr": "E4:11:22:33:44:55", "name": "Mini Controller", "rssi": -48, "input": True, "paired": False},
+                                 {"addr": "AA:BB:CC:00:11:22", "name": "Jabra Evolve2 85", "rssi": -70, "input": False, "paired": False})
+                     if r["addr"] not in {c["addr"] for c in f.get("controllers", [])}],
+                    "ctrl_message": ""}
+        if cmd == "ctrl_scan":
+            f["ctrl_scan_until"] = time.time() + 5          # Vorschau: kurze Suche, dann stehen zwei Geräte in der Liste
+            return {"ok": True}
+        if cmd == "ctrl_pair":
+            f.setdefault("controllers", []).append({"addr": str(req.get("addr", "")).upper(), "name": "Mini Controller", "connected": True, "battery": 87, "pairing": False})
+            return {"ok": True}
+        if cmd == "ctrl_remove":
+            f["controllers"] = [c for c in f.get("controllers", []) if c["addr"] != str(req.get("addr", "")).upper()]
+            return {"ok": True}
+        if cmd == "phone_pair":
+            f["pair_until"] = time.time() + 6              # Vorschau: kurze Kopplungszeit, danach erscheint ein Handy
+            return {"ok": True}
+        if cmd == "phone_pair_stop":
+            f["pair_until"] = 0
+            return {"ok": True}
+        if cmd in ("phone_read", "phone_remove"):
+            ph = f.get("phones", [])
+            hit = next((p for p in ph if p["addr"] == str(req.get("addr", "")).upper()), None)
+            if hit is None:
+                raise ValueError("Unbekanntes Handy")
+            if cmd == "phone_remove":
+                ph.remove(hit)
+            else:
+                hit.update(percent=max(0, hit["percent"] - 20) if hit["percent"] else 80, age=0, error="")
+            return {"ok": True}
         if cmd == "wifi_options":
             return {"wifi_options": [
                 {"ifname": "wlan0", "ssid": "Handy-Hotspot", "ip": "10.1.1.20", "type": "client", "secret_missing": False},
@@ -4111,7 +4871,8 @@ class HdmiService:
     Im Demo-Modus gibt es keinen Dienst: ein Eingang mit Signal, der sich ein- und ausschalten lässt."""
     HOST, PORT = "127.0.0.1", 9102
     CAMERA_NAMES = ("HDMI", "HDMI-Eingang", "HDMI 2")
-    ALLOWED = ("enabled", "bitrate", "fps", "audio")        # was die Oberfläche ändern darf (der Schlüssel ist fest)
+    USB_NAMES = ("USB-Kamera", "USB-Webcam", "USB 2")        # Name der Kamera, wenn die Quelle die USB-Webcam ist (der Schlüssel bleibt "hdmi")
+    ALLOWED = ("enabled", "bitrate", "fps", "audio", "source", "usb_format")        # was die Oberfläche ändern darf (der Schlüssel ist fest)
     TTL = 1.5
     DOWN = "Der HDMI-Dienst läuft nicht (Software-Update oder install.sh ausführen)"
 
@@ -4162,21 +4923,26 @@ class HdmiService:
 
     def _fake_status(self):
         f = self.fake
+        usb = f.get("source") == "usb"
         return {"ok": True, "available": True, "state": "streaming" if f["enabled"] else "off", "message": "", "settings": dict(f),
-                "signal": {"plugged": True, "locked": True, "width": 1920, "height": 1080, "fps": 60.0, "interlaced": False, "format": "RGB", "depth": 8},
+                "signal": ({"plugged": True, "locked": True, "width": 1280, "height": 720, "fps": 30.0, "interlaced": False, "format": "", "depth": 0} if usb else
+                           {"plugged": True, "locked": True, "width": 1920, "height": 1080, "fps": 60.0, "interlaced": False, "format": "RGB", "depth": 8}),
+                "usb": ({"present": True, "name": "Beispiel-Webcam", "node": "/dev/video2", "format": "MJPEG 1280x720@30", "audio": "plughw:CARD=Beispiel"} if usb else
+                        {"present": False, "name": "", "node": "", "format": "", "audio": ""}),
                 "signal_known": True, "publishing": bool(f["enabled"]), "restarts": 0}
 
     def _listed(self):
         return bool(self.cams) and any(c["key"] == HDMI_KEY for c in self.cams.cams)
 
-    def ensure_listed(self):
-        """Die Kamera "HDMI" steht in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
+    def ensure_listed(self, source="hdmi"):
+        """Die Kamera (Schlüssel "hdmi", Name je nach Quelle "HDMI" oder "USB-Kamera") steht in der Kameraliste der Box (damit sie als Bildquelle gewählt werden kann)."""
         if not self.cams or self._listed():
             return
         roles = {c["role"] for c in self.cams.cams}
         role = "main" if "main" not in roles else "pip" if "pip" not in roles else "extra"
         taken = {c["name"].casefold() for c in self.cams.cams}
-        name = next((n for n in self.CAMERA_NAMES if n.casefold() not in taken), "HDMI-Kamera")
+        names = self.USB_NAMES if source == "usb" else self.CAMERA_NAMES
+        name = next((n for n in names if n.casefold() not in taken), "USB-Kamera 2" if source == "usb" else "HDMI-Kamera")
         try:
             self.cams.add(name, HDMI_KEY, role)
         except ValueError:
@@ -4189,17 +4955,17 @@ class HdmiService:
             if self._hit[1] is not None and now - self._hit[0] < self.TTL:
                 return dict(self._hit[1])
         out = {"service": False, "available": None, "state": "down", "message": self.DOWN, "settings": {k: hdmi_daemon.DEFAULTS[k] for k in self.ALLOWED}, "signal": {},
-               "signal_known": False, "publishing": None, "restarts": 0}
+               "usb": {}, "signal_known": False, "publishing": None, "restarts": 0}
         try:
             resp = self._fake_status() if self.demo else self._call({"cmd": "status"})
-            for k in ("available", "state", "message", "signal", "signal_known", "publishing", "restarts"):
+            for k in ("available", "state", "message", "signal", "usb", "signal_known", "publishing", "restarts"):
                 if k in resp:
                     out[k] = resp[k]
             st = resp.get("settings") if isinstance(resp.get("settings"), dict) else {}
             out["settings"] = {k: st.get(k, hdmi_daemon.DEFAULTS[k]) for k in self.ALLOWED}
             out["service"] = True
             if out["settings"]["enabled"]:
-                self.ensure_listed()
+                self.ensure_listed(out["settings"].get("source", "hdmi"))
         except (RuntimeError, ValueError) as e:
             out["message"] = str(e) or self.DOWN
         out["listed"] = self._listed()
@@ -4218,10 +4984,16 @@ class HdmiService:
         elif settings:
             self._call({"cmd": "set", "settings": settings})
         if settings.get("enabled") is True:
-            self.ensure_listed()
+            self.ensure_listed(settings.get("source") or (self.fake or {}).get("source") or self._last_source())
         with self.lock:
             self._hit = (0.0, None)
         return self.status()
+
+    def _last_source(self):
+        """Quelle laut dem zuletzt gelesenen Zustand (für den Namen der Kamera beim Einschalten ohne neue Quelle)."""
+        with self.lock:
+            st = self._hit[1] or {}
+        return (st.get("settings") or {}).get("source", "hdmi")
 
     def on_camera_removed(self):
         """Die Kamera "HDMI" wurde aus der Liste entfernt: die Einspeisung dazu ausschalten (sonst käme die Kamera von selbst wieder)."""
@@ -4250,6 +5022,7 @@ class TwitchStore:
         self.data = dict(self.DEFAULTS)
         self.warned = {}
         self.account = None                      # TwitchLogin (Anmeldung per Geräte-Code), wenn vorhanden
+        self.bot = None                          # TwitchBotLogin: zweites Konto, das nur die Akku-Meldung schreibt (Anmeldung per Geräte-Code), wenn vorhanden
         try:
             with open(path) as f:
                 saved = json.load(f)
@@ -4362,8 +5135,9 @@ class TwitchStore:
             if "message" in req:
                 new["message"] = self._message(req["message"])
             acc = self.account.login() if self.account else ""
+            bot = self.bot.login() if self.bot else ""
             manual = bool(new["channel"] and new["login"] and new["token"])
-            if new["enabled"] and not (manual or acc):
+            if new["enabled"] and not (manual or acc or (bot and new["channel"])):
                 raise ValueError(self.ERR_MISSING)
             new["via_account"] = bool(new["enabled"] and not manual)
             try:
@@ -4377,8 +5151,9 @@ class TwitchStore:
         with self.lock:
             d = self.data
             acc = self.account.login() if self.account else ""
+            bot = self.bot.login() if self.bot else ""
             return {"enabled": d["enabled"], "channel": d["channel"] or acc, "login": d["login"], "token_set": bool(d["token"]), "threshold": d["threshold"],
-                    "message": d["message"], "only_live": d["only_live"], "account": acc}
+                    "message": d["message"], "only_live": d["only_live"], "account": acc, "bot": bot}
 
     def settings(self):
         """Alle Einstellungen samt Token, nur für den Chat-Client und den Hintergrunddienst. Nie nach außen geben."""
@@ -4389,6 +5164,24 @@ class TwitchStore:
             tok = self.account.token()
             d["login"], d["token"] = acc, tok                      # ist der Zugang gerade nicht verfügbar (wird erneuert), bleibt er leer: nie still als Bot-Konto schreiben
             d["channel"] = d["channel"] or acc
+        return d
+
+    def channel_name(self):
+        """Der Kanal des Chats: der eingetragene, sonst der des angemeldeten Hauptkontos (wer sich per Geräte-Code anmeldet, trägt nichts ein). Ohne Netzzugriff."""
+        with self.lock:
+            ch = self.data["channel"]
+        return ch or (self.account.login() if self.account else "")
+
+    def notify_settings(self):
+        """Die Angaben für die Akku-Meldung: wie settings(), aber ein angemeldetes Bot-Konto schreibt statt des Hauptkontos. Nur der Hintergrunddienst nimmt diese;
+        der Chat (Lesen, Senden, Moderation) bleibt beim Hauptkonto. Ist das Bot-Konto angemeldet, sein Zugang aber gerade nicht verfügbar (wird erneuert),
+        bleibt der Token leer: nie still mit dem Hauptkonto schreiben."""
+        d = self.settings()
+        bot = self.bot.login() if self.bot else ""
+        if bot:
+            d["login"], d["token"] = bot, self.bot.token()
+        elif self.bot and self.bot.state == "abgelaufen":
+            d["token"] = ""                                         # Anmeldung des Bots abgelaufen: schweigen, bis neu angemeldet oder abgemeldet wird
         return d
 
     # ---- für welche Kamera schon gewarnt wurde
@@ -4645,16 +5438,21 @@ class ChatPaths:
                 self.fail(src, 120.0)
         raise last
 
-    def request(self, method, url, data=None, headers=None, timeout=15.0, limit=200_000, once=False):
+    def request(self, method, url, data=None, headers=None, timeout=15.0, limit=200_000, once=False, prefer=False):
         """(Status, Antworttext als Bytes) einer HTTP(S)-Anfrage über den ersten Weg, der antwortet; (0, b"") ohne Verbindung.
         once=True für Anfragen, die sich nicht wiederholen lassen (Erneuern des Zugangs mit einmaligem Schlüssel): Nur ein Fehler beim Verbinden führt zum
-        nächsten Weg; ist die Anfrage erst gesendet und die Antwort geht verloren, wird nicht ein zweites Mal gesendet."""
+        nächsten Weg; ist die Anfrage erst gesendet und die Antwort geht verloren, wird nicht ein zweites Mal gesendet (Ergebnis dann (-1, b"")).
+        prefer: ein Weg (auch None = normale Route), der zuerst versucht wird, zum Beispiel der, über den gerade eine Verbindung steht."""
         import http.client
         import urllib.parse
         u = urllib.parse.urlsplit(url)
         cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
         target = u.path + ("?" + u.query if u.query else "")
-        for src in self.order():
+        order = self.order()
+        if prefer is not False and prefer in order:
+            order.remove(prefer)
+            order.insert(0, prefer)
+        for src in order:
             conn = None
             try:
                 conn = cls(u.hostname, u.port, timeout=timeout, source_address=(src, 0) if src else None)
@@ -4668,11 +5466,18 @@ class ChatPaths:
                 try:
                     conn.request(method, target, body=data, headers=headers or {})
                     r = conn.getresponse()
-                    return r.status, r.read(limit)
+                    status = r.status
+                    try:
+                        return status, r.read(limit)
+                    except (OSError, http.client.HTTPException, ValueError):
+                        self.fail(src, 120.0)
+                        if once:
+                            return status, b""                         # Antwortzeile da, Rumpf verloren: der Status gilt
+                        raise
                 except (OSError, http.client.HTTPException, ValueError):
                     self.fail(src, 120.0)
                     if once:
-                        return 0, b""
+                        return -1, b""                                 # gesendet, aber keine Antwort: nicht noch einmal senden
             except (OSError, http.client.HTTPException, ValueError):
                 self.fail(src, 120.0)
             finally:
@@ -4695,9 +5500,23 @@ class TwitchLogin:
     Anmeldung ohne Netz ab. Adresse, Uhr und Wartezeit sind für Tests einstellbar."""
     CLIENT_ID = "a9w1hzb4d6nu70re8wxt6rpyxths35"
     ID_BASE = "https://id.twitch.tv/oauth2/"
-    SCOPES = "chat:read chat:edit"
-    SCOPES_MOD = "chat:read chat:edit moderator:manage:banned_users moderator:manage:chat_messages"      # nur, wenn der Nutzer die Moderation einschaltet
+    SCOPES = "chat:read chat:edit user:write:chat"                       # Lesen und Schreiben im Chat (user:write:chat: Senden über die Twitch-Schnittstelle mit Rückmeldung)
+    CMD_SCOPES = ("channel:manage:vips channel:manage:moderators moderator:manage:chat_settings moderator:manage:announcements "
+                  "channel:manage:raids channel:manage:broadcast")           # Chat-Befehle: VIP, Moderatoren, Chat-Einstellungen, Ankündigung, Raid, Marker, Titel und Kategorie
+    MOD_BASE = "moderator:manage:banned_users moderator:manage:chat_messages"
+    MOD_SCOPES = MOD_BASE + " " + CMD_SCOPES                                 # Moderation = Löschen, Timeout, Bann UND alle Befehle: wer sie einschaltet, bestätigt alles auf einmal
+    EVENT_SCOPES = "moderator:read:followers channel:read:redemptions"          # Follows und Kanalpunkte-Einlösungen (EventSub); nur, wenn der Nutzer die Ereignisse einschaltet
+    SCOPES_MOD = "chat:read chat:edit user:write:chat " + MOD_SCOPES      # nur, wenn der Nutzer die Moderation einschaltet
     GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+    # Streamer-Schlüssel: Jeder Browser, in dem sich der Streamer bei Twitch anmeldet, erzeugt einen Zufallsschlüssel und behält ihn nur bei sich (localStorage). Die Box
+    # speichert davon nur den SHA-256-Wert (höchstens MAX_OWNERS Browser). Befehle, die der Kanalinhaber ausführt (VIP, Moderatoren, Raid, Marker, Titel, Kategorie),
+    # gehen nur mit einem Schlüssel, dessen Wert hier steht: Wer nur den Link zur Box bekommt (zum Beispiel ein Moderator), kann sie damit nicht benutzen.
+    OWNER_RE = re.compile(r"[0-9a-f]{64}")
+    KEY_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
+    MAX_OWNERS = 5
+    DEMO_LOGIN = "demo_streamer"
+    ERR_NOT_OWNER = "Das ist nicht das Konto des Streamers dieser Box"
+    ERR_NO_CHANNEL = "Bitte zuerst eintragen, auf welchem Konto gestreamt wird (Kanal)"
     REFRESH_BEFORE = 600                       # Sekunden vor dem Ablauf erneuern
     KEEP_EVERY = 30.0
     ERR_NET = "Keine Verbindung zu Twitch"
@@ -4713,13 +5532,15 @@ class TwitchLogin:
         self.pending = None                    # {"device_code", "user_code", "uri", "expires_at", "interval"}
         self.state, self.error = "aus", ""
         self.gen = 0                           # zählt Anmeldeversuche: ein abgebrochener Versuch beendet seinen Abfrage-Faden
+        self.claim_fail = None                 # {"owner": Fingerabdruck, "error": Text}: ein Browser wollte sich als Streamer ausweisen, das Konto war ein anderes
         try:
             with open(path) as f:
                 saved = json.load(f)
             if isinstance(saved, dict) and isinstance(saved.get("access"), str) and isinstance(saved.get("refresh"), str):
                 self.tokens = {"access": saved["access"], "refresh": saved["refresh"], "expires_at": float(saved.get("expires_at", 0)),
                                "login": str(saved.get("login", ""))[:25], "user_id": str(saved.get("user_id", ""))[:20],
-                               "scopes": [str(x)[:60] for x in saved.get("scopes", [])][:30], "mod_off": saved.get("mod_off") is True}
+                               "scopes": [str(x)[:60] for x in saved.get("scopes", [])][:30], "mod_off": saved.get("mod_off") is True,
+                               "owners": [x for x in saved.get("owners", []) if isinstance(x, str) and self.OWNER_RE.fullmatch(x)][:self.MAX_OWNERS]}
                 self.state = "angemeldet"
         except (OSError, ValueError, TypeError):
             pass
@@ -4772,10 +5593,13 @@ class TwitchLogin:
                 self._demo_step()
         t, p, state = self.tokens, self.pending, self.state                # nur lesen: nie hinter einer laufenden Anfrage an Twitch warten
         scopes = list((t or {}).get("scopes", []))
-        has = "moderator:manage:banned_users" in scopes and "moderator:manage:chat_messages" in scopes
+        has = bool(self.MOD_SCOPES) and all(x in scopes for x in self.MOD_SCOPES.split())             # Moderation samt Befehlen: ältere Anmeldungen ohne die Befehlsrechte brauchen einmal "Moderation einschalten"
+        ev = all(x in scopes for x in self.EVENT_SCOPES.split())
         out = {"state": state, "login": (t or {}).get("login", ""), "scopes": scopes, "error": self.error,
                "mod": has and not (t or {}).get("mod_off"),           # Moderation ist an: Rechte vorhanden und nicht von Hand ausgeschaltet
-               "mod_scope": has}                                      # die Rechte hat der Zugang (Einschalten geht dann ohne neue Anmeldung bei Twitch)
+               "mod_scope": has,                                      # die Rechte hat der Zugang (Einschalten geht dann ohne neue Anmeldung bei Twitch)
+               "events": ev,                                          # Rechte für Follows und Kanalpunkte sind da
+               "helix_chat": "user:write:chat" in scopes}             # Senden über die Twitch-Schnittstelle ist möglich
         if p and state == "wartet":
             out.update(code=p["user_code"], uri=p["uri"], expires_in=max(0, int(p["expires_at"] - self.clock())))
         return out
@@ -4808,17 +5632,51 @@ class TwitchLogin:
         return ""
 
     # ---- Anmelden
-    def start(self, mod=False):
-        scopes = self.SCOPES_MOD if mod else self.SCOPES
+    def scopes_for(self, mod=False, events=False, everything=False):
+        """Die Rechte für eine neue Anmeldung: immer die Grundrechte, Moderation (samt Befehlen) und Ereignisse nur auf Wunsch (alles auf einmal mit everything), und
+        was der Zugang schon hat, bleibt erhalten (wer die Ereignisse einschaltet, verliert die Moderation nicht, und umgekehrt)."""
+        want = self.SCOPES.split()
+        have = set(((self.tokens or {}).get("scopes")) or [])
+        if everything:
+            mod = events = True
+        for flag, group in ((mod, self.MOD_SCOPES), (events, self.EVENT_SCOPES)):
+            for sc in group.split():
+                if (flag or sc in have) and sc not in want:
+                    want.append(sc)
+        return " ".join(want)
+
+    @classmethod
+    def owner_hash(cls, key):
+        """SHA-256 des Schlüssels oder None, wenn er nicht der Form entspricht."""
+        if not isinstance(key, str) or not cls.KEY_RE.fullmatch(key):
+            return None
+        return hashlib.sha256(key.encode("ascii")).hexdigest()
+
+    def is_owner(self, key):
+        """Gehört dieser Schlüssel zu einem Browser, in dem sich der Streamer angemeldet hat?"""
+        h = self.owner_hash(key)
+        t = self.tokens
+        return bool(h and t and h in (t.get("owners") or []))
+
+    def start(self, mod=False, events=False, everything=False, owner_key=None, claim=False, expect=None):
+        """claim: Dieser Browser gilt noch nicht als der des Streamers: Die Anmeldung gilt nur, wenn Twitch das Konto des Streamers bestätigt (sonst würde jeder mit
+        dem Link das Konto der Box ersetzen). Das Konto des Streamers ist expect (der eingetragene Kanal, "Konto, auf dem gestreamt wird"), sonst das schon
+        angemeldete Konto der Box."""
+        scopes = self.scopes_for(mod, events, everything)
+        owner = self.owner_hash(owner_key)
         with self.lock:
-            if self.state == "wartet" and self.pending and self.pending["expires_at"] > self.clock() and self.pending.get("scopes") == scopes:
+            if self.claim_fail and self.claim_fail.get("owner") == owner:
+                self.claim_fail = None
+            if (self.state == "wartet" and self.pending and self.pending["expires_at"] > self.clock() and self.pending.get("scopes") == scopes
+                    and self.pending.get("owner") == owner):                          # ein anderer Browser (anderer Schlüssel) beginnt eine neue Anmeldung: der Schlüssel gehört dem, der sie bestätigt
                 return self.status()
             self.gen += 1
             gen = self.gen
             self.error = ""
             if self.demo:
                 self.pending = {"device_code": "demo", "user_code": "ABCD-EFGH", "uri": "https://www.twitch.tv/activate?device-code=ABCDEFGH",
-                                "expires_at": self.clock() + 1800, "interval": 5, "since": self.clock(), "scopes": scopes}
+                                "expires_at": self.clock() + 1800, "interval": 5, "since": self.clock(), "scopes": scopes, "owner": owner, "claim": bool(claim),
+                                "expect": str(expect or "").lower()[:25]}
                 self.state = "wartet"
                 return self.status()
             st, d = self._call(self.base + "device", {"client_id": self.client_id, "scopes": scopes})
@@ -4834,7 +5692,8 @@ class TwitchLogin:
             if not re.match(r"https://(www\.|id\.)?twitch\.tv/", uri):
                 uri = "https://www.twitch.tv/activate"                              # nur Twitch-Adressen als Link und QR-Code
             self.pending = {"device_code": d["device_code"], "user_code": d["user_code"][:20], "uri": uri,
-                            "expires_at": self.clock() + expires, "interval": interval, "scopes": scopes}
+                            "expires_at": self.clock() + expires, "interval": interval, "scopes": scopes, "owner": owner, "claim": bool(claim),
+                            "expect": str(expect or "").lower()[:25]}
             self.state = "wartet"
         threading.Thread(target=self._poll, args=(gen,), daemon=True).start()
         return self.status()
@@ -4873,7 +5732,7 @@ class TwitchLogin:
                 if st == 400 and "slow_down" in msg:
                     self.pending["interval"] = min(30, self.pending["interval"] + 5)
                     continue
-                if st == 0 or st >= 500:
+                if st <= 0 or st >= 500:
                     continue                                    # Netz kurz weg oder Twitch hakt: weiter versuchen, bis der Code abläuft
                 if st == 429:
                     self.pending["interval"] = min(30, self.pending["interval"] + 5)
@@ -4890,8 +5749,19 @@ class TwitchLogin:
         except (TypeError, ValueError):
             expires = 14400.0
         old = self.tokens or {}
+        pend = (self.pending or {}).get("owner")                     # Schlüssel des Browsers, der diese Anmeldung gestartet hat (beim Erneuern: keiner)
+        want = (self.pending or {}).get("expect") or old.get("login")
+        if (self.pending or {}).get("claim") and want:
+            st0, v0 = self._call(self.base + "validate", None, {"Authorization": "OAuth " + d["access_token"]})
+            who = v0.get("login", "").lower() if st0 == 200 and isinstance(v0.get("login"), str) else ""
+            if who != want:                                  # ein anderes Konto: nichts übernehmen, den neuen Zugang gleich widerrufen, den alten behalten
+                self._call(self.base + "revoke", {"client_id": self.client_id, "token": d["access_token"]})
+                self.claim_fail = {"owner": pend, "error": self.ERR_NOT_OWNER}
+                self.pending, self.state, self.error = None, ("angemeldet" if self.tokens else "aus"), ""
+                return
         t = {"access": d["access_token"], "refresh": d["refresh_token"], "expires_at": self.clock() + expires, "scopes": scopes,
-             "login": old.get("login", ""), "user_id": old.get("user_id", ""), "mod_off": old.get("mod_off") is True}
+             "login": old.get("login", ""), "user_id": old.get("user_id", ""), "mod_off": old.get("mod_off") is True,
+             "owners": list(old.get("owners") or [])}
         werr = False
         try:
             self._write(t)                                           # sofort: der alte Erneuerungsschlüssel ist ab jetzt ungültig, der neue darf nie verloren gehen
@@ -4902,7 +5772,12 @@ class TwitchLogin:
         if st == 200 and isinstance(v.get("login"), str):
             new = (v["login"][:25].lower(), str(v.get("user_id", ""))[:20], [str(x)[:60] for x in v["scopes"]][:30] if isinstance(v.get("scopes"), list) else scopes)
             changed = new != (t["login"], t["user_id"], t["scopes"])
+            if t["login"] and new[0] != t["login"]:
+                t["owners"] = []                                     # anderes Konto: die Schlüssel des früheren gelten nicht mehr
             t["login"], t["user_id"], t["scopes"] = new
+        if pend and pend not in t["owners"]:
+            t["owners"] = (t["owners"] + [pend])[-self.MAX_OWNERS:]
+            changed = True
         self.tokens = t                                              # erst jetzt sichtbar: nie mit leerem Namen oder leerer Konto-Kennung
         self.pending, self.state, self.error = None, "angemeldet", ""
         if changed:
@@ -4927,7 +5802,7 @@ class TwitchLogin:
                 self.fails, self.next_try = 0, 0.0
                 self._adopt(d)
                 return True
-            if st == 0 or st == 429 or st >= 500:
+            if st <= 0 or st == 429 or st >= 500:
                 self.fails = getattr(self, "fails", 0) + 1
                 self.next_try = self.clock() + min(300.0, 15.0 * 2 ** min(self.fails, 5))
                 return False
@@ -4960,7 +5835,7 @@ class TwitchLogin:
             t = self.tokens
             if not t:
                 raise ValueError("Zuerst mit Twitch anmelden")
-            has = "moderator:manage:banned_users" in t.get("scopes", []) and "moderator:manage:chat_messages" in t.get("scopes", [])
+            has = bool(self.MOD_SCOPES) and all(x in t.get("scopes", []) for x in self.MOD_SCOPES.split())
             if on and not has:
                 raise ValueError("Moderation braucht eine neue Anmeldung bei Twitch")
             t["mod_off"] = not on
@@ -4992,9 +5867,181 @@ class TwitchLogin:
     # ---- Vorschau-Modus
     def _demo_step(self):
         if self.state == "wartet" and self.pending and self.clock() - self.pending.get("since", 0) > 6:
-            self.tokens = {"access": "demo", "refresh": "demo", "expires_at": self.clock() + 14400, "login": "demo_streamer", "user_id": "1",
-                           "scopes": (self.pending.get("scopes") or self.SCOPES).split()}
+            self.tokens = {"access": "demo", "refresh": "demo", "expires_at": self.clock() + 14400, "login": self.DEMO_LOGIN, "user_id": "1",
+                           "scopes": (self.pending.get("scopes") or self.SCOPES).split(), "owners": [self.pending["owner"]] if self.pending.get("owner") else []}
             self.pending, self.state = None, "angemeldet"
+
+
+class TwitchBotLogin(TwitchLogin):
+    """Zweites Twitch-Konto ("Bot"), das nur die Akku-Meldung in den Chat schreibt: dieselbe Anmeldung per Geräte-Code wie beim Hauptkonto, aber mit den kleinsten
+    Rechten (Lesen und Schreiben im Chat über IRC, keine Moderation, keine Ereignisse) und eigener Datei <state>/twitch-bot-login.json. Der Chat der Oberfläche
+    nutzt dieses Konto nie."""
+    SCOPES = "chat:read chat:edit"
+    MOD_SCOPES = EVENT_SCOPES = ""
+
+
+class TwitchModLogin(TwitchLogin):
+    """Eigenes Twitch-Konto eines Zuschauers oder Moderators, der sich in seinem Browser anmeldet: Zuschauer nur Lesen und Schreiben im Chat, Moderatoren
+    zusätzlich die Moderatorenrechte (Löschen, Timeout, Bann, Chat-Einstellungen, Ankündigung); nichts vom Kanalinhaber (kein VIP, Raid, Titel) und keine
+    Ereignisse. Eine Datei je Browser."""
+    MOD_SCOPES = "moderator:manage:banned_users moderator:manage:chat_messages moderator:manage:chat_settings moderator:manage:announcements"
+    EVENT_SCOPES = CMD_SCOPES = ""
+    DEMO_LOGIN = "demo_moderator"
+
+
+class ModSessions:
+    """Die Twitch-Anmeldungen der Moderatoren: je Browser (Schlüssel, siehe TwitchLogin.owner_hash) ein eigenes Konto in <state>/twitch-mod-<Fingerabdruck>.json
+    (Rechte 0600). Wer nur den Link zur Box hat, schreibt und moderiert damit nie mit dem Konto des Streamers, sondern meldet sich selbst an und darf, was er bei
+    Twitch als Moderator darf. Höchstens MAX Browser."""
+    MAX = 12
+
+    def __init__(self, state_dir, demo=False, paths=None, id_base=None, client_id=None, clock=time.time, sleep=time.sleep):
+        self.dir, self.demo, self.paths = state_dir, demo, paths
+        self.kw = {"clock": clock, "sleep": sleep}
+        if id_base:
+            self.kw["id_base"] = id_base
+        if client_id:
+            self.kw["client_id"] = client_id
+        self.items = {}
+        self.lock = threading.Lock()
+
+    def _path(self, h):
+        return os.path.join(self.dir, "twitch-mod-%s.json" % h[:32])
+
+    def _make(self, h):
+        return TwitchModLogin(self._path(h), demo=self.demo, paths=self.paths, **self.kw)
+
+    def _count(self):
+        try:
+            return len([n for n in os.listdir(self.dir) if n.startswith("twitch-mod-") and n.endswith(".json")])
+        except OSError:
+            return 0
+
+    def get(self, key):
+        """Die Anmeldung dieses Browsers oder None (auch von der Platte geladen, zum Beispiel nach einem Neustart der Box)."""
+        h = TwitchLogin.owner_hash(key)
+        if not h:
+            return None
+        with self.lock:
+            s = self.items.get(h)
+            if s is None and os.path.exists(self._path(h)):
+                s = self.items[h] = self._make(h)
+            return s
+
+    def start(self, key, mod=True):
+        """mod=False: normale Zuschauer-Anmeldung (nur Lesen und Schreiben im Chat); mod=True: zusätzlich die Moderatorenrechte. Wer sich später als Moderator
+        anmeldet, behält, was er schon hat."""
+        h = TwitchLogin.owner_hash(key)
+        if not h:
+            raise ValueError("Dieser Browser kann sich nicht anmelden")
+        with self.lock:
+            s = self.items.get(h)
+            if s is None:
+                if self._count() >= self.MAX and not os.path.exists(self._path(h)):
+                    raise ValueError("Es sind schon zu viele Moderatoren angemeldet")
+                s = self.items[h] = self._make(h)
+        return s.start(mod=bool(mod), owner_key=key)
+
+    def logout(self, key):
+        s = self.get(key)
+        if s is not None:
+            s.logout()
+        h = TwitchLogin.owner_hash(key)
+        if h:
+            with self.lock:
+                self.items.pop(h, None)
+            try:
+                os.remove(self._path(h))
+            except OSError:
+                pass
+
+
+class TwitchAccounts:
+    """Welches Twitch-Konto gilt in welchem Browser, und was darf es? "owner": der Browser des Streamers (sein Schlüssel steht bei der Anmeldung der Box; solange
+    noch niemand angemeldet ist, kann sich jeder als Erster anmelden und wird es), "mod": ein Browser mit eigener Anmeldung eines Moderators, "user": ein Browser
+    mit eigener Zuschauer-Anmeldung (schreiben, nicht moderieren), "none": sonst, nur lesen. Ob ein angemeldeter "Moderator" im Kanal wirklich einer ist, fragt die
+    Box (mit dem Konto des Streamers) höchstens alle fünf Minuten bei Twitch nach (check); weiß sie es nicht, gelten die angemeldeten Rechte. Die Oberfläche bekommt
+    immer die Lage des eigenen Browsers (status), nie die Zugangsdaten."""
+    NONE_STATUS = {"state": "aus", "login": "", "scopes": [], "error": "", "mod": False, "mod_scope": False, "events": False, "helix_chat": False}
+    CHECK_TTL = 300.0
+
+    def __init__(self, box, sessions, check=None, clock=time.time, store=None):
+        self.box, self.sessions, self.check, self.clock, self.store = box, sessions, check, clock, store
+        self.known = {}                                                # Kennung -> (Zeitpunkt, True/False/None)
+        self.lock = threading.Lock()
+
+    def _is_channel_mod(self, acct):
+        """True/False, ob dieses Konto im Kanal Moderator ist; None, wenn unbekannt."""
+        if self.check is None:
+            return None
+        uid = acct.user_id()
+        now = self.clock()
+        with self.lock:
+            hit = self.known.get(uid)
+            if hit and now - hit[0] < self.CHECK_TTL:
+                return hit[1]
+        try:
+            ans = self.check(uid)
+        except Exception:
+            ans = None
+        with self.lock:
+            if len(self.known) > 100:
+                self.known.clear()
+            self.known[uid] = (now, ans)
+        return ans
+
+    def streamer_name(self):
+        """Das Konto des Streamers: das angemeldete Konto der Box, sonst der eingetragene Kanal ("Konto, auf dem gestreamt wird", dasselbe Feld wie bei der
+        Akku-Warnung); nichts, wenn beides fehlt. Es wird nie etwas vorbelegt."""
+        name = self.box.login()
+        if name:
+            return name
+        if self.store is not None:
+            with self.store.lock:
+                return str(self.store.data.get("channel") or "").lower()
+        return ""
+
+    def pick(self, key):
+        if self.box.ready():
+            if self.box.is_owner(key):
+                return "owner", self.box
+        elif not self.streamer_name():
+            return "owner", self.box                                   # noch nichts eingetragen: es lässt sich nur der Kanal eintragen, dann ist der Streamer bekannt
+        s = self.sessions.get(key)
+        if s is not None and self.sessions.demo:
+            s.status()                                                  # Vorschau-Modus: die Anmeldung läuft nur beim Abfragen weiter
+        if s is not None and s.ready():
+            if s.status()["mod"] and self._is_channel_mod(s) is not False:
+                return "mod", s
+            return "user", s
+        return "none", None
+
+    def status(self, key):
+        role, acct = self.pick(key)
+        boxlogin = self.box.login()
+        if role == "owner":
+            st = self.box.status()
+        elif role in ("mod", "user"):
+            st = acct.status()
+            if role == "user":
+                st["mod"] = False                                       # (auch wenn die Rechte da sind: im Kanal kein Moderator)
+        else:
+            h = TwitchLogin.owner_hash(key)
+            s = self.sessions.get(key)
+            st = dict(self.NONE_STATUS, scopes=[])
+            if s is not None and s.state != "aus":
+                own = s.status()                                       # eigene Anmeldung läuft (Code und Link) oder ist fehlgeschlagen
+                st.update({k: own[k] for k in ("state", "error", "code", "uri", "expires_in") if k in own})
+            elif h and self.box.state == "wartet" and (self.box.pending or {}).get("owner") == h:
+                own = self.box.status()                                # dieser Browser weist sich gerade als Streamer aus
+                st.update({k: own[k] for k in ("state", "code", "uri", "expires_in") if k in own})
+            cf = self.box.claim_fail
+            if cf and h and cf.get("owner") == h and st["state"] != "wartet":
+                st["state"], st["error"] = "fehler", cf["error"]
+        name = self.streamer_name()
+        st["role"], st["box_login"], st["streamer"] = role, boxlogin, name
+        st["need_channel"] = bool(role == "owner" and not self.box.ready() and not name)
+        return st
 
 
 class ThirdPartyEmotes:
@@ -5013,6 +6060,11 @@ class ThirdPartyEmotes:
         self.paths, self.fetch, self.clock = paths, fetch or self._fetch, clock
         self.lock = threading.Lock()
         self.map, self.room, self.until, self.thread = {}, None, 0.0, None
+        self.users, self.uq, self.uthread, self.on_user = collections.OrderedDict(), collections.deque(), None, None      # Listen der Schreiber (Uid -> (bis, Wörter))
+        self.personal = collections.OrderedDict()                       # persönliche BTTV-Emotes (Uid -> (bis, Wörter)), kommen über die Live-Verbindung von BTTV
+        self.sthread, self.stouch, self.sroom, self.sretry, self.sfails = None, 0.0, "", 0.0, 0
+        self.sock_on = paths is not None and fetch is None             # nur mit echten Wegen (Tests mit eigener Abfrage bleiben ohne Netz)
+        self.sock_host, self.sock_port, self.sock_tls, self.sock_path = "sockets.betterttv.net", 443, True, "/ws"
 
     def _fetch(self, url):
         try:
@@ -5030,6 +6082,7 @@ class ThirdPartyEmotes:
 
     def ensure(self, room):
         room = room if isinstance(room, str) and re.fullmatch(r"[0-9]{1,12}", room) else ""
+        self._watch(room)
         with self.lock:
             if (self.thread is not None and self.thread.is_alive()) or (self.room == room and self.clock() < self.until):
                 return
@@ -5087,20 +6140,240 @@ class ThirdPartyEmotes:
                 self.map = merged
             self.until = self.clock() + (self.TTL if fails == 0 else self.RETRY)
 
-    def mark(self, item):
-        """Wörter des Textes, die ein Emote sind, in item["emotes"] eintragen (mit den Twitch-eigenen zusammengeführt, nichts überlappt)."""
-        m = self.map
+    USER_TTL, USER_MAX, USER_QUEUE = 1800.0, 300, 50
+
+    # Persönliche BTTV-Emotes (BTTV Pro): Die Erweiterung meldet sie über BTTVs Live-Verbindung (wss://sockets.betterttv.net/ws) bei jeder Nachricht, die der
+    # Zuschauer schickt, an alle, die den Kanal ("twitch:<Kanal-Nr>") abhören. Die Box hört nur zu (join_channel, nie broadcast_me), ohne Anmeldung. Die
+    # Verbindung steht, solange Nachrichten kommen (SOCK_IDLE Sekunden nach der letzten), und baut sich mit wachsender Wartezeit neu auf.
+    SOCK_IDLE, SOCK_MAX_FRAME = 900.0, 1_000_000
+
+    def _watch(self, room):
+        if not room or not self.sock_on:
+            return
+        with self.lock:
+            self.stouch, self.sroom = self.clock(), room
+            if (self.sthread is not None and self.sthread.is_alive()) or self.clock() < self.sretry:
+                return
+            self.sthread = threading.Thread(target=self._sock_loop, args=(room,), daemon=True)
+            self.sthread.start()
+
+    def _sock_open(self):
+        if self.paths is not None:
+            sk, _ = self.paths.connect(self.sock_host, self.sock_port, timeout=8)
+        else:
+            sk = socket.create_connection((self.sock_host, self.sock_port), timeout=8)
+        try:
+            if self.sock_tls:
+                sk = ssl.create_default_context().wrap_socket(sk, server_hostname=self.sock_host)
+            key = base64.b64encode(os.urandom(16)).decode()
+            sk.sendall((b"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                        b"Sec-WebSocket-Version: 13\r\nUser-Agent: pipbox\r\n\r\n") % (self.sock_path.encode(), self.sock_host.encode(), key.encode()))
+            sk.settimeout(8)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                d = sk.recv(4096)
+                if not d or len(buf) > 8192:
+                    raise OSError("ws-no-answer")
+                buf += d
+            head, _, rest = buf.partition(b"\r\n\r\n")
+            if b" 101 " not in head.split(b"\r\n")[0] + b" ":
+                raise OSError("ws-no-upgrade")
+            return sk, rest
+        except Exception:
+            try:
+                sk.close()
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _ws_frame(opcode, payload=b""):
+        m = os.urandom(4)
+        n = len(payload)
+        head = bytes([0x80 | opcode, 0x80 | (n if n < 126 else 126)]) + (struct.pack(">H", n) if n >= 126 else b"")
+        return head + m + bytes(b ^ m[i % 4] for i, b in enumerate(payload))
+
+    def _ws_frames(self, buf):
+        """(Liste (Opcode, Nutzdaten), Rest) aus den empfangenen Bytes; ValueError bei zu großem Rahmen."""
+        out = []
+        while len(buf) >= 2:
+            op, ln, off = buf[0] & 0x0F, buf[1] & 0x7F, 2
+            if ln == 126:
+                if len(buf) < 4:
+                    break
+                ln, off = struct.unpack(">H", buf[2:4])[0], 4
+            elif ln == 127:
+                if len(buf) < 10:
+                    break
+                ln, off = struct.unpack(">Q", buf[2:10])[0], 10
+            if ln > self.SOCK_MAX_FRAME:
+                raise ValueError("ws-frame-too-large")
+            if buf[1] & 0x80:
+                off += 4                                                 # Server maskiert nicht; falls doch, nur überspringen
+            if len(buf) < off + ln:
+                break
+            out.append((op, buf[off:off + ln]))
+            buf = buf[off + ln:]
+        return out, buf
+
+    def _sock_loop(self, room):
+        sk = None
+        try:
+            sk, buf = self._sock_open()
+            sk.sendall(self._ws_frame(1, json.dumps({"name": "join_channel", "data": {"name": "twitch:" + room}}).encode()))
+            sk.settimeout(5)
+            last_ping = self.clock()
+            while self.clock() - self.stouch < self.SOCK_IDLE and self.sroom == room:
+                frames, buf = self._ws_frames(buf)
+                for op, data in frames:
+                    if op == 1:
+                        self._on_event(data.decode("utf-8", "replace"))
+                    elif op == 9:
+                        sk.sendall(self._ws_frame(10, data[:125]))
+                    elif op == 8:
+                        raise OSError("ws-closed-by-peer")
+                if self.clock() - last_ping > 25:
+                    sk.sendall(self._ws_frame(9, b"pb"))
+                    last_ping = self.clock()
+                try:
+                    d = sk.recv(65536)
+                except socket.timeout:
+                    continue
+                if not d:
+                    raise OSError("ws-closed")
+                buf += d
+                if len(buf) > 2 * self.SOCK_MAX_FRAME:
+                    raise ValueError("ws-too-much-data")
+            self.sfails = 0
+        except Exception:
+            self.sfails = min(self.sfails + 1, 6)
+            with self.lock:
+                self.sretry = self.clock() + min(30.0 * 2 ** (self.sfails - 1), 900.0)         # nach Fehlern mit wachsender Wartezeit (30 s bis 15 min)
+        finally:
+            if sk is not None:
+                try:
+                    sk.close()
+                except Exception:
+                    pass
+            with self.lock:
+                self.sthread = None
+
+    def _on_event(self, text):
+        try:
+            d = json.loads(text)
+        except ValueError:
+            return
+        if not isinstance(d, dict) or d.get("name") != "lookup_user" or not isinstance(d.get("data"), dict):
+            return
+        data = d["data"]
+        uid = str(data.get("providerId") or "")
+        if not re.fullmatch(r"[0-9]{1,12}", uid) or not data.get("pro") or not isinstance(data.get("emotes"), list):
+            return
+        out = {}
+        self._add(out, "bttv", data["emotes"], "id", "code", self.BTTV_ID)
+        if not out:
+            return
+        with self.lock:
+            self.personal[uid] = (self.clock() + self.USER_TTL, out)
+            self.personal.move_to_end(uid)
+            while len(self.personal) > self.USER_MAX:
+                self.personal.popitem(last=False)
+        cb = self.on_user
+        if cb:
+            try:
+                cb(uid)
+            except Exception:
+                pass
+
+    # Emotes der Schreiber: BTTV und 7TV zeigen in der Erweiterung auch die Emotes, die ein Zuschauer selbst eingerichtet hat (persönliche Liste). Die Listen sind
+    # öffentlich (keine Anmeldung); die Box fragt sie je Schreiber einmal ab (nur über die Nummer aus Twitchs Nachricht), hält sie 30 Minuten und lädt nacheinander.
+    def user_map(self, uid):
+        with self.lock:
+            now = self.clock()
+            e, p = self.users.get(uid), self.personal.get(uid)
+            base = e[1] if e and now < e[0] else None
+            per = p[1] if p and now < p[0] else None
+        if per is None:
+            return base
+        return {**(base or {}), **per}
+
+    def want_user(self, uid):
+        if not (isinstance(uid, str) and re.fullmatch(r"[0-9]{1,12}", uid)):
+            return
+        with self.lock:
+            e = self.users.get(uid)
+            if (e and self.clock() < e[0]) or uid in self.uq or len(self.uq) >= self.USER_QUEUE:
+                return
+            self.uq.append(uid)
+            if self.uthread is None or not self.uthread.is_alive():
+                self.uthread = threading.Thread(target=self._user_loop, daemon=True)
+                self.uthread.start()
+
+    def _user_loop(self):
+        while True:
+            with self.lock:
+                if not self.uq:
+                    self.uthread = None
+                    return
+                uid = self.uq.popleft()
+            out, fails = {}, 0
+            for kind, url in (("bttv", "https://api.betterttv.net/3/cached/users/twitch/" + uid), ("7tv", "https://7tv.io/v3/users/twitch/" + uid)):
+                try:
+                    d = self.fetch(url)
+                except Exception:
+                    d = None
+                if d is None:
+                    fails += 1
+                    continue
+                d = d if isinstance(d, dict) else {}
+                if kind == "bttv":
+                    lst = [x for k in ("channelEmotes", "sharedEmotes") for x in (d.get(k) if isinstance(d.get(k), list) else [])]
+                    self._add(out, "bttv", lst, "id", "code", self.BTTV_ID)
+                else:
+                    st = d.get("emote_set") if isinstance(d.get("emote_set"), dict) else {}
+                    self._add(out, "7tv", st.get("emotes") if isinstance(st.get("emotes"), list) else [], "id", "name", self.STV_ID)
+            with self.lock:
+                self.users[uid] = (self.clock() + (self.USER_TTL if fails == 0 else self.RETRY), out)
+                self.users.move_to_end(uid)
+                while len(self.users) > self.USER_MAX:
+                    self.users.popitem(last=False)
+            cb = self.on_user
+            if cb:
+                try:
+                    cb(uid)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _apply(item, m):
+        """Wörter des Textes, die in m stehen, in item["emotes"] eintragen (mit den vorhandenen zusammengeführt, nichts überlappt). Gibt zurück, ob sich etwas änderte."""
         text = item.get("text") or ""
         if not m or not text:
-            return
+            return False
         found = [[m[w.group()], w.start(), w.end() - 1] for w in re.finditer(r"\S+", text) if w.group() in m]
         if not found:
-            return
+            return False
         merged = [list(e) for e in item.get("emotes") or []]
+        n0 = len(merged)
         for e in found:
             if all(e[2] < o[1] or e[1] > o[2] for o in merged):
                 merged.append(e)
         item["emotes"] = sorted(merged, key=lambda e: e[1])[:60]
+        return len(merged) != n0
+
+    def mark(self, item):
+        """Wörter des Textes, die ein Emote sind, in item["emotes"] eintragen: erst Kanal und global, dann die Liste des Schreibers (wird sie noch geladen, kommt sie später über mark_user)."""
+        self._apply(item, self.map)
+        uid = item.get("uid")
+        if uid:
+            self.want_user(uid)                              # holt die öffentliche Liste, falls sie fehlt oder abgelaufen ist
+            um = self.user_map(uid)
+            if um:
+                self._apply(item, um)
+
+    def mark_user(self, item):
+        um = self.user_map(item.get("uid") or "")
+        return bool(um) and self._apply(item, um)
 
 
 class TwitchReader:
@@ -5118,7 +6391,7 @@ class TwitchReader:
     COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
     MID_RE = re.compile(r"[0-9a-fA-F-]{20,40}")
     BADGES = ("broadcaster", "moderator", "vip", "subscriber", "founder", "staff", "partner")        # nur diese Abzeichen zeigt die Oberfläche
-    EMOTE_ID_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
+    EMOTE_ID_RE = re.compile(r"[A-Za-z0-9_]{1,64}")                 # alte Kennungen sind Zahlen ("25"), neue (Kanal-, Abo-, Follower- und bewegte Emotes) "emotesv2_" plus 32 Zeichen = 41; bis 40 war zu knapp
     NOTICE_KINDS = {"sub": "sub", "resub": "sub", "subgift": "sub", "submysterygift": "sub", "giftpaidupgrade": "sub", "anongiftpaidupgrade": "sub",
                     "raid": "raid", "announcement": "notice", "ritual": "notice"}
     UNESC = {"s": " ", ":": ";", "\\": "\\", "r": "", "n": ""}
@@ -5129,6 +6402,9 @@ class TwitchReader:
     def __init__(self, store, demo=False, host=None, port=None, tls=True, context=None, clock=time.monotonic, wall=time.time, sleep=time.sleep, paths=None, third=None):
         self.paths = paths or ChatPaths()
         self.third = third or ThirdPartyEmotes(self.paths)
+        if hasattr(self.third, "on_user"):
+            self.third.on_user = self._user_ready             # Liste eines Schreibers ist da: seine Nachrichten im Speicher nachträglich mit Emotes versehen
+        self.events = None                  # TwitchEvents (EventSub), wird nach dem Start gesetzt
         self.store, self.demo = store, demo
         self.host, self.port, self.tls, self.context = host or self.HOST, port or self.PORT, tls, context
         self.clock, self.wall, self.sleep = clock, wall, sleep
@@ -5294,9 +6570,20 @@ class TwitchReader:
             self.next_id += 1
             self.items.append(item)
 
+    def _user_ready(self, uid):
+        patched = []
+        with self.lock:
+            for it in self.items:
+                if it.get("uid") == uid and it.get("mid") and it.get("type") in ("msg", "me") and self.third.mark_user(it):
+                    patched.append((it["mid"], [list(e) for e in it["emotes"]]))
+        for mid, em in patched:
+            self._add({"type": "emotes", "meta": True, "mid": mid, "text": "", "emotes": em})       # laufende Oberflächen ersetzen die Emotes der schon gezeigten Zeile
+
     # ---- Abfrage durch die Oberfläche
     def poll(self, since=0):
-        ch = self.store.data.get("channel", "") if self.store else ""
+        ch = ""
+        if self.store:
+            ch = self.store.channel_name() if hasattr(self.store, "channel_name") else self.store.data.get("channel", "")
         now = self.clock()
         with self.lock:
             self.last_poll = now
@@ -5309,6 +6596,8 @@ class TwitchReader:
         else:
             self._ensure(ch)
             state = self.state
+            if self.events is not None:
+                self.events.ensure()                        # Follows und Kanalpunkte (nur mit Rechten, nur eigener Kanal, nur solange abgefragt wird)
         with self.lock:
             last = self.next_id - 1
             if since > last:
@@ -5432,6 +6721,10 @@ class TwitchReader:
                        "mid": "%08x-0000-4000-8000-000000000000" % n, "uid": "102", "login": "lena", "badges": ["vip", "subscriber"]})
         elif n % 19 == 0:
             self._add({"type": "sub", "name": "", "color": "", "text": "nightowl verschenkt 5 Abos an die Community", "emotes": [], "ev": {"k": "gift", "n": 5}})
+        elif n % 23 == 0:
+            self._add({"type": "notice", "name": "", "color": "", "text": "Anna_Streams", "emotes": [], "ev": {"k": "follow", "n": 0}})
+        elif n % 29 == 0:
+            self._add({"type": "notice", "name": "", "color": "", "text": "Lena: Trink etwas Wasser", "emotes": [], "ev": {"k": "points", "n": 500}})
         elif n % 7 == 0 and (self.third.ensure("") or True) and self.third.snapshot():             # Vorschau: echte globale Emotes von 7TV/BTTV/FFZ
             names = sorted(self.third.snapshot())
             a, b = names[n % len(names)], names[(n * 7) % len(names)]
@@ -5462,6 +6755,23 @@ class TwitchMod:
     ERR_AUTH = "Anmeldung abgelaufen, bitte neu anmelden"
     ERR_FORBIDDEN = "Dazu fehlt die Berechtigung (Moderator im Kanal?)"
     ERR_OTHER = "Twitch hat die Anfrage nicht angenommen"
+    ERR_UNSURE = "Verbindung gestört, unklar ob es angekommen ist"
+    ERR_RIGHTS = "Dafür fehlt ein Recht: bitte „Moderation einschalten“ und bei Twitch bestätigen"
+    ERR_OWNER = "Das darf nur der Kanalinhaber (im eigenen Kanal)"
+    ERR_BROWSER = "Das geht nur in dem Browser, in dem sich der Streamer bei Twitch angemeldet hat (dort einmal neu anmelden)"
+    ERR_NOTFOUND = "Twitch findet das nicht (läuft der Stream?)"
+    # Befehl -> nötiges Recht; die mit OWNER_ONLY gelten nur im eigenen Kanal (Kanalinhaber), die anderen auch für Moderatoren
+    CMD_SCOPE = {"vip": "channel:manage:vips", "unvip": "channel:manage:vips", "mod": "channel:manage:moderators", "unmod": "channel:manage:moderators",
+                 "clear": "moderator:manage:chat_messages", "slow": "moderator:manage:chat_settings", "slowoff": "moderator:manage:chat_settings",
+                 "followers": "moderator:manage:chat_settings", "followersoff": "moderator:manage:chat_settings",
+                 "subscribers": "moderator:manage:chat_settings", "subscribersoff": "moderator:manage:chat_settings",
+                 "emoteonly": "moderator:manage:chat_settings", "emoteonlyoff": "moderator:manage:chat_settings",
+                 "announce": "moderator:manage:announcements", "raid": "channel:manage:raids", "unraid": "channel:manage:raids",
+                 "marker": "channel:manage:broadcast", "title": "channel:manage:broadcast", "game": "channel:manage:broadcast"}
+    OWNER_ONLY = ("vip", "unvip", "mod", "unmod", "raid", "unraid", "marker", "title", "game")
+    SETTINGS = {"slowoff": ("slow_mode", "Langsamer Modus aus"), "followersoff": ("follower_mode", "Nur Follower aus"),
+                "subscribersoff": ("subscriber_mode", "Nur Abonnenten aus"), "emoteonlyoff": ("emote_mode", "Nur Emotes aus"),
+                "subscribers": ("subscriber_mode", "Nur Abonnenten an"), "emoteonly": ("emote_mode", "Nur Emotes an")}
 
     def __init__(self, store, account, api_base=None, client_id=None, demo_reader=None, demo=False, paths=None):
         self.store, self.account = store, account
@@ -5472,11 +6782,11 @@ class TwitchMod:
         self.ids = {}
         self.lock = threading.Lock()
 
-    def _call(self, method, path, params=None, body=None):
+    def _call(self, method, path, params=None, body=None, once=False, timeout=15.0, token=None, prefer=False, accept=()):
         import urllib.error
         import urllib.parse
         import urllib.request
-        tok = self.account.token()
+        tok = token or self.account.token()
         if not tok:
             raise ValueError(self.ERR_LOGIN)
         url = self.api + path + ("?" + urllib.parse.urlencode(params) if params else "")
@@ -5484,25 +6794,51 @@ class TwitchMod:
         hdr = {"Authorization": "Bearer " + tok, "Client-Id": self.client_id, "User-Agent": "irl4you-box"}
         if data is not None:
             hdr["Content-Type"] = "application/json"
-        status, raw = self.paths.request(method, url, data, hdr)
-        if status == 401 and self.account.refresh_now():                  # Zugang war abgelaufen (zum Beispiel falsche Uhr): einmal erneuern, einmal wiederholen
+        status, raw = self.paths.request(method, url, data, hdr, timeout=timeout, once=once, prefer=prefer)
+        if status == 401 and token is None and self.account.refresh_now():                  # Zugang war abgelaufen (zum Beispiel falsche Uhr): einmal erneuern, einmal wiederholen
             hdr["Authorization"] = "Bearer " + self.account.token()
-            status, raw = self.paths.request(method, url, data, hdr)
+            status, raw = self.paths.request(method, url, data, hdr, timeout=timeout, once=once, prefer=prefer)
         if status == 0:
             raise ValueError(self.ERR_NET)
+        if status == -1:
+            raise ValueError(self.ERR_UNSURE)
         try:
             out = json.loads(raw.decode("utf-8", "replace") or "{}")
         except ValueError:
             out = {}
         out = out if isinstance(out, dict) else {}
-        if status in (200, 201, 204):
+        if status in (200, 201, 202, 204) or status in accept:
             return out
         if status == 401:
             raise ValueError(self.ERR_AUTH)
         if status == 403:
             raise ValueError(self.ERR_FORBIDDEN)
+        if status == 404:
+            raise ValueError(self.ERR_NOTFOUND)
         msg = TwitchReader._clean(str(out.get("message", "")), 120)
-        raise ValueError(msg if status == 400 and msg else self.ERR_OTHER)
+        raise ValueError(msg if status in (400, 409, 422, 425) and msg else self.ERR_OTHER)
+
+    def is_moderator(self, uid):
+        """Ist dieses Konto Moderator im Kanal? Fragt mit dem Konto des Streamers (nur im eigenen Kanal möglich). None, wenn das nicht geht oder Twitch nicht antwortet."""
+        if self.demo:
+            return True
+        try:
+            bc, me = self._context()
+            if bc != me or not _ascii_digits(str(uid)):
+                return None
+            if "channel:manage:moderators" not in (self.account.status().get("scopes") or []):
+                return None
+            rows = self._call("GET", "moderation/moderators", {"broadcaster_id": bc, "user_id": str(uid)}).get("data")
+        except ValueError:
+            return None
+        return bool(isinstance(rows, list) and rows)
+
+    def view(self, account):
+        """Dieselbe Moderation mit einem anderen Konto (zum Beispiel dem eines Moderators in seinem Browser): gleiche Wege, gleicher Kanal, eigene Rechte."""
+        import copy
+        v = copy.copy(self)
+        v.account = account
+        return v
 
     def _context(self):
         """(Kanal-Kennung, Moderator-Kennung): der Kanal aus den Einstellungen, der Moderator ist das angemeldete Konto."""
@@ -5511,7 +6847,7 @@ class TwitchMod:
         if not self.account.status().get("mod"):
             raise ValueError(self.ERR_SCOPE)
         me, mylogin = self.account.user_id(), self.account.login()
-        ch = (self.store.settings().get("channel") or mylogin).lower()
+        ch = (self.store.channel_name() or mylogin).lower()
         return (me if ch == mylogin else self.lookup(ch)), me
 
     def lookup(self, login):
@@ -5532,11 +6868,14 @@ class TwitchMod:
             self.ids[login] = str(rows[0]["id"])
             return self.ids[login]
 
-    def do(self, req):
-        """req: {"action": "delete"|"timeout"|"ban"|"unban", "message_id" | "user_id" | "user", "seconds", "reason"}."""
+    def do(self, req, owner_key=None):
+        """req: {"action": "delete"|"timeout"|"ban"|"unban", "message_id" | "user_id" | "user", "seconds", "reason"} oder ein Befehl aus CMD_SCOPE.
+        owner_key: Streamer-Schlüssel des Browsers; ohne ihn gehen die Befehle des Kanalinhabers (OWNER_ONLY) nicht."""
         if not isinstance(req, dict):
             raise ValueError("Ungültige Anfrage")
         act = req.get("action")
+        if act in self.CMD_SCOPE:
+            return self._extra(act, req, owner_key)
         if act not in ("delete", "timeout", "ban", "unban"):
             raise ValueError("Ungültige Anfrage")
         if self.demo:
@@ -5566,6 +6905,71 @@ class TwitchMod:
         self._call("POST", "moderation/bans", base, {"data": data})
         return {"ok": True, "action": act, "user_id": uid, "message": "Timeout" if act == "timeout" else "Gebannt"}
 
+    def _extra(self, act, req, owner_key=None):
+        """Befehle über die Twitch-Schnittstelle: VIP, Moderatoren, Chat leeren und -Einstellungen, Ankündigung, Raid, Marker, Titel und Kategorie."""
+        if self.demo:
+            return self._demo(act, req)
+        bc, me = self._context()
+        if act in self.OWNER_ONLY and bc != me:
+            raise ValueError(self.ERR_OWNER)                          # Moderatoren (oder fremder Kanal): nichts vom Kanalinhaber
+        if self.CMD_SCOPE[act] not in (self.account.status().get("scopes") or []):
+            raise ValueError(self.ERR_RIGHTS)
+        if act in self.OWNER_ONLY and not self.account.is_owner(owner_key):
+            raise ValueError(self.ERR_BROWSER)
+        base = {"broadcaster_id": bc, "moderator_id": me}
+        text = TwitchReader._clean(str(req.get("text") or ""), 500).strip()
+        if act in ("vip", "unvip", "mod", "unmod"):
+            path = "channels/vips" if act in ("vip", "unvip") else "moderation/moderators"
+            self._call("POST" if act in ("vip", "mod") else "DELETE", path, {"broadcaster_id": bc, "user_id": self._target(req)})
+            msg = {"vip": "VIP vergeben", "unvip": "VIP entfernt", "mod": "Moderator ernannt", "unmod": "Moderator entfernt"}[act]
+        elif act == "clear":
+            self._call("DELETE", "moderation/chat", base)
+            msg = "Chat geleert"
+        elif act in ("slow", "followers"):
+            try:
+                n = int(req.get("number")) if req.get("number") is not None else None
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("Die Zahl ist ungültig")
+            if act == "slow":
+                n = 30 if n is None else max(3, min(120, n))
+                body, msg = {"slow_mode": True, "slow_mode_wait_time": n}, "Langsamer Modus an (%d Sekunden)" % n
+            else:
+                n = 0 if n is None else max(0, min(129600, n))
+                body, msg = {"follower_mode": True, "follower_mode_duration": n}, ("Nur Follower an" if n == 0 else "Nur Follower an (seit %d Minuten)" % n)
+            self._call("PATCH", "chat/settings", base, body)
+        elif act in self.SETTINGS:
+            key, msg = self.SETTINGS[act]
+            self._call("PATCH", "chat/settings", base, {key: not act.endswith("off")})
+        elif act == "announce":
+            if not text:
+                raise ValueError("Der Text fehlt")
+            self._call("POST", "chat/announcements", base, {"message": text, "color": "primary"})
+            msg = "Ankündigung gesendet"
+        elif act == "raid":
+            self._call("POST", "raids", {"from_broadcaster_id": bc, "to_broadcaster_id": self._target(req)})
+            msg = "Raid gestartet"
+        elif act == "unraid":
+            self._call("DELETE", "raids", {"broadcaster_id": bc})
+            msg = "Raid abgebrochen"
+        elif act == "marker":
+            self._call("POST", "streams/markers", None, {"user_id": bc, "description": text[:140]})
+            msg = "Marker gesetzt"
+        elif act == "title":
+            if not text:
+                raise ValueError("Der Text fehlt")
+            self._call("PATCH", "channels", {"broadcaster_id": bc}, {"title": text[:140]})
+            msg = "Titel geändert"
+        else:                                                                               # game
+            if not text:
+                raise ValueError("Der Name der Kategorie fehlt")
+            rows = self._call("GET", "games", {"name": text[:140]}).get("data")
+            row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+            if not str(row.get("id", "")).isdigit():
+                raise ValueError("Diese Kategorie gibt es nicht")
+            self._call("PATCH", "channels", {"broadcaster_id": bc}, {"game_id": str(row["id"])})
+            msg = "Kategorie geändert"
+        return {"ok": True, "action": act, "message": msg}
+
     def _target(self, req):
         uid = req.get("user_id")
         if isinstance(uid, str) and _ascii_digits(uid) and len(uid) <= 20:
@@ -5575,6 +6979,8 @@ class TwitchMod:
         raise ValueError("Ungültige Anfrage")
 
     def _demo(self, act, req):
+        if act in self.CMD_SCOPE:
+            return {"ok": True, "action": act, "message": "Demo: Befehl ausgeführt"}
         if act == "delete" and self.demo_reader is not None and isinstance(req.get("message_id"), str):
             self.demo_reader._add({"type": "del", "meta": True, "mid": req["message_id"], "text": "", "emotes": []})
         if act in ("timeout", "ban") and self.demo_reader is not None and _ascii_digits(str(req.get("user_id") or "")):
@@ -5586,43 +6992,94 @@ class TwitchMod:
 
 class TwitchSender:
     """Nachrichten des Streamers aus der Oberfläche in den Chat (über das angemeldete Twitch-Konto, sonst Bot-Konto und Token von Hand). Höchstens eine
-    Nachricht je Sekunde. Befehle mit "/" oder "." am Anfang werden nie als Text gesendet: "/ban Name [Grund]", "/timeout Name [Sekunden] [Grund]" und
-    "/unban Name" gehen als Moderation über die Twitch-Schnittstelle (TwitchMod), alles andere wird abgelehnt."""
+    Nachricht je Sekunde. Befehle mit "/" oder "." am Anfang werden nie als Text gesendet: "/ban Name [Grund]", "/timeout Name [Sekunden] [Grund]",
+    "/unban Name" und die weiteren Befehle (VIP, Moderatoren, Chat leeren und -Einstellungen, Ankündigung, Raid, Marker, Titel, Kategorie) gehen als Moderation
+    über die Twitch-Schnittstelle (TwitchMod), alles andere wird abgelehnt."""
     COMMANDS = ("ban", "timeout", "unban")
+    NAMED = ("vip", "unvip", "mod", "unmod", "raid")                     # Befehl Name
+    PLAIN = ("clear", "slowoff", "followersoff", "subscribers", "subscribersoff", "emoteonly", "emoteonlyoff", "unraid")   # Befehl ohne Angabe
+    NUMBER = ("slow", "followers")                                       # Befehl [Zahl]: Sekunden beziehungsweise Minuten
+    TEXT = ("announce", "title", "game")                                 # Befehl Text (Pflicht)
+    HELP = ("Befehle: /ban, /timeout, /unban, /vip, /unvip, /mod, /unmod, /clear, /slow, /slowoff, /followers, /followersoff, /subscribers, /subscribersoff, "
+            "/emoteonly, /emoteonlyoff, /announce, /raid, /unraid, /marker, /title, /game")
     MIN_GAP = 1.0
 
-    def __init__(self, store, chat=None, clock=time.monotonic, demo_reader=None, mod=None):
-        self.store, self.chat, self.clock, self.mod = store, chat or TwitchChat(), clock, mod
+    def __init__(self, store, chat=None, clock=time.monotonic, demo_reader=None, mod=None, helix=None):
+        self.store, self.chat, self.clock, self.mod, self.helix = store, chat or TwitchChat(), clock, mod, helix
         self.demo_reader = demo_reader              # nur im Vorschau-Modus: die Nachricht erscheint im Beispiel-Chat, nichts geht ins Netz
         self.last = -1e9
         self.lock = threading.Lock()
 
-    def _command(self, t):
+    def _command(self, t, owner_key=None, mod=None):
+        mod = mod or self.mod
         parts = t[1:].split()
         cmd = parts[0].lower() if t[0] == "/" and parts else ""
-        if cmd not in self.COMMANDS or len(parts) < 2 or self.mod is None:
-            raise ValueError("Befehle: /ban Name, /timeout Name [Sekunden], /unban Name")
+        known = self.COMMANDS + self.NAMED + self.PLAIN + self.NUMBER + self.TEXT + ("marker",)
+        if cmd not in known or mod is None:
+            raise ValueError(self.HELP)
+        if cmd in self.COMMANDS + self.NAMED + self.TEXT and len(parts) < 2:
+            raise ValueError(self.HELP)
         with self.lock:
             now = self.clock()
             if now - self.last < self.MIN_GAP:
                 raise ValueError("Bitte kurz warten")
             self.last = now
-        req = {"action": cmd, "user": parts[1]}
-        rest = parts[2:]
-        if cmd == "timeout" and rest and _ascii_digits(rest[0]):
-            req["seconds"] = int(rest[0])
-            rest = rest[1:]
-        if cmd != "unban" and rest:
-            req["reason"] = " ".join(rest)
-        out = self.mod.do(req)
-        return {"ok": True, "message": "%s: %s" % (out.get("message", ""), parts[1].lstrip("@"))}
+        if cmd in self.COMMANDS:
+            req = {"action": cmd, "user": parts[1]}
+            rest = parts[2:]
+            if cmd == "timeout" and rest and _ascii_digits(rest[0]):
+                req["seconds"] = int(rest[0])
+                rest = rest[1:]
+            if cmd != "unban" and rest:
+                req["reason"] = " ".join(rest)
+            out = mod.do(req, owner_key)
+            return {"ok": True, "message": "%s: %s" % (out.get("message", ""), parts[1].lstrip("@"))}
+        req = {"action": cmd}
+        if cmd in self.NAMED:
+            req["user"] = parts[1]
+        elif cmd in self.NUMBER and len(parts) > 1:
+            if not _ascii_digits(parts[1]):
+                raise ValueError("Die Zahl ist ungültig")
+            req["number"] = int(parts[1])
+        elif cmd in self.TEXT or cmd == "marker":
+            req["text"] = " ".join(parts[1:])
+        out = mod.do(req, owner_key)
+        who = ": " + parts[1].lstrip("@") if cmd in self.NAMED else ""
+        return {"ok": True, "message": out.get("message", "") + who}
 
-    def say(self, text):
+    def say_as(self, mod, helix, text, owner_key=None, commands=True):
+        """Nachricht oder Befehl mit einem anderen Konto als dem der Box (Moderator in seinem Browser): Befehle über dessen Moderation, Text über dessen Zugang zur
+        Twitch-Schnittstelle (nie über das Konto des Streamers, nie über IRC)."""
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Nachricht fehlt")
         t = text.strip()
         if t[0] in "/.":
-            return self._command(t)
+            if not commands:
+                raise ValueError("Befehle gibt es nur für den Streamer und Moderatoren")
+            return self._command(t, owner_key, mod)
+        if not helix.account.ready():
+            raise ValueError("Zuerst mit Twitch anmelden")
+        with self.lock:
+            now = self.clock()
+            if now - self.last < self.MIN_GAP:
+                raise ValueError("Bitte kurz warten")
+            self.last = now
+        if self.demo_reader is not None:
+            self.demo_reader._add({"type": "msg", "name": helix.account.login(), "color": "#9146FF", "text": TwitchChat.clean_text(t) or "", "emotes": []})
+            return {"ok": True, "message": TwitchChat.OK}
+        t = TwitchChat.clean_text(t)
+        if not t:
+            raise ValueError("Nachricht ungültig")
+        if not helix.usable():
+            raise ValueError("Für das Schreiben fehlt ein Recht: bitte neu anmelden")
+        return {"ok": True, "message": helix.send(self.store.channel_name(), t)}
+
+    def say(self, text, owner_key=None):
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Nachricht fehlt")
+        t = text.strip()
+        if t[0] in "/.":
+            return self._command(t, owner_key)
         cfg = self.store.settings()
         if not (cfg["login"] and cfg["token"] and cfg["channel"]):
             raise ValueError("Zuerst mit Twitch anmelden")
@@ -5634,10 +7091,451 @@ class TwitchSender:
         if self.demo_reader is not None:
             self.demo_reader._add({"type": "msg", "name": cfg["login"], "color": "#9146FF", "text": TwitchChat.clean_text(t) or "", "emotes": []})
             return {"ok": True, "message": TwitchChat.OK}
+        t = TwitchChat.clean_text(t)
+        if not t:
+            raise ValueError("Nachricht ungültig")
+        if self.helix is not None and self.helix.usable():             # über die Twitch-Schnittstelle: mit Rückmeldung, ob die Nachricht wirklich gesendet wurde
+            return {"ok": True, "message": self.helix.send(cfg["channel"], t)}
         ok, msg = self.chat.send(cfg["login"], cfg["token"], cfg["channel"], t)
         if not ok:
             raise ValueError(msg)
         return {"ok": True, "message": msg}
+
+
+class HelixChat:
+    """Chat senden über die Twitch-Schnittstelle (POST chat/messages, Recht user:write:chat). Twitch antwortet auch dann mit 200, wenn die Nachricht verworfen wurde
+    (Spam- oder Tempofilter, nur Abonnenten, langsamer Modus ...): darum zählt nur "is_sent", sonst steht der Grund von Twitch in der Meldung. Ohne das Recht
+    (ältere Anmeldung) bleibt das Senden über IRC (TwitchChat), bis man sich neu anmeldet. Alle Aufrufe laufen über TwitchMod._call (Wege, Erneuern bei 401)."""
+    ERR_DROP = "Twitch hat die Nachricht nicht gesendet"
+    ERR_FORBIDDEN = "Twitch erlaubt das Senden hier gerade nicht (zum Beispiel nur für Abonnenten oder Follower)"
+
+    def __init__(self, account, mod):
+        self.account, self.mod = account, mod
+
+    def usable(self):
+        try:
+            return bool(self.account.ready() and "user:write:chat" in (self.account.status().get("scopes") or []))
+        except Exception:
+            return False
+
+    def send(self, channel, text):
+        me = self.account.user_id()
+        if not me:
+            raise ValueError("Zuerst mit Twitch anmelden")
+        ch = str(channel or "").strip().lstrip("#").lower()
+        bid = me if (not ch or ch == self.account.login()) else self.mod.lookup(ch)
+        try:
+            d = self.mod._call("POST", "chat/messages", None, {"broadcaster_id": bid, "sender_id": me, "message": text}, once=True)
+        except ValueError as e:
+            if str(e) == self.mod.ERR_FORBIDDEN:
+                raise ValueError(self.ERR_FORBIDDEN)
+            raise                                                          # auch ERR_UNSURE (gesendet, Antwort verloren): "unklar, ob es angekommen ist"
+        rows = d.get("data") if isinstance(d.get("data"), list) else []
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        if row.get("is_sent") is True:
+            return TwitchChat.OK
+        why = row.get("drop_reason") if isinstance(row.get("drop_reason"), dict) else {}
+        msg = TwitchReader._clean(str(why.get("message") or ""), 120)
+        raise ValueError(self.ERR_DROP + (": " + msg if msg else ""))
+
+
+class WebSocketLite:
+    """Kleiner WebSocket-Client nach RFC 6455 (nur Standardbibliothek) für EventSub: Aufbau mit Prüfung der Antwort, Text-Nachrichten (auch in Teilen), Ping wird mit
+    Pong beantwortet, Schließen beendet. Keine Erweiterungen, der Server darf nicht maskieren, jede Nachricht höchstens MAX Byte. Zeitüberschreitungen verlieren
+    keine halb gelesene Nachricht."""
+    GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    MAX = 1 << 20
+
+    def __init__(self, sock, clock=time.monotonic):
+        self.sock, self.clock = sock, clock
+        self.buf = bytearray()
+        self.parts, self.first = bytearray(), None
+        self.last_rx = clock()                                              # wann zuletzt Daten von der Gegenstelle kamen (auch Ping zählt)
+
+    @classmethod
+    def handshake(cls, sock, host, path, clock=time.monotonic, timeout=10.0):
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall(b"GET " + path.encode("ascii") + b" HTTP/1.1\r\nHost: " + host.encode("ascii") + b"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "
+                     + key.encode("ascii") + b"\r\nSec-WebSocket-Version: 13\r\nUser-Agent: irl4you-box\r\n\r\n")
+        buf, deadline = b"", clock() + timeout
+        while b"\r\n\r\n" not in buf:
+            left = deadline - clock()
+            if left <= 0 or len(buf) > 16384:
+                raise OSError("ws-handshake-timeout")
+            sock.settimeout(left)
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise EOFError("ws-eof")
+            buf += chunk
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        if not re.match(r"HTTP/1\.[01] 101\b", lines[0]):
+            raise OSError("ws-no-upgrade")
+        hdr = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:])}
+        want = base64.b64encode(hashlib.sha1(key.encode("ascii") + cls.GUID).digest()).decode()
+        if hdr.get("sec-websocket-accept") != want:
+            raise OSError("ws-bad-accept")
+        ws = cls(sock, clock)
+        ws.buf += rest
+        return ws
+
+    @staticmethod
+    def frame(opcode, payload=b""):
+        mask, n = os.urandom(4), len(payload)
+        head = bytes([0x80 | opcode])
+        head += bytes([0x80 | n]) if n < 126 else (bytes([0x80 | 126]) + n.to_bytes(2, "big") if n < 65536 else bytes([0x80 | 127]) + n.to_bytes(8, "big"))
+        return head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+    def close(self):
+        try:
+            self.sock.sendall(self.frame(8, b"\x03\xe8"))
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    def _need(self, n, deadline):
+        while len(self.buf) < n:
+            left = deadline - self.clock()
+            if left <= 0:
+                return False
+            self.sock.settimeout(left)
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                return False
+            if not chunk:
+                raise EOFError("ws-eof")
+            self.last_rx = self.clock()
+            self.buf += chunk
+        return True
+
+    def recv_message(self, timeout):
+        """Die nächste Text-Nachricht oder None, wenn in `timeout` Sekunden keine vollständige da ist. EOFError: Gegenstelle hat geschlossen; OSError: Verstoß."""
+        deadline = self.clock() + timeout
+        while True:
+            if self.clock() > deadline:
+                return None                                              # auch ein Strom von Steuerrahmen hält die Schleife nicht fest
+            if not self._need(2, deadline):
+                return None
+            b0, b1 = self.buf[0], self.buf[1]
+            fin, op = b0 & 0x80, b0 & 0x0f
+            if (b0 & 0x70) or (b1 & 0x80):
+                raise OSError("ws-protocol")            # Erweiterungen und maskierte Server-Rahmen gibt es nicht
+            ln, off = b1 & 0x7f, 2
+            if ln == 126:
+                if not self._need(4, deadline):
+                    return None
+                ln, off = int.from_bytes(self.buf[2:4], "big"), 4
+            elif ln == 127:
+                if not self._need(10, deadline):
+                    return None
+                ln, off = int.from_bytes(self.buf[2:10], "big"), 10
+            if ln > self.MAX or (op >= 8 and (not fin or ln > 125)):
+                raise OSError("ws-protocol")
+            if not self._need(off + ln, deadline):
+                return None
+            payload = bytes(self.buf[off:off + ln])
+            del self.buf[:off + ln]
+            if op == 9:
+                self.sock.sendall(self.frame(10, payload))
+                continue
+            if op == 10:
+                continue
+            if op == 8:
+                raise EOFError("ws-closed")
+            if op in (1, 2):
+                if self.first is not None:
+                    raise OSError("ws-protocol")
+                self.first = op
+            elif op == 0:
+                if self.first is None:
+                    raise OSError("ws-protocol")
+            else:
+                raise OSError("ws-protocol")
+            self.parts += payload
+            if len(self.parts) > self.MAX:
+                raise OSError("ws-too-big")
+            if fin:
+                data, kind = bytes(self.parts), self.first
+                self.parts, self.first = bytearray(), None
+                if kind != 1:
+                    raise OSError("ws-not-text")
+                return data.decode("utf-8")
+
+
+class TwitchEvents:
+    """Live-Ereignisse des eigenen Kanals über EventSub (WebSocket, Twitch-Anleitung): Follows und Kanalpunkte-Einlösungen. Subs, Geschenk-Abos, Raids und Cheers liest der
+    Chat schon vollständiger (EventSub meldet zum Beispiel Resubs ohne Text nicht), darum kommen sie weiter aus dem Chat und werden nicht doppelt gezeigt.
+
+    Ablauf: verbinden (über die Sendewege wie der Chat), auf session_welcome warten, dann in einem eigenen Faden (damit Ping und Keepalive weiterlaufen) die Abonnements
+    anlegen, je eines für sich: fehlt ein Recht, fällt nur dieses weg. Benachrichtigungen werden über message_id entdoppelt (Twitch liefert "mindestens einmal"). Bleibt
+    die Gegenstelle länger als das 1,5-fache des Keepalive-Werts still, wird neu verbunden; bei session_reconnect geht es zur genannten Adresse, ohne neu zu abonnieren.
+    Die Verbindung steht nur, solange die Oberfläche den Chat abfragt, nur für den eigenen Kanal und nur mit den nötigen Rechten. Der Zugangsschlüssel kommt jedes Mal
+    frisch aus TwitchLogin (wird erneuert) und steht nie in einem Protokoll."""
+    HOST, PORT, PATH = "eventsub.wss.twitch.tv", 443, "/ws?keepalive_timeout_seconds=30"
+    SUBS = (("channel.follow", "2", "moderator:read:followers"),
+            ("channel.channel_points_custom_reward_redemption.add", "1", "channel:read:redemptions"))
+    ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,100}")
+    KEEP_MIN = 10.0                       # kleinster erlaubter Keepalive-Wert in Sekunden (Tests setzen ihn kleiner)
+    RETRY_FIRST = 5.0                     # Wartezeit vor dem ersten neuen Versuch (danach verdoppelt, höchstens 60 s)
+    SUB_DELAYS = (0.0, 5.0, 15.0)         # Abonnieren: sofort, dann was fehlt nach 5 und nach weiteren 15 Sekunden noch einmal
+
+    def __init__(self, store, account, mod, reader, paths=None, host=None, port=None, tls=True, clock=time.monotonic, sleep=time.sleep):
+        self.store, self.account, self.mod, self.reader = store, account, mod, reader
+        self.paths = paths or getattr(account, "paths", None) or ChatPaths()
+        self.host, self.port, self.tls = host or self.HOST, port or self.PORT, tls
+        self.clock, self.sleep = clock, sleep
+        self.lock = threading.Lock()
+        self.thread, self.gen, self.sid = None, 0, None
+        self.state, self.error, self.types = "aus", "", set()
+        self.seen, self.seen_set = collections.deque(maxlen=300), set()
+
+    # ---- Voraussetzungen (ohne Sperre und ohne Anfrage an Twitch: wird von der Oberfläche alle paar Sekunden aufgerufen)
+    def granted(self):
+        """Die Abonnements, die der Zugang erlaubt, und die Kennung des Kontos (oder ([], ""))."""
+        try:
+            if not self.account.ready():
+                return [], ""
+            have = set(self.account.status().get("scopes") or [])
+            mine = self.account.login()
+            if str((self.store.data or {}).get("channel") or mine).lower() != mine:
+                return [], ""                                           # fremder Kanal: die Rechte gelten nur für den eigenen
+            return [t for t in self.SUBS if t[2] in have], self.account.user_id()
+        except Exception:
+            return [], ""
+
+    def status(self):
+        subs, uid = self.granted()
+        return {"state": self.state if subs and uid else "aus", "types": sorted(self.types), "error": self.error if self.state == "fehler" else ""}
+
+    # ---- Faden
+    def ensure(self):
+        subs, uid = self.granted()
+        if not subs or not uid:
+            return
+        with self.lock:
+            if self.thread is not None and self.thread.is_alive():
+                return
+            self.gen += 1
+            gen = self.gen
+            self.state, self.error, self.types, self.sid = "verbinde", "", set(), None
+            t = threading.Thread(target=self._run, args=(gen,), daemon=True)
+            self.thread = t
+        t.start()
+
+    def _alive(self, gen):
+        return self.gen == gen and not self.reader._idle() and bool(self.granted()[0])
+
+    def _run(self, gen):
+        wait, url = self.RETRY_FIRST, None
+        while self._alive(gen):
+            began = self.clock()
+            try:
+                self._session(gen)
+            except Exception as e:
+                with self.lock:
+                    if self.gen == gen:
+                        self.state, self.error = "fehler", ("Keine Verbindung zu Twitch" if isinstance(e, (OSError, EOFError)) else "Ereignisse gestört")
+            if self.clock() - began > 60:
+                wait = self.RETRY_FIRST
+            end = self.clock() + wait
+            while self.clock() < end and self._alive(gen):
+                self.sleep(0.5)
+            wait = min(wait * 2, 60.0)
+        with self.lock:
+            if self.gen == gen:
+                self.state, self.types, self.sid = "aus", set(), None
+
+    @classmethod
+    def _split_url(cls, url, allow=None):
+        """(Host, Pfad samt Abfrage) einer wss-Adresse von Twitch; alles andere (auch fremde Hosts mit Twitch im Namen) ist ein Fehler. Twitch schickt die
+        Adresse bei session_reconnect mit und ohne Pfad ("wss://host/ws?x=1" oder "wss://host?x=1")."""
+        m = re.fullmatch(r"wss://([A-Za-z0-9.\-]{1,100})(/[A-Za-z0-9_\-./%]{0,200})?(\?[A-Za-z0-9_\-./=&%]{0,300})?", url or "")
+        if not m or not (m.group(1) == (allow or cls.HOST) or m.group(1).endswith(".twitch.tv")):
+            raise OSError("ws-bad-url")
+        path = (m.group(2) or "") + (m.group(3) or "")
+        return m.group(1), path if path.startswith("/") else "/" + path
+
+    def _open(self, host, path):
+        """Verbindung über die Sendewege, TLS, Aufbau; liefert (WebSocket, Weg)."""
+        sock, src = self.paths.connect(host, self.port, timeout=8)
+        try:
+            if self.tls:
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+            return WebSocketLite.handshake(sock, host, path, self.clock), src
+        except BaseException:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _welcome(payload):
+        sess = payload.get("session") or {}
+        sid = sess.get("id")
+        if not (isinstance(sid, str) and TwitchEvents.ID_RE.fullmatch(sid)):
+            raise OSError("ws-bad-session")
+        try:
+            keep = float(sess.get("keepalive_timeout_seconds") or 30)
+        except (TypeError, ValueError):
+            keep = 30.0
+        return sid, keep
+
+    def _session(self, gen):
+        ws, src = self._open(self.host, self.PATH)
+        try:
+            tok = self.account.token()                                   # einmal vor dem Abonnieren: kein Warten hinter einer Erneuerung, wenn Twitch die 10 Sekunden zählt
+            heard, keep, sig = self.clock(), 30.0, None
+            while self._alive(gen):
+                msg = ws.recv_message(1.0)
+                heard = max(heard, ws.last_rx)                           # auch ein Ping der Gegenstelle zeigt, dass sie lebt
+                if msg is None:
+                    if self.clock() - heard > keep * 1.5:
+                        self.paths.fail(src, 120.0)
+                        raise OSError("still")
+                    if sig is not None and tuple(t[0] for t in self.granted()[0]) != sig:
+                        return                                           # Rechte haben sich geändert: neue Sitzung, neu abonnieren
+                    continue
+                try:
+                    d = json.loads(msg)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                meta, payload = d.get("metadata") or {}, d.get("payload") or {}
+                typ = meta.get("message_type")
+                if typ == "session_welcome":
+                    sid, k = self._welcome(payload)
+                    keep, heard = min(600.0, max(self.KEEP_MIN, k)), self.clock()
+                    sig = tuple(t[0] for t in self.granted()[0])
+                    with self.lock:
+                        self.sid, self.types = sid, set()
+                    threading.Thread(target=self._subscribe, args=(gen, sid, tok, src), daemon=True).start()          # eigener Faden: die Empfangsschleife bleibt frei
+                elif typ == "session_reconnect":
+                    # Vorgehen laut Twitch: erst die neue Verbindung aufbauen und ihr session_welcome abwarten, dann die alte schließen (die Abonnements ziehen mit um)
+                    host, path = self._split_url((payload.get("session") or {}).get("reconnect_url"), self.host)
+                    ws2, src2 = self._open(host, path)
+                    try:
+                        end = self.clock() + 10.0
+                        while True:
+                            m2 = ws2.recv_message(1.0)
+                            if m2 is not None:
+                                d2 = json.loads(m2)
+                                if isinstance(d2, dict) and (d2.get("metadata") or {}).get("message_type") == "session_welcome":
+                                    sid2, k2 = self._welcome(d2.get("payload") or {})
+                                    keep = min(600.0, max(self.KEEP_MIN, k2))
+                                    break
+                            if self.clock() > end:
+                                raise OSError("still")
+                    except BaseException:
+                        ws2.close()
+                        raise
+                    ws.close()
+                    ws, src, heard = ws2, src2, self.clock()
+                    with self.lock:
+                        self.sid = sid2
+                elif typ == "notification":
+                    self._notify(meta, payload)
+                elif typ == "revocation":
+                    sub = (payload.get("subscription") or {}).get("type")
+                    with self.lock:
+                        self.types.discard(sub)
+                        gone = not self.types
+                    if gone:
+                        return                                           # nichts mehr abonniert: neue Sitzung, neu abonnieren
+        finally:
+            ws.close()
+
+    def _subscribe(self, gen, sid, tok, src):
+        """Abonnements anlegen: beide gleichzeitig, mit kurzer Zeitgrenze und zuerst über den Weg, auf dem die Verbindung steht (Twitch schließt nach 10 s ohne Abonnement);
+        was scheitert, wird nach 5 und nach 20 Sekunden noch einmal versucht. Schreibt nur, solange diese Sitzung die aktuelle ist."""
+        subs, uid = self.granted()
+        todo, last = {t[0]: t for t in subs}, ""
+        for delay in self.SUB_DELAYS:
+            end = self.clock() + delay
+            while self.clock() < end and todo:
+                self.sleep(0.2)
+                if not self._alive(gen) or self.sid != sid:
+                    return
+            if not todo or not self._alive(gen) or self.sid != sid:
+                break
+            results = {}
+
+            def one(typ, ver):
+                cond = {"broadcaster_user_id": uid}
+                if typ == "channel.follow":
+                    cond["moderator_user_id"] = uid
+                try:
+                    self.mod._call("POST", "eventsub/subscriptions", None,
+                                   {"type": typ, "version": ver, "condition": cond, "transport": {"method": "websocket", "session_id": sid}},
+                                   timeout=4.0, token=tok, prefer=src, accept=(409,))        # 409: gibt es schon (eine verlorene Antwort wurde wiederholt)
+                    results[typ] = ""
+                except ValueError as e:
+                    results[typ] = str(e) if str(e) == self.mod.ERR_NET else "Twitch hat die Ereignisse nicht angenommen"
+            ths = [threading.Thread(target=one, args=(t[0], t[1]), daemon=True) for t in todo.values()]
+            for th in ths:
+                th.start()
+            for th in ths:
+                th.join(8.0)
+            for typ, err in results.items():
+                if err == "":
+                    todo.pop(typ, None)
+                    with self.lock:
+                        if self.sid == sid:
+                            self.types.add(typ)
+                else:
+                    last = err
+            with self.lock:
+                if self.gen != gen or self.sid != sid:
+                    return
+                if self.types:
+                    self.state, self.error = "ok", ""
+                elif not todo or delay == self.SUB_DELAYS[-1]:
+                    self.state, self.error = "fehler", last or "Twitch hat die Ereignisse nicht angenommen"
+            if not todo:
+                break
+
+    # ---- Benachrichtigungen
+    def _notify(self, meta, payload):
+        mid = meta.get("message_id")
+        if isinstance(mid, str) and mid:
+            with self.lock:
+                if mid in self.seen_set:
+                    return                                             # Twitch liefert "mindestens einmal": Wiederholung nach einem Neuaufbau
+                if len(self.seen) == self.seen.maxlen:
+                    self.seen_set.discard(self.seen[0])
+                self.seen.append(mid)
+                self.seen_set.add(mid)
+        item = self.map_event((payload.get("subscription") or {}).get("type"), payload.get("event"))
+        if item:
+            self.reader._add(item)
+
+    @staticmethod
+    def map_event(typ, ev):
+        """Ein Ereignis von Twitch -> Eintrag für den Chat (mit "ev" für die farbige Karte) oder None. Alle Texte werden bereinigt und gekürzt."""
+        if not isinstance(ev, dict):
+            return None
+        clean = lambda v, n: TwitchReader._clean(str(v or ""), n)
+        who = clean(ev.get("user_name") or ev.get("user_login"), 40)
+        if typ == "channel.follow":
+            if not who:
+                return None
+            return {"type": "notice", "name": "", "color": "", "text": who, "emotes": [], "ev": {"k": "follow", "n": 0}}
+        if typ == "channel.channel_points_custom_reward_redemption.add":
+            rw = ev.get("reward") if isinstance(ev.get("reward"), dict) else {}
+            title = clean(rw.get("title"), 80)
+            inp = clean(ev.get("user_input"), 200)
+            cost = rw.get("cost")
+            n = min(int(cost), 100_000_000) if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0 else 0
+            text = ": ".join(x for x in (who, title) if x) + (" – " + inp if inp else "")
+            if not text:
+                return None
+            return {"type": "notice", "name": "", "color": "", "text": text, "emotes": [], "ev": {"k": "points", "n": n}}
+        return None
 
 
 class TwitchNotifier:
@@ -5711,7 +7609,7 @@ class TwitchNotifier:
     # ---- Dienst
     def tick(self):
         """Ein Durchlauf: Kameras wieder scharf stellen, deren Akku gewechselt wurde oder die laden, und fällige Warnungen senden."""
-        cfg = self.store.settings()
+        cfg = self.store.notify_settings()
         if not (cfg["enabled"] and cfg["login"] and cfg["channel"] and cfg["token"]):
             with self.lock:
                 self.tries.clear()
@@ -5792,7 +7690,7 @@ class TwitchNotifier:
 
     def test(self):
         """Eine Testnachricht mit den gespeicherten Angaben senden: {"ok": bool, "message": Meldung auf Deutsch}."""
-        cfg = self.store.settings()
+        cfg = self.store.notify_settings()
         if not (cfg["channel"] and cfg["login"] and cfg["token"]):
             raise ValueError(TwitchStore.ERR_MISSING)
         with self.lock:
@@ -5804,6 +7702,226 @@ class TwitchNotifier:
         with self.lock:
             self.last = {"ok": ok, "time": int(self.wall()), "text": self.TEST_TEXT if ok else msg}
         return {"ok": ok, "message": msg}
+
+
+class SysAlerts:
+    """Systemwarnungen im Twitch-Chat (Wunsch aus Issue #67, 12. Oktober 2026): meldet über denselben Bot wie die Akku-Warnung, wenn die Temperatur, die CPU-Last oder
+    der Arbeitsspeicher der Box eine Grenze erreicht, und optional, wenn der Wert wieder normal ist. Einstellungen: <state>/sysalerts.json (atomar geschrieben, ohne
+    Geheimnisse; Konto, Kanal und Token gehören zur Twitch-Karte und werden von dort genommen).
+
+    Standard: aus. Alle 10 s werden die Messwerte der Box gelesen (dieselben wie in der Karte "Status", kein zusätzlicher Aufwand). Eine Warnung folgt, wenn der Wert in
+    3 Messungen hintereinander (etwa 30 s) die Grenze erreicht oder überschreitet und die Pause (Cooldown) seit der letzten Meldung dieses Werts vorbei ist; bleibt er darüber,
+    kommt nach jeder Pause eine Erinnerung. "Wieder normal" kommt, wenn er die Grenze um 3 Grad (Temperatur) oder 5 Punkte (CPU, RAM) unterschreitet, nur einmal je Warnung.
+    Höchstens eine Nachricht je 3 s insgesamt (wie bei der Akku-Warnung, über denselben Sendeweg); schlägt das Senden fehl, folgt ein neuer Versuch nach 60 s, dann nach
+    der Pause. Es wird nur gesendet, wenn die Twitch-Angaben vollständig sind (und bei "Nur während der Sendung" gesendet wird). Ein Fehler hier stört nie die Sendung."""
+    METRICS = (("temp", "CPU-Temperatur", "°C", 3, (40, 100), 75), ("cpu", "CPU-Auslastung", "%", 5, (20, 100), 90), ("ram", "RAM-Auslastung", "%", 5, (20, 100), 90))
+    DEFAULT_ALERT = "Warnung: {Name} bei {Wert} (Grenze {Grenze})"
+    DEFAULT_OK = "{Name} wieder normal ({Wert})"
+    DEFAULTS = {"enabled": False, "cooldown": 10, "recover": True, "only_live": True, "msg_alert": DEFAULT_ALERT, "msg_ok": DEFAULT_OK,
+                **{k: {"on": True, "limit": dflt} for k, _n, _u, _h, _r, dflt in METRICS}}
+    POLL_S = 10
+    SUSTAIN = 3                                   # Messungen hintereinander über der Grenze (etwa 30 s)
+    RETRY_S = 60
+    COOLDOWN = (1, 120)                           # Minuten
+
+    def __init__(self, path, notifier, sampler, demo=False, mono=time.monotonic, wall=time.time):
+        self.path, self.notifier, self.sampler, self.demo = path, notifier, sampler, demo
+        self.mono, self.wall = mono, wall
+        self.lock = threading.Lock()
+        self.data = json.loads(json.dumps(self.DEFAULTS))
+        self.state = {k: {"over": 0, "alerting": False, "last": None, "retry": None, "pending_ok": False} for k, *_ in self.METRICS}
+        self.last = None                          # {"ok", "time", "text"}
+        self.stop_ev = threading.Event()
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            saved = None
+        if isinstance(saved, dict):
+            try:
+                self.data = self._merge(self.data, saved, strict=False)
+            except ValueError:
+                pass
+
+    # ---- Prüfung
+    @classmethod
+    def _int(cls, v, lo, hi, error):
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ValueError(error)
+        return v
+
+    @classmethod
+    def _merge(cls, base, req, strict=True):
+        """Neue Werte in die Einstellungen übernehmen. strict: ungültige Angaben werfen ValueError; sonst (gespeicherte Datei) bleibt der Standard."""
+        new = json.loads(json.dumps(base))
+
+        def take(fn):
+            try:
+                fn()
+            except ValueError:
+                if strict:
+                    raise
+        for key in ("enabled", "recover", "only_live"):
+            if key in req:
+                if isinstance(req[key], bool):
+                    new[key] = req[key]
+                elif strict:
+                    raise ValueError("ja oder nein")
+        if "cooldown" in req:
+            def f():
+                new["cooldown"] = cls._int(req["cooldown"], cls.COOLDOWN[0], cls.COOLDOWN[1], "Pause: Zahl von %d bis %d Minuten" % cls.COOLDOWN)
+            take(f)
+        for key, name, unit, _h, (lo, hi), _d in cls.METRICS:
+            sub = req.get(key)
+            if isinstance(sub, dict):
+                if "on" in sub:
+                    if isinstance(sub["on"], bool):
+                        new[key]["on"] = sub["on"]
+                    elif strict:
+                        raise ValueError("ja oder nein")
+                if "limit" in sub:
+                    def g(key=key, sub=sub, name=name, unit=unit, lo=lo, hi=hi):
+                        new[key]["limit"] = cls._int(sub["limit"], lo, hi, "%s: Zahl von %d bis %d" % (name, lo, hi))
+                    take(g)
+            elif sub is not None and strict:
+                raise ValueError("Ungültige Anfrage")
+        for key in ("msg_alert", "msg_ok"):
+            if key in req:
+                def h(key=key):
+                    new[key] = TwitchStore._message(req[key])
+                take(h)
+        return new
+
+    def _write(self, data):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=1)
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+    def save(self, req):
+        if not isinstance(req, dict):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            new = self._merge(self.data, req, strict=True)
+            try:
+                self._write(new)
+            except OSError:
+                raise RuntimeError("Die Einstellungen konnten nicht gespeichert werden")
+            self.data = new
+            for st in self.state.values():
+                st.update(over=0, retry=None)
+        return self.status()
+
+    # ---- Bausteine
+    @staticmethod
+    def render(template, name, value, limit):
+        """{Name}, {Wert} und {Grenze} ersetzen (in einem Durchgang)."""
+        vals = {"Name": name, "Wert": value, "Grenze": limit}
+        return re.sub(r"\{(Name|Wert|Grenze)\}", lambda m: vals[m.group(1)], template)
+
+    @staticmethod
+    def fmt(v, unit):
+        return "%d %s" % (round(v), unit)
+
+    def values(self):
+        """Aktuelle Messwerte {temp, cpu, ram} (None, wenn nicht messbar)."""
+        try:
+            s = self.sampler.sample() or {}
+        except Exception:
+            return {"temp": None, "cpu": None, "ram": None}
+
+        def num(v):
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+        return {"temp": num(s.get("temp_c")), "cpu": num((s.get("cpu") or {}).get("avg")), "ram": num((s.get("mem") or {}).get("used_pct"))}
+
+    def _creds(self):
+        cfg = self.notifier.store.notify_settings()
+        return cfg if (cfg.get("login") and cfg.get("channel") and cfg.get("token")) else None
+
+    def _live(self):
+        return self.notifier._live()
+
+    def _send(self, cfg, text):
+        ok, msg = self.notifier._deliver(cfg, text, wait=True)
+        with self.lock:
+            self.last = {"ok": ok, "time": int(self.wall()), "text": text if ok else msg}
+        return ok
+
+    # ---- Dienst
+    def tick(self):
+        with self.lock:
+            data = json.loads(json.dumps(self.data))
+        if not data["enabled"]:
+            self._reset()
+            return
+        cfg = self._creds()
+        if cfg is None:
+            self._reset()
+            return
+        if data["only_live"] and not self._live():
+            self._reset(keep_alert=True)               # ohne Sendung nichts melden; eine laufende Warnung bleibt vermerkt
+            return
+        vals = self.values()
+        now = self.mono()
+        pause = data["cooldown"] * 60
+        for key, name, unit, hyst, _r, _d in self.METRICS:
+            m, v = data[key], vals[key]
+            st = self.state[key]
+            if not m["on"] or v is None:
+                st.update(over=0)
+                continue
+            limit = m["limit"]
+            st["over"] = st["over"] + 1 if v >= limit else 0
+            if st["retry"] is not None and now < st["retry"]:
+                continue                                  # wartet auf den nächsten Versuch
+            if st["over"] >= self.SUSTAIN and (st["last"] is None or now - st["last"] >= pause):
+                text = self.render(data["msg_alert"], name, self.fmt(v, unit), self.fmt(limit, unit))
+                if self._send(cfg, text):
+                    st.update(alerting=True, last=now, retry=None, pending_ok=data["recover"])
+                else:
+                    st["retry"] = now + self.RETRY_S
+            elif st["alerting"] and v < limit - hyst:
+                st["alerting"] = False
+                if st["pending_ok"] and data["recover"]:
+                    text = self.render(data["msg_ok"], name, self.fmt(v, unit), self.fmt(limit, unit))
+                    if not self._send(cfg, text):
+                        st["alerting"], st["retry"] = True, now + self.RETRY_S      # nicht gesendet: beim nächsten Versuch noch einmal
+                        continue
+                st["pending_ok"] = False
+
+    def _reset(self, keep_alert=False):
+        for st in self.state.values():
+            st.update(over=0, retry=None)
+            if not keep_alert:
+                st.update(alerting=False, pending_ok=False)
+
+    def run(self):
+        while not self.stop_ev.is_set():
+            try:
+                self.tick()
+            except Exception as e:                  # nie den Dienst beenden; vom Text der Ausnahme nur den Typ ausgeben
+                print("sysalerts:", type(e).__name__)
+            self.stop_ev.wait(self.POLL_S)
+
+    # ---- für die Oberfläche
+    def status(self):
+        with self.lock:
+            d = json.loads(json.dumps(self.data))
+            last = dict(self.last) if self.last else None
+        vals = self.values()
+        return dict(d, ready=self._creds() is not None,
+                    values={k: (None if vals[k] is None else round(vals[k], 1)) for k in vals},
+                    alerting=[k for k, st in self.state.items() if st["alerting"]], last=last)
 
 
 class Vault:
@@ -5947,7 +8065,7 @@ SETTINGS_VERSION = 1
 SETTINGS_SECTIONS = (("cameras", "Kameras"), ("pipeline", "Bildaufbau"), ("srtla", "SRTLA-Server und Sendeeinstellungen"),
                      ("autostart", "Automatischer Start"), ("names", "Namen (Verbindungen, WLAN- und Bluetooth-Sticks)"),
                      ("dji", "DJI-Kameras (Einstellungen)"), ("hdmi", "HDMI-Eingang (Einstellungen)"), ("twitch", "Akku-Warnung im Twitch-Chat (Einstellungen)"),
-                     ("camnet", "Netzwerk für Kameras (Standard)"), ("layout", "Optionen (Menüs: Reihenfolge und Ausblenden)"),
+                     ("camnet", "Netzwerk für Kameras (Standard)"),
                      ("hotspots", "Hotspots"), ("wifi", "Gespeicherte WLAN-Netze"))
 IFACE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
 
@@ -5967,7 +8085,9 @@ class SettingsTransfer:
     def __init__(self, state_dir, cams, pipeline, srtla, autostart, names, djisvc, wifi, send, demo=False):
         self.cams, self.pipeline, self.srtla, self.autostart = cams, pipeline, srtla, autostart
         self.names, self.djisvc, self.wifi, self.send, self.demo = names, djisvc, wifi, send, demo
-        self.hdmi = self.twitch = self.layout = self.netchoice = None          # werden nach dem Start gesetzt (entstehen später oder fehlen in Tests)
+        self.progress = {"state": "idle"}                  # für die Fortschrittsanzeige beim Einspielen (GET /api/settings/progress)
+        self.iface_map = {}                                # {Name in der Sicherung: Name auf dieser Box} der letzten Prüfung (gleiche MAC, anderer Name)
+        self.hdmi = self.twitch = self.netchoice = None          # werden nach dem Start gesetzt (entstehen später oder fehlen in Tests)
         self.backup_dir = os.path.join(state_dir, "backup")
         self.backup_path = os.path.join(self.backup_dir, "vor-einspielen.json")
         self.version = (read(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"), "") or "").strip()
@@ -6006,6 +8126,7 @@ class SettingsTransfer:
                 e["password"] = h["password"]
             hs[iface] = e
         doc["hotspots"] = hs
+        doc["ifaces"] = self.local_macs()                                      # Name -> MAC: beim Einspielen auf einer anderen Karte werden die Namen anhand der MAC zugeordnet
         if self.hdmi is not None:
             try:
                 st = self.hdmi.status()
@@ -6020,10 +8141,6 @@ class SettingsTransfer:
                                  "message": t["message"], "only_live": bool(t["only_live"])}
         if self.netchoice is not None and self.netchoice.iface:
             doc["camnet"] = {"iface": self.netchoice.iface}
-        if self.layout is not None:
-            lay = self.layout.get()
-            if lay["set"]:
-                doc["layout"] = {"order": lay["order"], "hidden": lay["hidden"]}
         if wifi_data is not None:
             doc["wifi"] = {"networks": [{k: v for k, v in n.items() if secrets_on or k != "password"} for n in wifi_data.get("networks", [])],
                            "skipped": list(wifi_data.get("skipped", []))}
@@ -6245,11 +8362,6 @@ class SettingsTransfer:
             raise ValueError("Das Netzwerk für Kameras ist ungültig")
         return {"iface": raw["iface"]}, []
 
-    def _clean_layout(self, raw):
-        if not isinstance(raw, dict):
-            raise ValueError("Die Optionen sind ungültig")
-        return {"order": UiLayout._ids(raw.get("order", [])), "hidden": UiLayout._ids(raw.get("hidden", []))}, []
-
     def _clean_hotspots(self, raw):
         if not isinstance(raw, dict) or len(raw) > 8:
             raise ValueError("Die Hotspots sind ungültig")
@@ -6295,9 +8407,66 @@ class SettingsTransfer:
             out.append({"ssid": ssid, "password": pw, "hidden": n.get("hidden") is True, "open": open_net, "security": "none" if open_net else sec})
         return {"networks": out}, notes
 
+    @staticmethod
+    def local_macs():
+        """Netzwerkkarten dieser Box mit ihrer MAC-Adresse: {Name: mac}. Die Namen (eth0, eth1) können nach dem Neu-Flashen oder Neustart vertauscht sein, die MAC nicht."""
+        out = {}
+        try:
+            for n in sorted(os.listdir("/sys/class/net")):
+                if n == "lo" or not IFACE_NAME_RE.match(n):
+                    continue
+                m = (read("/sys/class/net/%s/address" % n, "") or "").strip().lower()
+                if re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", m) and m != "00:00:00:00:00:00":
+                    out[n] = m
+        except OSError:
+            pass
+        return out
+
+    def _iface_map(self, doc):
+        """Welche Namen aus der Sicherung heißen auf dieser Box anders? {alter Name: neuer Name}, über gleiche MAC-Adresse (nur Karten, die es hier gibt)."""
+        old = doc.get("ifaces")
+        if not isinstance(old, dict):
+            return {}
+        mine = {mac: name for name, mac in self.local_macs().items()}
+        out = {}
+        for name, mac in old.items():
+            if isinstance(name, str) and IFACE_NAME_RE.match(name) and isinstance(mac, str) and mine.get(mac.lower()) not in (None, name):
+                out[name] = mine[mac.lower()]
+        return out
+
+    @staticmethod
+    def _remap_ifaces(doc, m):
+        """Kopie der Sicherung mit den Kartennamen nach m (gleichzeitig ersetzt, damit ein Tausch eth0 <-> eth1 klappt)."""
+        d = json.loads(json.dumps(doc))
+        r = lambda n: m.get(n, n) if isinstance(n, str) else n
+        for c in d.get("cameras", []) if isinstance(d.get("cameras"), list) else []:
+            if isinstance(c, dict) and c.get("iface"):
+                c["iface"] = r(c["iface"])
+        if isinstance(d.get("camnet"), dict) and d["camnet"].get("iface"):
+            d["camnet"]["iface"] = r(d["camnet"]["iface"])
+        st = d.get("srtla", {}).get("settings") if isinstance(d.get("srtla"), dict) else None
+        if isinstance(st, dict):
+            if isinstance(st.get("uplinks"), list):
+                st["uplinks"] = [r(u) for u in st["uplinks"]]
+            if isinstance(st.get("min_share"), dict):
+                st["min_share"] = {r(k): v for k, v in st["min_share"].items()}
+        if isinstance(d.get("hotspots"), dict):
+            d["hotspots"] = {r(k): v for k, v in d["hotspots"].items()}
+        if isinstance(d.get("dji"), list):
+            for e in d["dji"]:
+                if isinstance(e, dict) and e.get("wifi_ifname"):
+                    e["wifi_ifname"] = r(e["wifi_ifname"])
+        if isinstance(d.get("names"), dict):
+            d["names"] = {("net:" + r(k[4:]) if isinstance(k, str) and k.startswith("net:") else ("if:" + r(k[3:]) if isinstance(k, str) and k.startswith("if:") else k)): v
+                          for k, v in d["names"].items()}
+        return d
+
     def clean(self, doc):
         """Alle Teile der Einstellungen prüfen. Gibt (geprüfte Teile, Bericht) zurück; ein ungültiger Teil fällt mit Begründung heraus."""
         clean, report, labels = {}, [], dict(SETTINGS_SECTIONS)
+        self.iface_map = self._iface_map(doc)
+        if self.iface_map:
+            doc = self._remap_ifaces(doc, self.iface_map)
         for sid, label in SETTINGS_SECTIONS:
             if sid not in doc:
                 continue
@@ -6330,9 +8499,6 @@ class SettingsTransfer:
                     count = 1
                 elif sid == "camnet":
                     data, notes = self._clean_camnet(raw)
-                    count = 1
-                elif sid == "layout":
-                    data, notes = self._clean_layout(raw)
                     count = 1
                 elif sid == "hotspots":
                     data, notes = self._clean_hotspots(raw)
@@ -6380,14 +8546,23 @@ class SettingsTransfer:
         wanted = [s for s, _ in SETTINGS_SECTIONS if s in clean and (sections is None or s in sections)]
         if not wanted:
             raise ValueError("Nichts zum Einspielen gewählt")
-        self._write_backup()
         results, labels = [], dict(SETTINGS_SECTIONS)
-        for sid in wanted:
-            try:
-                msg = getattr(self, "_apply_" + sid)(clean[sid])
-                results.append({"id": sid, "label": labels[sid], "ok": True, "message": msg})
-            except Exception as e:                                  # ein Teil darf nie die anderen oder die Oberfläche mitnehmen
-                results.append({"id": sid, "label": labels[sid], "ok": False, "message": str(e) or type(e).__name__})
+        total = len(wanted)
+        self.progress = {"state": "running", "done": 0, "total": total, "label": ""}          # zuerst wird der Stand davor gesichert
+        try:
+            self._write_backup()
+            for i, sid in enumerate(wanted):
+                self.progress = {"state": "running", "done": i, "total": total, "label": labels[sid]}
+                try:
+                    msg = getattr(self, "_apply_" + sid)(clean[sid])
+                    results.append({"id": sid, "label": labels[sid], "ok": True, "message": msg})
+                except Exception as e:                                  # ein Teil darf nie die anderen oder die Oberfläche mitnehmen
+                    results.append({"id": sid, "label": labels[sid], "ok": False, "message": str(e) or type(e).__name__})
+        finally:
+            self.progress = {"state": "done", "done": total, "total": total, "label": ""}
+        if self.iface_map:                                                          # die Netzwerkkarten heißen hier anders: gesagt wird es, damit niemand rätselt
+            results.insert(0, {"id": "ifaces", "label": "Netzwerkkarten", "ok": True,
+                               "message": "Namen der Netzwerkkarten anhand der MAC-Adressen angepasst: %s" % ", ".join("%s → %s" % (a, b) for a, b in sorted(self.iface_map.items()))})
         if "cameras" in wanted and "dji" in wanted:
             self._restore_camera_names(clean["cameras"])
         for r in report:
@@ -6512,12 +8687,6 @@ class SettingsTransfer:
             return "Netzwerk für Kameras: „%s“ gibt es hier nicht (ausgelassen)" % d["iface"]
         return "Netzwerk für Kameras eingespielt"
 
-    def _apply_layout(self, d):
-        if self.layout is None:
-            raise RuntimeError("Die Optionen sind hier nicht verfügbar")
-        self.layout.set(d["order"], d["hidden"])
-        return "Optionen eingespielt"
-
     def _apply_hotspots(self, hs):
         return self.wifi.hotspot_import(hs)
 
@@ -6545,6 +8714,225 @@ def client_wifi_list():
         if ip:
             out.append({"iface": parts[0], "ip": ip})
     return out
+
+
+class SupportCases:
+    """Issue #13: Probleme und Wünsche aus der Box melden. Die Box sendet selbst nichts (dafür bräuchte sie einen GitHub-Schlüssel mit Schreibrechten, und der
+    ließe sich aus der öffentlichen Software auslesen); sie bereitet das Formular auf GitHub vor. Hier steht nur die Liste "Meine Fälle": je Problem und
+    je Wunsch eine Nummer (IRL-XXXXXX, ohne Bezug zu Person oder Box), Art, Titel, Zeit und "erledigt" (gilt nur auf der Box). Datei <state>/support-cases.json."""
+    KEEP = 1000                                                      # Fälle bleiben erhalten (Nachwelt); die Liste wächst erst nach 1000 Einträgen nicht weiter (je Eintrag rund 200 Byte)
+    DELETE_WINDOW = 30 * 60.0                                       # Fälle bleiben erhalten (Nachwelt); nur kurz nach dem Anlegen lässt sich ein Eintrag entfernen (Issue #64)
+    ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"                 # ohne I, L, O, 0, 1: nicht zu verwechseln
+    ID_RE = re.compile(r"^IRL-[A-HJKMNP-Z2-9]{6}$")
+    TITLE_MAX = 100
+
+    def __init__(self, path, clock=time.time):
+        self.path, self.clock = path, clock
+        self.lock = threading.Lock()
+        self.cases = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            if isinstance(saved, list):
+                self.cases = [c for c in saved if isinstance(c, dict) and self.ID_RE.match(str(c.get("id"))) and isinstance(c.get("title"), str)
+                              and isinstance(c.get("t"), (int, float))][-self.KEEP:]
+        except (OSError, ValueError):
+            pass
+
+    @classmethod
+    def clean_title(cls, title):
+        if not isinstance(title, str):
+            raise ValueError("Bitte einen Titel eintragen.")
+        t = " ".join("".join(ch if ch.isprintable() else " " for ch in title).split())[:cls.TITLE_MAX]
+        if len(t) < 3:
+            raise ValueError("Der Titel ist zu kurz (mindestens 3 Zeichen).")
+        return t
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.cases, f, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+    def list(self):
+        with self.lock:
+            return [dict(c, kind="feature" if c.get("kind") == "feature" else "issue") for c in reversed(self.cases)]       # ältere Einträge ohne Art sind Probleme
+
+    def create(self, title, kind="issue", cid=None):
+        """Neuen Fall anlegen. Mit cid legt die Oberfläche die Nummer selbst fest (sie steht schon im Link zu GitHub); sie muss gültig und frei sein."""
+        if kind not in ("issue", "feature"):
+            raise ValueError("Ungültige Anfrage")
+        t = self.clean_title(title)
+        with self.lock:
+            used = {c["id"] for c in self.cases}
+            if cid is not None:
+                if not isinstance(cid, str) or not self.ID_RE.match(cid) or cid in used:
+                    raise ValueError("Ungültige Anfrage")
+            else:
+                while True:
+                    cid = "IRL-" + "".join(secrets.choice(self.ALPHABET) for _ in range(6))
+                    if cid not in used:
+                        break
+            case = {"id": cid, "title": t, "t": int(self.clock()), "done": False, "kind": kind}
+            self.cases = (self.cases + [case])[-self.KEEP:]
+            self._save()
+            return dict(case)
+
+    def delete(self, cid):
+        """Einen Eintrag nur aus der Liste nehmen, und nur in den ersten DELETE_WINDOW Sekunden nach dem Anlegen (zum Beispiel, wenn man das Formular nicht abgeschickt hat).
+        Ein Issue auf GitHub wird nie angefasst."""
+        if not isinstance(cid, str) or not self.ID_RE.match(cid):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            for i, c in enumerate(self.cases):
+                if c["id"] == cid:
+                    if self.clock() - c["t"] > self.DELETE_WINDOW:
+                        raise ValueError("Nur in den ersten 30 Minuten nach dem Anlegen möglich: Danach bleibt der Eintrag erhalten.")
+                    del self.cases[i]
+                    self._save()
+                    return {"ok": True}
+        raise KeyError(cid)
+
+    def mark(self, cid, done):
+        if not isinstance(cid, str) or not self.ID_RE.match(cid) or not isinstance(done, bool):
+            raise ValueError("Ungültige Anfrage")
+        with self.lock:
+            for c in self.cases:
+                if c["id"] == cid:
+                    c["done"] = done
+                    self._save()
+                    return dict(c)
+        raise KeyError(cid)
+
+
+class ExtraAddress:
+    """Feste Zusatzadresse für ein LAN-Kabel (Issue #65): neben der DHCP-Adresse vom Router eine zweite, feste Adresse, gebunden an die **MAC-Adresse** der
+    Netzkarte. Dieser Dienst hat keine Root-Rechte: Er prüft die Eingabe, legt eine Auslösedatei an (netaddr-request) und wartet auf das Ergebnis des Root-Helfers
+    pipbox-netaddr.py (der prüft alles noch einmal, setzt die Adresse und legt ein Skript in /etc/network/if-up.d ab, das sie bei jedem Hochfahren der Karte
+    wiedersetzt). Voraussetzung: ein getrennter Adressraum, das Netz darf sich nicht mit dem einer anderen Netzkarte überschneiden (prüft der Helfer)."""
+    CONF = "/etc/pipbox/extra-ip.json"
+    STATUS = "/run/pipbox-netaddr/status.json"
+    UNIT = "/etc/systemd/system/pipbox-netaddr.path"
+    SYS_NET = "/sys/class/net"
+    MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    PRIVATE = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    SKIP = ("lo", "docker", "veth", "br-", "virbr", "p2p", "tailscale", "tun", "tap", "wg", "zt", "wlan", "wl")
+    WAIT = 15.0
+
+    def __init__(self, state_dir, demo=False, clock=time.time, sleep=time.sleep):
+        self.req = os.path.join(state_dir, "netaddr-request")
+        self.demo, self.clock, self.sleep = demo, clock, sleep
+        self.fake = {"enabled": False, "mac": "aa:bb:cc:00:11:22", "addr": "", "prefix": 24}
+
+    @classmethod
+    def check(cls, mac, addr, prefix):
+        """Eingabe prüfen (der Helfer prüft noch einmal); wirft ValueError mit einem lesbaren Text."""
+        import ipaddress
+        if not isinstance(mac, str) or not cls.MAC_RE.match(mac):
+            raise ValueError("Ungültige MAC-Adresse")
+        if not isinstance(addr, str) or isinstance(prefix, bool) or not isinstance(prefix, int):
+            raise ValueError("Ungültige Anfrage")
+        try:
+            a = ipaddress.IPv4Address(addr)
+        except ValueError:
+            raise ValueError("Ungültige IP-Adresse")
+        if not any(a in ipaddress.ip_network(n) for n in cls.PRIVATE):
+            raise ValueError("Nur Adressen aus den privaten Bereichen sind erlaubt (10.…, 172.16.… bis 172.31.…, 192.168.…).")
+        if not 8 <= prefix <= 30:
+            raise ValueError("Die Netzlänge muss zwischen 8 und 30 liegen (üblich: 24).")
+        net = ipaddress.ip_network("%s/%d" % (a, prefix), strict=False)
+        if a == net.network_address or a == net.broadcast_address:
+            raise ValueError("Das ist die Netz- oder Rundrufadresse, nicht die einer Geräteadresse.")
+        return str(a)
+
+    def cards(self):
+        """Verkabelte, echte Netzkarten: [{"name", "mac", "addrs": ["192.168.1.5/24", ...]}]."""
+        out = []
+        try:
+            names = sorted(os.listdir(self.SYS_NET))
+        except OSError:
+            return out
+        addrs = {}
+        try:
+            r = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=5)
+            for line in (r.stdout or "").splitlines():
+                m = re.match(r"^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+/\d+)", line)
+                if m:
+                    addrs.setdefault(m.group(1).split("@")[0], []).append(m.group(2))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        for n in names:
+            if n.startswith(self.SKIP):
+                continue
+            base = "%s/%s" % (self.SYS_NET, n)
+            try:
+                if (read(base + "/type", "") or "").strip() != "1" or os.path.isdir(base + "/wireless") or os.path.isdir(base + "/phy80211") \
+                        or os.path.isdir(base + "/bridge") or not os.path.exists(base + "/device"):
+                    continue
+                mac = (read(base + "/address", "") or "").strip().lower()
+            except OSError:
+                continue
+            if self.MAC_RE.match(mac):
+                out.append({"name": n, "mac": mac, "addrs": addrs.get(n, [])})
+        return out
+
+    def installed(self):
+        return os.path.exists(self.UNIT)
+
+    def _conf(self):
+        try:
+            d = json.loads(read(self.CONF, "") or "{}")
+            if isinstance(d, dict) and self.MAC_RE.match(str(d.get("mac"))) and isinstance(d.get("addr"), str) and isinstance(d.get("prefix"), int):
+                return d
+        except ValueError:
+            pass
+        return None
+
+    def status(self):
+        if self.demo:
+            f = self.fake
+            return {"installed": True, "enabled": f["enabled"], "mac": f["mac"], "addr": f["addr"], "prefix": f["prefix"], "present": f["enabled"], "error": "",
+                    "cards": [{"name": "eth0", "mac": "aa:bb:cc:00:11:22", "addrs": ["192.168.1.20/24"]}, {"name": "eth1", "mac": "aa:bb:cc:00:11:33", "addrs": ["192.168.178.195/24"]}]}
+        c = self._conf()
+        cards = self.cards()
+        present = bool(c) and any(x["mac"] == c["mac"] and "%s/%d" % (c["addr"], c["prefix"]) in x["addrs"] for x in cards)
+        return {"installed": self.installed(), "enabled": bool(c), "mac": (c or {}).get("mac", ""), "addr": (c or {}).get("addr", ""), "prefix": (c or {}).get("prefix", 24),
+                "present": present, "error": "", "cards": cards}
+
+    def set(self, enable, mac=None, addr=None, prefix=None, ack=False):
+        if not isinstance(enable, bool):
+            raise ValueError("Ungültige Anfrage")
+        if enable and ack is not True:
+            raise ValueError("Bitte zuerst bestätigen, dass die Änderung auf eigene Verantwortung erfolgt.")
+        if enable:
+            addr = self.check(mac, addr, prefix)
+        if self.demo:
+            self.fake.update({"enabled": enable, "mac": mac or self.fake["mac"], "addr": addr or "", "prefix": prefix or 24})
+            return self.status()
+        if not self.installed():
+            raise ValueError("Kommt mit dem nächsten Software-Update.")
+        t0 = int(self.clock())
+        req = {"enable": True, "mac": mac, "addr": addr, "prefix": prefix} if enable else {"enable": False}
+        tmp = self.req + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(req, f)
+        os.replace(tmp, self.req)
+        end = self.clock() + self.WAIT
+        while self.clock() < end:
+            try:
+                st = json.loads(read(self.STATUS, "") or "{}")
+            except ValueError:
+                st = {}
+            if isinstance(st, dict) and isinstance(st.get("time"), int) and st["time"] >= t0:
+                if not st.get("ok"):
+                    raise ValueError(str(st.get("error") or "Fehler")[:200])
+                return self.status()
+            self.sleep(0.4)
+        raise ValueError("Keine Antwort vom Helfer.")
 
 
 class UiAccess:
@@ -6598,6 +8986,81 @@ class UiAccess:
                 json.dump({"block_client_wifi": block}, f)
             os.replace(tmp, self.path)
         return self.status(local_ip)
+
+
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def client_origin(peer, forwarded=False):
+    """Woher kommt die Anfrage? "lokal": Heimnetz, Router-WLAN, Hotspot der Box (private Adressen) und die Box selbst. "extern": über Tailscale (eigene
+    Adresse aus 100.64.0.0/10 oder über den Tailscale-Proxy auf dieser Box, erkennbar an X-Forwarded-For), über einen öffentlichen Link (Funnel) oder von einer
+    öffentlichen Adresse. Das entscheidet über die Vorschau (sie kostet Upload, den die Sendung braucht)."""
+    try:
+        a = ipaddress.ip_address(str(peer).split("%")[0])
+    except ValueError:
+        return "extern"
+    if isinstance(a, ipaddress.IPv6Address) and a.ipv4_mapped:
+        a = a.ipv4_mapped
+    if a.is_loopback:
+        return "extern" if forwarded else "lokal"
+    if a.version == 4 and a in TAILNET:
+        return "extern"
+    return "lokal" if (a.is_private or a.is_link_local) else "extern"
+
+
+class PreviewAccess:
+    """Vorschau von außen (Wunsch des Nutzers): Jede Vorschau braucht rund 1,7 Mbit/s Upload. Von außen (Tailscale, öffentlicher Link) ist sie deshalb
+    **standardmäßig aus**; der Nutzer kann sie im Heimnetz erlauben. Dann nur **klein** (EXT_WIDTH × EXT_FPS) und für **einen** Zuschauer zugleich, damit
+    der Upload für die Sendung bleibt. Lokal bleibt alles wie bisher. Datei: preview-access.json im Zustandsordner (Rechte 0600)."""
+    EXT_WIDTH = 320
+    EXT_FPS = 10
+    EXT_MAX = 1
+
+    def __init__(self, path, demo=False):
+        self.path, self.demo = path, demo
+        self.lock = threading.Lock()
+        self.external = False
+        self.ext_viewers = 0
+        try:
+            with open(path) as f:
+                self.external = json.load(f).get("external") is True
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def set(self, external):
+        if not isinstance(external, bool):
+            raise ValueError("ja oder nein")
+        with self.lock:
+            self.external = external
+            if not self.demo:
+                tmp = self.path + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    json.dump({"external": external}, f)
+                os.replace(tmp, self.path)
+        return self.status()
+
+    def status(self):
+        with self.lock:
+            return {"external": self.external, "ext_viewers": self.ext_viewers, "ext_width": self.EXT_WIDTH, "ext_fps": self.EXT_FPS, "ext_max": self.EXT_MAX}
+
+    def allowed(self, origin):
+        return origin != "extern" or self.external
+
+    def acquire(self, origin):
+        """Platz für eine Vorschau reservieren: lokal immer (die Vorschau selbst begrenzt auf zwei), von außen nur, wenn erlaubt und noch frei."""
+        if origin != "extern":
+            return True
+        with self.lock:
+            if not self.external or self.ext_viewers >= self.EXT_MAX:
+                return False
+            self.ext_viewers += 1
+            return True
+
+    def release(self, origin):
+        if origin == "extern":
+            with self.lock:
+                self.ext_viewers = max(0, self.ext_viewers - 1)
 
 
 def source_allowed(ip):
@@ -6693,7 +9156,55 @@ class LimitedHTTPServer(ThreadingHTTPServer):
                     self._conns.pop(ip, None)
 
 
+def scene_swap(pipeline, cams, send, with_key=None):
+    """Hauptbild gegen ein kleines Bild tauschen (Oberfläche und Controller-Tasten). Ohne Angabe das erste kleine Bild.
+    Gibt die Antwort der Schnittstelle zurück oder löst ValueError mit einem lesbaren Text aus."""
+    if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
+        raise ValueError("Kamera unbekannt")
+    target = with_key or pipeline.cfg.get("pip")
+    if target and any(x["key"] == target and x.get("state") == "offline" for x in cams.listing("")):
+        raise ValueError("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.")
+    old_audio = PipelineStore.view_values(pipeline.cfg)[1]
+    shown = pipeline.swap_main_pip(with_key)
+    if send.always_live() or send.swap_live():
+        note = "Getauscht, ohne Unterbrechung."
+        moved = PipelineStore.view_values(pipeline.cfg)[1] != old_audio                  # eine Facecam nimmt ihren Ton mit
+        if shown or moved:             # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
+            hide, aud = PipelineStore.view_values(pipeline.cfg)
+            cur = send.view_state()
+            if not (send.view_live() and send.apply_view(hide, aud, bool(cur and cur["mute"]))):
+                note += " Das kleine Bild erscheint beim nächsten Start der Sendung." if shown else " Der Ton wechselt beim nächsten Start der Sendung."
+        return {"ok": True, "restarted": False, "note": note}
+    restarted, note = send.restart_if_live()
+    return {"ok": True, "restarted": restarted, "note": note or "Getauscht."}
+
+
+def controller_action(fn, pipeline, cams, send):
+    """Funktion einer Controller-Taste ausführen. Bild-Funktionen tauschen immer das Hauptbild: „Kleines Bild N“ holt die Kamera,
+    die gerade dort ist, ins Hauptbild (die bisherige Hauptkamera nimmt ihren Platz ein; nochmal drücken tauscht zurück); „Hauptbild“
+    holt die Kamera mit der Rolle Hauptbild der Kameraliste zurück. Ton: stumm schalten (an/aus) und zur nächsten Tonquelle."""
+    cfg = pipeline.cfg
+    if fn in ("pip1", "pip2", "pip3"):
+        key = cfg.get({"pip1": "pip", "pip2": "pip2", "pip3": "pip3"}[fn])
+        if not key or cfg.get("type") != "pip":
+            return
+        scene_swap(pipeline, cams, send, key)
+    elif fn == "main":
+        want = next((c["key"] for c in cams.cams if c.get("role") == "main"), None)
+        if want and want != cfg.get("main") and cfg.get("type") == "pip":
+            scene_swap(pipeline, cams, send, want)
+    elif fn == "mute":
+        f = send.footer()
+        send.change_view(mute=not bool(f and f["audio"]["mute"]))
+    elif fn == "audio_next":
+        f = send.footer()
+        if f:
+            send.change_view(audio=f["audio"]["next"])
+
+
 class Handler(BaseHTTPRequestHandler):
+    ERR_NO_ACCOUNT = "Zum Schreiben und Moderieren bitte in diesem Browser bei Twitch anmelden (Zuschauer oder Moderator)"
+    ERR_NOT_MOD = "Moderieren dürfen nur der Streamer und Moderatoren dieses Kanals"
     timeout = 15              # eine Verbindung, die so lange nichts sendet, wird beendet (Issue #25: halb offene Anfragen blieben ewig offen)
     BODY_SECONDS = 15.0       # so lange darf der Inhalt einer Anfrage insgesamt brauchen (nicht nur je Teilstück)
     REQUEST_SECONDS = 15.0    # Gesamtfrist für Kopfzeilen und Inhalt zusammen; danach wird die Verbindung getrennt (ein Byte alle paar Sekunden hielt sie offen)
@@ -6745,10 +9256,11 @@ class Handler(BaseHTTPRequestHandler):
     djisvc = None
     netchoice = None
     names = None
-    layout = None
+    ckeys = None
     srtla = None
     pipeline = None
     send = None
+    preview = None
     twitch = None
     hdmi = None
     uiaccess = None
@@ -6771,6 +9283,10 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
         return peer
+
+    def origin(self):
+        """"lokal" oder "extern" (siehe client_origin): beim Tailscale-Proxy auf dieser Box kommt die Anfrage von 127.0.0.1 mit X-Forwarded-For."""
+        return client_origin(self.client_address[0], bool(self.headers.get("X-Forwarded-For")))
 
     def local_ip(self):
         """Eigene Adresse, auf der diese Verbindung ankam (welches Netz der Box)."""
@@ -6826,6 +9342,73 @@ class Handler(BaseHTTPRequestHandler):
             buf += chunk
         return buf
 
+    def preview_stream(self):
+        """Motion-JPEG des gesendeten Bildes (Issue #52): multipart/x-mixed-replace, durchgereicht vom Vorschau-Dienst, bis der Browser geht, die Zeit um ist oder die Sendung endet."""
+        pv = self.preview
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        if not pv:
+            return self.reply(503, {"error": "missing"})
+        org = self.origin()
+        pa = self.previewaccess
+        if not pa.allowed(org):
+            return self.reply(403, {"error": "extern"})                           # von außen nicht freigegeben
+        if not self.send._active():
+            return self.reply(503, {"error": "off"})
+        if not pa.acquire(org):
+            return self.reply(429, {"error": "busy"})                             # von außen höchstens ein Zuschauer
+        try:
+            return self._preview_stream(pv, q, org)
+        finally:
+            pa.release(org)
+
+    def _preview_stream(self, pv, q, org):
+        try:
+            fmt = (q.get("fmt") or ["mp4"])[0]
+            fmt = fmt if fmt in pipbox_preview.FORMATS else "mp4"
+            fps, width, long = (q.get("fps") or [30])[0], (q.get("w") or [640])[0], (q.get("long") or [""])[0] == "1"
+            if org == "extern":                                                   # von außen immer klein und kurz: der Upload bleibt für die Sendung
+                try:
+                    fps = min(int(fps), self.previewaccess.EXT_FPS)
+                    width = min(int(width), self.previewaccess.EXT_WIDTH)
+                except (TypeError, ValueError):
+                    fps, width = self.previewaccess.EXT_FPS, self.previewaccess.EXT_WIDTH
+                long = False
+            up, head = pv.open(fps, width, long, fmt)
+        except OSError:
+            return self.reply(503, {"error": "missing"})
+        if up is None:
+            why = head.get("error", "capture")
+            return self.reply(429 if why == "busy" else 503, {"error": why})
+        started = False
+        self.close_connection = True
+        lip = self.local_ip() or ""
+        try:
+            up.settimeout(20)
+            while True:
+                data = up.recv(65536)
+                if not data:
+                    break
+                if not started:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp4" if fmt == "mp4" else "multipart/x-mixed-replace;boundary=" + pipbox_preview.BOUNDARY)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("X-Frame-Options", "DENY")
+                    self.end_headers()
+                    started = True
+                self.wfile.write(data)
+                self.wfile.flush()
+                pipbox_preview.TRAFFIC.add(lip, len(data))               # für die Anzeige des Uploads (siehe Sampler.net_bytes)
+        except OSError:
+            pass                                       # Browser weg oder Dienst still: Verbindung zum Dienst schließen beendet die Vorschau dort
+        finally:
+            try:
+                up.close()
+            except OSError:
+                pass
+        if not started:
+            self.reply(503, {"error": "kein-bild"})
+
     def send_bytes(self, code, body, ctype, cookie=None, headers=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -6871,6 +9454,12 @@ class Handler(BaseHTTPRequestHandler):
         body = read(os.path.join(WEB_DIR, name), "")
         self.send_bytes(200, body.encode(), "text/html; charset=utf-8")
 
+    def conn_labels(self):
+        """Namen hinter den Schnittstellen (Status, Sendewege): eigene Namen der Verbindungen, bei WLAN-Karten ohne eigenen Namen der Name des Sticks."""
+        base = dict(self.wifi.labels()) if self.wifi else {}
+        base.update(self.names.conn_names() if self.names else {})
+        return base
+
     def do_GET(self):
         self.request_read()
         path = self.path.split("?")[0]
@@ -6894,16 +9483,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             m["cameras"] = self.cams.listing(self.host(), self.djisvc.host_for_key)
+            parked = set()
+            try:                                                           # bewusst ausgeschaltete Kameras: im Bildaufbau deaktiviert oder DJI getrennt
+                pc = self.pipeline.cfg
+                inactive = set(pc.get("inactive") or []) if pc.get("type") == "pip" else set()
+                parked = inactive | self.djisvc.parked_keys()
+                pips = {pc.get(k) for k in ("pip", "pip2", "pip3") if pc.get(k)} if pc.get("type") == "pip" else set()
+                for c in m["cameras"]:
+                    c["parked"] = c.get("key") in parked
+                    c["is_main"] = pc.get("type") == "pip" and c.get("key") == pc.get("main")
+                    c["in_pips"] = c.get("key") in pips
+            except Exception:
+                pass
             try:
                 hs = self.hdmi.status() if self.hdmi else None
-                m["alerts"] = list(m.get("alerts") or []) + self.outages.alerts(m["cameras"], hs)
+                m["alerts"] = list(m.get("alerts") or []) + self.outages.alerts(m["cameras"], hs, parked)
             except Exception:
                 pass
             extras = self.djisvc.camera_extras()
             for c in m["cameras"]:
                 c.update(extras.get(c["key"], {}))             # Akkustand der DJI-Kameras (Status, Kameras)
             m["uplinks"] = uplink_states(((self.srtla.data or {}).get("settings") or {}).get("uplinks") or [])
-            m["conn_names"] = self.names.conn_names() if self.names else {}
+            m["conn_names"] = self.conn_labels()
             pic = self.send.picture()
             for c in m["cameras"]:
                 p = pic.get(c["key"]) if pic else None
@@ -6914,12 +9515,37 @@ class Handler(BaseHTTPRequestHandler):
                     if f:
                         c["fps"], c["fps_set"] = float(f), True      # eingestellt, nicht gemessen
             return self.reply(200, m)
-        if path == "/api/layout":
-            return self.reply(200, self.layout.get() if self.layout else {"set": False, "order": [], "hidden": []})
+        if path == "/api/previewaccess":
+            return self.reply(200, dict(self.previewaccess.status(), origin=self.origin()))
+        if path == "/api/preview":
+            org = self.origin()
+            if not self.preview:
+                return self.reply(200, {"available": False, "why": "missing", "origin": org})
+            if not self.previewaccess.allowed(org):
+                return self.reply(200, {"available": False, "why": "extern", "origin": org})         # von außen nicht freigegeben
+            if not self.send._active():
+                return self.reply(200, {"available": False, "why": "off", "origin": org})            # ohne Sendung gar nicht erst den Dienst wecken
+            st = self.preview.status()
+            st["origin"] = org
+            if org == "extern":
+                st.update(ext_width=self.previewaccess.EXT_WIDTH, ext_fps=self.previewaccess.EXT_FPS)
+                if self.previewaccess.status()["ext_viewers"] >= self.previewaccess.EXT_MAX:
+                    st.update(available=False, why="busy")
+            return self.reply(200, st)
+        if path == "/api/preview/stream":
+            return self.preview_stream()
+        if path == "/api/controller-keys":
+            return self.reply(200, self.ckeys.snapshot())
         if path == "/api/logmode":
             return self.reply(200, self.logmode.status())
+        if path == "/api/layout":
+            return self.reply(200, self.layout.get())
+        if path == "/api/btdriver":
+            return self.reply(200, self.btdriver.status())
         if path == "/api/logs":
             return self.reply(200, self.logbundle.status())
+        if path == "/api/settings/progress":
+            return self.reply(200, dict(self.transfer.progress))
         if path == "/api/settings":
             return self.reply(200, {"has_backup": os.path.isfile(self.transfer.backup_path), "sending": bool(self.send._active())})
         if path == "/api/developer":
@@ -6950,6 +9576,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/swupdate":
             q = (self.path.split("?", 1) + [""])[1]
             return self.reply(200, self.swupdate.status(force="check=1" in q, fresh="fresh=1" in q))
+        if path == "/api/swupdate/history":
+            return self.reply(200, self.swupdate.history())
+        if path == "/api/support":
+            return self.reply(200, {"cases": self.support.list(), "version": self.swupdate.version, "issues": "https://github.com/IRL4YOU/irl4you-pip/issues",
+                                    "now": int(time.time()), "delete_window": int(self.support.DELETE_WINDOW)})
         if path == "/api/update":
             try:
                 self.updates.auto_check(present=True)       # Wer die Seite öffnet, soll gleich wissen, ob es Updates gibt (einmal je Start, still)
@@ -6961,10 +9592,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, st)
         if path == "/api/uiaccess":
             return self.reply(200, self.uiaccess.status(self.local_ip()))
+        if path == "/api/netaddr":
+            return self.reply(200, self.netaddr.status())
         if path == "/api/twitch":
             return self.reply(200, self.twitch.status())
+        if path == "/api/sysalerts":
+            return self.reply(200, self.sysalerts.status())
         if path == "/api/twitch/login":
-            return self.reply(200, self.twitchlogin.status())
+            return self.reply(200, self.twitchaccounts.status(self.headers.get("x-pb-owner", "")))
+        if path == "/api/twitch/bot":
+            return self.reply(200, self.twitchbot.status())
         if path == "/api/chat":
             qs = urllib.parse.parse_qs((self.path.split("?", 1) + [""])[1])
             try:
@@ -6972,14 +9609,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 since = 0
             out = self.chatreader.poll(since)
-            out["account"] = self.twitchlogin.status()
+            out["account"] = self.twitchaccounts.status(self.headers.get("x-pb-owner", ""))              # die Lage dieses Browsers (Streamer, Moderator oder nur Lesen)
+            out["events"] = self.chatevents.status() if getattr(self, "chatevents", None) else {"state": "aus", "types": [], "error": ""}
             return self.reply(200, out)
         if path == "/api/hdmi":
             return self.reply(200, self.hdmi.status())
         if path == "/api/network":
             return self.reply(200, self.netchoice.status())
         if path == "/api/srtla":
-            return self.reply(200, {**self.srtla.public(), "interfaces": iface_ips(), "conn_names": self.names.conn_names() if self.names else {}})
+            return self.reply(200, {**self.srtla.public(), "interfaces": iface_ips(), "conn_names": self.conn_labels()})
         if path == "/api/pipeline":
             st = self.pipeline.status(self.cams.listing(""))
             st["live"] = {"main": self.send.delay_live(), "pips": self.send.delay_live_pips()}
@@ -7025,6 +9663,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logmode":
                 self.logmode.request(d.get("mode"))
                 return self.reply(200, {"ok": True})
+            if path == "/api/layout":
+                if isinstance(d.get("init"), dict):
+                    return self.reply(200, self.layout.init(d["init"]))
+                return self.reply(200, self.layout.put(d.get("profile"), d))
+            if path == "/api/btdriver":
+                self.btdriver.request()
+                return self.reply(200, self.btdriver.status())
             if path == "/api/developer":
                 self.developer.request(d.get("action"), d.get("confirm") is True)
                 return self.reply(200, self.developer.status())
@@ -7036,10 +9681,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/wifi":
                 self.wifi.request(d)
                 return self.reply(200, {"ok": True})
-            if path == "/api/layout":
-                if self.layout is None:
-                    raise ValueError("Die Menüeinstellung ist hier nicht verfügbar")
-                self.layout.set(d.get("order", []), d.get("hidden", []))
+            if path == "/api/controller-keys":
+                self.ckeys.set_map(d.get("addr"), d.get("code"), d.get("fn"))
                 return self.reply(200, {"ok": True})
             if path == "/api/devname":
                 if self.names is None:
@@ -7074,26 +9717,20 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Nichts zu ändern")
                 return self.reply(200, dict(self.send.change_view(d.get("visible"), d.get("audio"), d.get("mute")), ok=True))
             if path == "/api/pipeline/active":
-                self.pipeline.set_active(d.get("key"), d.get("active"))
+                key, act = d.get("key"), d.get("active")
+                c = self.pipeline.cfg
+                if act is False and c.get("type") == "pip" and key and c.get("audio") in ("pip", "pip2", "pip3") and c.get(c["audio"]) == key and key != c.get("main"):
+                    self.send.change_view(audio="main")        # lag der Ton auf der Kamera, geht er zuerst zum Hauptbild; erst danach wird ihr Zweig gestoppt (sonst bleibt der Ton tot)
+                self.pipeline.set_active(key, act)
                 return self.reply(200, {"ok": True})
             if path == "/api/pipeline/swap":
-                with_key = d.get("with")
-                if with_key is not None and (not isinstance(with_key, str) or not KEY_RE.match(with_key)):
-                    raise ValueError("Kamera unbekannt")
-                target = with_key or self.pipeline.cfg.get("pip")
-                if target and any(x["key"] == target and x.get("state") == "offline" for x in self.cams.listing("")):
-                    raise ValueError("Diese Kamera ist nicht verbunden und lässt sich nicht zum Hauptbild machen.")
-                shown = self.pipeline.swap_main_pip(with_key)
-                if self.send.always_live() or self.send.swap_live():
-                    note = "Getauscht, ohne Unterbrechung."
-                    if shown:                      # das kleine Bild der bisherigen Hauptkamera war ausgeblendet gespeichert und ist jetzt sichtbar
-                        hide, aud = PipelineStore.view_values(self.pipeline.cfg)
-                        cur = self.send.view_state()
-                        if not (self.send.view_live() and self.send.apply_view(hide, aud, bool(cur and cur["mute"]))):
-                            note += " Das kleine Bild erscheint beim nächsten Start der Sendung."
-                    return self.reply(200, {"ok": True, "restarted": False, "note": note})
-                restarted, note = self.send.restart_if_live()
-                return self.reply(200, {"ok": True, "restarted": restarted, "note": note or "Getauscht."})
+                return self.reply(200, scene_swap(self.pipeline, self.cams, self.send, d.get("with")))
+            if path == "/api/pipeline/facecam":
+                slot = d.get("slot", "")
+                if not isinstance(slot, str):
+                    raise ValueError("Facecam: eines der kleinen Bilder oder keine")
+                aud = self.pipeline.set_facecam(slot)
+                return self.reply(200, dict(self.send.change_view(audio=aud), ok=True, facecam=self.pipeline.cfg.get("facecam", "")))
             if path == "/api/pipeline":
                 before = dict(self.pipeline.cfg)
                 before["styles"] = clean_styles(before.get("styles"))        # eine unveränderte Einstellung ohne Stile gilt nicht als Änderung
@@ -7144,25 +9781,103 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(404, {"error": "nicht gefunden"})
             if path == "/api/dji/cmd":
                 return self.reply(200, self.djisvc.command(d))
+            if path == "/api/support":
+                try:
+                    if d.get("action") == "create":
+                        return self.reply(200, self.support.create(d.get("title"), d.get("kind", "issue"), d.get("id")))
+                    if d.get("action") == "done":
+                        return self.reply(200, self.support.mark(d.get("id"), d.get("done")))
+                    if d.get("action") == "delete":
+                        return self.reply(200, self.support.delete(d.get("id")))
+                except ValueError as e:
+                    return self.reply(400, {"error": str(e)})
+                except KeyError:
+                    return self.reply(404, {"error": "nicht gefunden"})
+                return self.reply(400, {"error": "Ungültige Anfrage"})
+            if path == "/api/alerts/dismiss":
+                if d.get("kind") in ("cam", "hdmi"):
+                    return self.reply(200, {"ok": bool(self.outages.dismiss(d.get("kind"), d.get("t")))})
+                return self.reply(200, {"ok": bool(self.usbwatch.dismiss(d.get("t")))})
+            if path == "/api/netaddr":
+                try:
+                    return self.reply(200, self.netaddr.set(d.get("enable"), d.get("mac"), d.get("addr"), d.get("prefix"), d.get("ack")))
+                except ValueError as e:
+                    return self.reply(400, {"error": str(e)})
             if path == "/api/uiaccess":
                 return self.reply(200, self.uiaccess.set(d.get("block_client_wifi"), self.local_ip()))
+            if path == "/api/previewaccess":                                   # auch über Tailscale änderbar (Wunsch des Nutzers, Anmeldung ist ohnehin nötig): ein Streamer unterwegs schaltet es selbst ein
+                return self.reply(200, dict(self.previewaccess.set(d.get("external")), origin=self.origin()))
             if path == "/api/twitch/login":
                 act = d.get("action")
+                key = d.get("owner") or self.headers.get("x-pb-owner", "")
                 if act == "start":
-                    return self.reply(200, self.twitchlogin.start(mod=d.get("mod") is True))
+                    if d.get("as") in ("mod", "user"):                            # eigenes Konto (Moderator oder Zuschauer): getrennt vom Konto des Streamers
+                        self.twitchsessions.start(key, mod=d.get("as") == "mod")
+                    else:                                                         # Konto des Streamers: nur das eingetragene Konto (Kanal) oder das schon angemeldete der Box
+                        name = self.twitchaccounts.streamer_name()
+                        if not name:
+                            return self.reply(400, {"error": TwitchLogin.ERR_NO_CHANNEL})
+                        claim = not (self.twitchlogin.ready() and self.twitchlogin.is_owner(key))
+                        self.twitchlogin.start(mod=d.get("mod") is True, events=d.get("events") is True, everything=d.get("all") is True, owner_key=key, claim=claim, expect=name)
+                    return self.reply(200, self.twitchaccounts.status(key))
                 if act == "cancel":
-                    return self.reply(200, self.twitchlogin.cancel())
+                    s = self.twitchsessions.get(key)
+                    if s is not None and s.state == "wartet":
+                        s.cancel()
+                    h = TwitchLogin.owner_hash(key)
+                    if self.twitchlogin.is_owner(key) or (h and (self.twitchlogin.pending or {}).get("owner") == h):
+                        self.twitchlogin.cancel()
+                    return self.reply(200, self.twitchaccounts.status(key))
                 if act == "mod" and isinstance(d.get("on"), bool):
-                    return self.reply(200, self.twitchlogin.set_mod(d["on"]))
+                    role, acct = self.twitchaccounts.pick(key)
+                    if role == "none":
+                        return self.reply(400, {"error": "Zuerst in diesem Browser bei Twitch anmelden"})
+                    acct.set_mod(d["on"])
+                    return self.reply(200, self.twitchaccounts.status(key))
                 return self.reply(400, {"error": "Ungültige Anfrage"})
             if path == "/api/twitch/logout":
-                return self.reply(200, self.twitchlogin.logout())
+                key = d.get("owner") or self.headers.get("x-pb-owner", "")
+                role, acct = self.twitchaccounts.pick(key)
+                if role in ("mod", "user"):
+                    self.twitchsessions.logout(key)                               # nur die eigene Anmeldung; das Konto des Streamers bleibt
+                elif role == "owner":
+                    self.twitchlogin.logout()
+                else:
+                    return self.reply(400, {"error": "In diesem Browser ist niemand angemeldet"})
+                return self.reply(200, self.twitchaccounts.status(key))
+            if path == "/api/twitch/bot":
+                act = d.get("action")
+                if act == "start":
+                    return self.reply(200, self.twitchbot.start())
+                if act == "cancel":
+                    return self.reply(200, self.twitchbot.cancel())
+                if act == "logout":
+                    r = self.twitchbot.logout()
+                    with self.twitch.lock:
+                        self.twitch.tries.clear()                              # Versuche neu starten; ohne Bot gilt wieder das Hauptkonto oder der Token von Hand
+                    return self.reply(200, r)
+                return self.reply(400, {"error": "Ungültige Anfrage"})
             if path == "/api/chat/mod":
-                return self.reply(200, self.chatmod.do(d))
+                key = self.headers.get("x-pb-owner", "")
+                role, acct = self.twitchaccounts.pick(key)
+                if role == "none":
+                    return self.reply(400, {"error": self.ERR_NO_ACCOUNT})
+                if role == "user":
+                    return self.reply(400, {"error": self.ERR_NOT_MOD})
+                return self.reply(200, (self.chatmod if role == "owner" else self.chatmod.view(acct)).do(d, key))
             if path == "/api/chat/send":
-                return self.reply(200, self.chatsender.say(d.get("text")))
+                key = self.headers.get("x-pb-owner", "")
+                role, acct = self.twitchaccounts.pick(key)
+                if role == "none":
+                    return self.reply(400, {"error": self.ERR_NO_ACCOUNT})
+                if role == "owner":
+                    return self.reply(200, self.chatsender.say(d.get("text"), key))
+                mv = self.chatmod.view(acct)
+                return self.reply(200, self.chatsender.say_as(mv, HelixChat(acct, mv), d.get("text"), key, commands=role == "mod"))
             if path == "/api/twitch":
                 return self.reply(200, self.twitch.save(d))
+            if path == "/api/sysalerts":
+                return self.reply(200, self.sysalerts.save(d))
             if path == "/api/twitch/test":
                 return self.reply(200, self.twitch.test())
             if path == "/api/hdmi":
@@ -7177,6 +9892,10 @@ class Handler(BaseHTTPRequestHandler):
                         if not isinstance(d["swap_with"], str):
                             raise ValueError("Kamera ungültig")
                         return self.reply(200, self.cams.swap(m.group(1), d["swap_with"]))
+                    if "move_before" in d:
+                        if d["move_before"] is not None and not isinstance(d["move_before"], str):
+                            raise ValueError("Kamera ungültig")
+                        return self.reply(200, self.cams.move(m.group(1), d["move_before"]))
                     if d.get("iface") is not None:
                         cam = next((c for c in self.cams.cams if c["id"] == m.group(1)), None)
                         if cam and cam["key"].startswith("dji-"):
@@ -7212,6 +9931,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "nicht gefunden"})
         if cam and cam.get("key") == HDMI_KEY and self.hdmi:
             self.hdmi.on_camera_removed()                    # die Kamera "HDMI" ist weg: die Einspeisung ausschalten
+        if cam:
+            self.cams.forget(cam.get("key"))                 # ein noch sendender Stream kommt nicht von selbst zurück
+            if getattr(self, "djisvc", None):
+                self.djisvc.remove_for_key(cam.get("key"))   # eine DJI-Kamera auch aus dem Kamera-Dienst nehmen, sonst trägt ihn die Box gleich wieder ein
         self.reply(200, {"ok": True})
 
 
@@ -7237,21 +9960,24 @@ def main():
     Handler.cams = CameraStore(os.path.join(args.state, "cameras.json"), args.rtmp_app, args.rtmp_stat_url, args.demo)
     Handler.outages = OutageWatch()
     Handler.usbwatch = UsbWatch(os.path.join(args.state, "usb-events.json"), demo=args.demo)
+    Handler.support = SupportCases(os.path.join(args.state, "support-cases.json"))
     Handler.sampler = Sampler(args.demo)
     Handler.sampler.sample()  # Startwerte für Ratenberechnung
     Handler.srtla = SrtlaStore(os.path.join(args.state, "srtla.json"))
     Handler.pipeline = PipelineStore(os.path.join(args.state, "pipeline.json"))
     Handler.send = SendControl(args.state, Handler.srtla, Handler.pipeline, Handler.cams, args.demo)
+    Handler.preview = pipbox_preview.Client() if pipbox_preview and not args.demo else None          # die Vorschau macht ein eigener Dienst (pipbox-preview.service), der Webserver reicht nur durch
     Handler.swupdate = SwUpdate(args.state, args.demo, Handler.send)
     if not args.demo:
         threading.Thread(target=Handler.swupdate.auto_loop, daemon=True).start()
     Handler.remote = Remote(args.state, args.demo)
     Handler.netchoice = NetChoice(os.path.join(args.state, "camera-net.json"))
     Handler.names = DeviceNames(args.state)
-    Handler.layout = UiLayout(args.state)
+    Handler.layout = LayoutStore(args.state)
     Handler.wifi = Wifi(args.state, args.demo, Handler.netchoice, Handler.names, Handler.srtla)
     Handler.power = Power(args.state, args.demo, Handler.send)
     Handler.logmode = LogMode(args.state, args.demo)
+    Handler.btdriver = BtDriver(args.state, args.demo)
     Handler.logbundle = LogBundle(args.state, args.demo)
     Handler.developer = Developer(args.state, args.demo, args.bela_config or None)
     Handler.autostart = AutoStart(args.state, Handler.send, args.demo)
@@ -7260,6 +9986,8 @@ def main():
     Handler.cams.ipfn = Handler.netchoice.ip
     Handler.djisvc = DjiService(args.state, Handler.cams, args.rtmp_app, args.rtmp_port, args.demo)
     Handler.djisvc.pipeline = Handler.pipeline
+    Handler.ckeys = controller_keys.ControllerKeys(args.state, lambda fn: controller_action(fn, Handler.pipeline, Handler.cams, Handler.send), demo=args.demo)
+    Handler.ckeys.start()                                   # liest die Tasten gekoppelter Controller (Menü "Controller-Tasten")
     Handler.transfer = SettingsTransfer(args.state, Handler.cams, Handler.pipeline, Handler.srtla, Handler.autostart, Handler.names, Handler.djisvc,
                                         Handler.wifi, Handler.send, args.demo)
     def chat_sources():                                           # Quelladressen der gewählten Sendewege, in der Reihenfolge der Einstellung
@@ -7267,19 +9995,38 @@ def main():
         ips = {x["iface"]: x["ip"] for x in iface_ips() if x.get("ip")}
         return [ips[u] for u in ups if u in ips]
     Handler.chatpaths = ChatPaths(chat_sources)
-    Handler.transfer.layout, Handler.transfer.netchoice = Handler.layout, Handler.netchoice
+    Handler.transfer.netchoice = Handler.netchoice
+    if not args.demo:
+        mem = IfaceMemory(os.path.join(args.state, "iface-macs.json"))
+        try:
+            mem.reconcile(Handler.srtla, Handler.netchoice, Handler.cams, Handler.wifi, Handler.names)          # gleich beim Start, bevor jemand sendet
+        except Exception as e:
+            print("iface_macs:", type(e).__name__, flush=True)
+        threading.Thread(target=mem.run, args=(Handler.srtla, Handler.netchoice, Handler.cams, Handler.wifi, Handler.names), daemon=True).start()
     Handler.twitch = TwitchNotifier(TwitchStore(os.path.join(args.state, "twitch.json")), Handler.djisvc, Handler.cams, Handler.send, chat=TwitchChat(paths=Handler.chatpaths), demo=args.demo)
+    Handler.sysalerts = SysAlerts(os.path.join(args.state, "sysalerts.json"), Handler.twitch, Handler.sampler, demo=args.demo)       # Systemwarnungen im Twitch-Chat (gleicher Bot wie die Akku-Warnung)
     Handler.twitchlogin = TwitchLogin(os.path.join(args.state, "twitch-login.json"), demo=args.demo, paths=Handler.chatpaths)
     Handler.twitch.store.account = Handler.twitchlogin                                # angemeldetes Konto ersetzt Bot-Konto und Token von Hand
+    Handler.twitchbot = TwitchBotLogin(os.path.join(args.state, "twitch-bot-login.json"), demo=args.demo, paths=Handler.chatpaths)
+    Handler.twitchsessions = ModSessions(args.state, demo=args.demo, paths=Handler.chatpaths)         # eigene Anmeldungen der Moderatoren, je Browser
+    Handler.twitchaccounts = TwitchAccounts(Handler.twitchlogin, Handler.twitchsessions, store=Handler.twitch.store)             # (check folgt, sobald chatmod da ist)
+    Handler.twitch.store.bot = Handler.twitchbot                                      # angemeldetes Bot-Konto schreibt die Akku-Meldung (nur sie)
     if not args.demo:
         threading.Thread(target=Handler.twitchlogin.keep, daemon=True).start()
+        threading.Thread(target=Handler.twitchbot.keep, daemon=True).start()
     Handler.chatreader = TwitchReader(Handler.twitch.store, demo=args.demo, paths=Handler.chatpaths)
     Handler.chatmod = TwitchMod(Handler.twitch.store, Handler.twitchlogin, paths=Handler.chatpaths, demo=args.demo, demo_reader=Handler.chatreader if args.demo else None)
-    Handler.chatsender = TwitchSender(Handler.twitch.store, chat=TwitchChat(paths=Handler.chatpaths), demo_reader=Handler.chatreader if args.demo else None, mod=Handler.chatmod)       # liest den Kanal der Twitch-Karte (dieselben Einstellungen)
+    Handler.chathelix = HelixChat(Handler.twitchlogin, Handler.chatmod)
+    Handler.chatsender = TwitchSender(Handler.twitch.store, chat=TwitchChat(paths=Handler.chatpaths), demo_reader=Handler.chatreader if args.demo else None, mod=Handler.chatmod, helix=Handler.chathelix)
+    Handler.twitchaccounts.check = Handler.chatmod.is_moderator                                          # ob ein angemeldeter Moderator im Kanal wirklich einer ist
+    Handler.chatevents = TwitchEvents(Handler.twitch.store, Handler.twitchlogin, Handler.chatmod, Handler.chatreader, paths=Handler.chatpaths)
+    if not args.demo:
+        Handler.chatreader.events = Handler.chatevents       # liest den Kanal der Twitch-Karte (dieselben Einstellungen)
     Handler.hdmi = HdmiService(args.state, Handler.cams, args.demo)
     Handler.transfer.hdmi, Handler.transfer.twitch = Handler.hdmi, Handler.twitch.store
     if not args.demo:
         threading.Thread(target=Handler.twitch.run, daemon=True).start()
+        threading.Thread(target=Handler.sysalerts.run, daemon=True).start()
 
     def watcher():
         while True:
@@ -7290,6 +10037,8 @@ def main():
             time.sleep(3)
     threading.Thread(target=watcher, daemon=True).start()
     Handler.uiaccess = UiAccess(os.path.join(args.state, "ui-access.json"), demo=args.demo)
+    Handler.previewaccess = PreviewAccess(os.path.join(args.state, "preview-access.json"), demo=args.demo)
+    Handler.netaddr = ExtraAddress(args.state, demo=args.demo)
     LimitedHTTPServer.ui_access = Handler.uiaccess
     LimitedHTTPServer.allow_public = args.allow_public
     srv = LimitedHTTPServer((args.host, args.port), Handler)

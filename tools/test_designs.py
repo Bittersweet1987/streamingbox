@@ -41,7 +41,7 @@ class Designs(unittest.TestCase):
             self.assertIn('html[data-design="%s"][data-theme=' % d, PAGE)                          # hell und dunkel
             self.assertIn(':root[data-design="%s"]' % d, LOGIN)                                    # auch die Anmeldeseite
         self.assertIn('{id:"",name:"Standard"', script)                                            # Standard = bisheriges Aussehen, kein Attribut
-        self.assertIn('localStorage.getItem(KEY)', script)
+        self.assertIn("window.pbViews.setDesign(id)", script)                                      # die Wahl gilt je Ansicht (Desktop oder Mobil), gespeichert auf der Box
         self.assertNotIn("kontrast", PAGE.lower())                                                 # das Design "Kontrast" gibt es nicht mehr
         self.assertNotIn("kontrast", LOGIN.lower())
 

@@ -248,6 +248,39 @@ class SeamlessSwapSender(PrepareWithFailover):
         self.assertEqual(st["swap"], {"cams": ["cam-m", "cam-p", "cam-q"], "group": 2})
         self.assertTrue(st["delay_live"] and st["delay_live_pips"])
 
+    def _live_sender(self, **cfg_over):
+        cfg = {"type": "pip", "main": "cam-m", "pip": "cam-p", "corner": 3, "size_pct": 25, "audio": "main", "always_ready": True,
+               "main_delay_ms": 450, "pip_delay_ms": 2560, "pip2_delay_ms": 0, "pip3_delay_ms": 0}
+        cfg.update(cfg_over)
+        plan = {"cfg": cfg, "layout": ("cam-m", "cam-p"), "auto": False, "always": True, "always_note": None, "sig": {}}
+        with mock.patch.object(ps.pipbox_live, "supported", lambda: True):
+            return ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+
+    def test_status_publishes_the_buffer_that_belacoder_is_started_with(self):
+        """status.json nennt den Ausrichtungspuffer der laufenden Sendekette; er ist genau der Wert von belacoder -A (eine Quelle, zwei Verwendungen)."""
+        import json
+        s = self._live_sender()
+        self.assertTrue(s.live)
+        run_dir = os.path.join(self.tmp, "run")
+        with mock.patch.object(ps, "RUN", run_dir), mock.patch.object(ps, "STATUS", os.path.join(run_dir, "status.json")):
+            s.write_status()
+            st = json.load(open(os.path.join(run_dir, "status.json")))
+        args = s.args("belacoder")
+        self.assertEqual(st["buffer_ms"], 1050)                                    # 2560 ms werden auf 750 begrenzt, plus 300 ms
+        self.assertEqual(str(st["buffer_ms"]), args[args.index("-A") + 1])
+        self.assertEqual(s.always.running_buffer, st["buffer_ms"])                 # der Regler benutzt denselben Startwert
+
+    def test_status_has_no_buffer_without_the_compositor_engine(self):
+        import json
+        plan = {"cfg": {}, "layout": (), "auto": False}
+        s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)
+        self.assertFalse(s.live)
+        run_dir = os.path.join(self.tmp, "run")
+        with mock.patch.object(ps, "RUN", run_dir), mock.patch.object(ps, "STATUS", os.path.join(run_dir, "status.json")):
+            s.write_status()
+            st = json.load(open(os.path.join(run_dir, "status.json")))
+        self.assertIsNone(st["buffer_ms"])
+
     def test_sync_keeps_the_swapped_picture_after_a_later_camera_failure(self):
         *_, plan = self.start()
         s = ps.Sender({"name": "T", "host": "h", "port": 1, "streamid": ""}, 2000, ["10.0.0.2"], plan)

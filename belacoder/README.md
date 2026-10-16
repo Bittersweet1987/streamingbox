@@ -2,6 +2,8 @@
 
 Fünf Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh`: `belacoder-jitter-tolerant.patch` (Bitraten-Regler), `belacoder-stall-output.patch` (Stall-Wächter, siehe unten) und `belacoder-stats.patch` (schreibt einmal je Sekunde Kennzahlen in eine JSON-Datei, wenn `BELACODER_STATS_FILE` gesetzt ist; für "Details" im Status). Der vierte, `belacoder-live-feeds.patch` (von Bittersweet1987, aus seinem Projekt `streamingbox`, mit der Steuerung `pipbox_live.py` des Pakets), fügt Kamera-Zweige `sbf0` bis `sbf7` hinzu, die im laufenden Betrieb gestartet und gestoppt werden, einen Steuerkanal (`-C`), eine Statistikdatei (`-S`) und einen Ausrichtungspuffer (`-A`). Er ist die Grundlage der Engine für "Alle Kameras immer bereit" (Kennung `-sb11`, mindestens `-sb10` nötig). Er steht wie belacoder unter GPL-3.0.
 
+Sechster Patch `belacoder-audio-eos.patch`: Das Ende einer Kamera (EOS, zum Beispiel das Handy hört auf zu senden) wird am letzten Puffer des Ton-Zweigs abgefangen und erreicht den Ton-Umschalter `asel` nicht. Der Umschalter gibt das EOS seines aktiven Pads sonst an Opus-Encoder und Muxer weiter, und dort ist es endgültig: Nach dem Ausfall der Hauptkamera blieb der Ton der ganzen Sendung weg (Testbox, 15. Oktober 2026; Bild und Ton standen in OBS). Abschaltbar mit `SB_FEED_AUDIO_EOS=0`.
+
 `belacoder-jitter-tolerant.patch` ändert die Funktion `update_bitrate()` in `belacoder.c` aus
 [BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Alle
 Patches stehen unter derselben Lizenz (GPL-3.0, nicht MIT wie der Rest dieses Pakets); der Quelltext des gebauten Programms ist:

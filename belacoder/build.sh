@@ -12,7 +12,7 @@ B=/var/tmp/pbbuild
 R=$B/root
 mkdir -p "$B/debs" "$R" "$OUT"
 if [ ! -f "$R/usr/include/gstreamer-1.0/gst/gst.h" ] || [ ! -f "$R/usr/include/gstreamer-1.0/gst/app/gstappsink.h" ]; then
-  (cd "$B/debs" && apt-get download libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libglib2.0-dev \
+  (cd "$B/debs" && apt-get -o APT::Sandbox::User=root download libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libglib2.0-dev \
     && for d in *.deb; do dpkg -x "$d" "$R"; done)
 fi
 [ -f /usr/include/srt/srt.h ] || { echo "FEHLER: /usr/include/srt/srt.h fehlt (Paket belabox-libsrt1)"; exit 1; }
@@ -28,9 +28,16 @@ patch -p1 --quiet < "$HERE/belacoder-stats.patch"
 patch -p1 --quiet < "$HERE/belacoder-live-feeds.patch"
 # Jedes Bild, das vergrößert wird, einmal in normalen Speicher kopieren (die Bilder des Hardware-Dekoders liegen in langsam lesbarem Speicher), Issue #35
 patch -p1 --quiet < "$HERE/belacoder-frame-copy.patch"
+# Beim Tausch der Größe eines Kamerabilds (Hauptbild wechseln) das "Neu verhandeln" nicht bis zum Hardware-Dekoder zurückgeben: Der Dekoder lieferte sonst etwa 1 s lang keine Bilder (Testbox, 14. Oktober 2026)
+patch -p1 --quiet < "$HERE/belacoder-no-reconfigure.patch"
+# Das Ende einer Kamera (EOS) erreicht den Ton-Umschalter nicht mehr: sonst war der Ton der ganzen Sendung nach einem Ausfall der Hauptkamera für immer weg (Testbox, 15. Oktober 2026)
+patch -p1 --quiet < "$HERE/belacoder-audio-eos.patch"
 DBG=""
 [ "${BELACODER_DEBUG:-0}" = 1 ] && DBG="-DDEBUG=1"
-gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12\" belacoder.c -o belacoder.new \
+# ACHTUNG Kennung: Die Engine (pipbox_live.py, engine_level) liest die Zahl hinter "-sb" als Fähigkeit des belacoder: ab 13 glaubt sie, das ganzflächige Hauptbild werde kopiert, und
+# nimmt einen größeren Puffer (1350 statt 1050 ms) und mehr Vorlauf für das Hauptbild (1000 statt 600 ms). Der Kopier-Patch kopiert aber nur VERGRÖSSERTE Bilder. Darum bleibt die Zahl 12;
+# neue Patches hängen einen Zusatz an ("-sb12-eos"), sie zählen nie hoch (Testbox, 15. Oktober 2026: mit "-sb13" Einbrüche beim Tausch des Hauptbilds auf 18,8 statt mindestens 27,8 Bilder/s).
+gcc -O2 -Wall $DBG -DVERSION=\"${COMMIT%${COMMIT#???????}}-jt2-sb12-eos\" belacoder.c -o belacoder.new \
   -I"$R/usr/include/gstreamer-1.0" -I"$R/usr/lib/aarch64-linux-gnu/gstreamer-1.0/include" \
   -I"$R/usr/include/glib-2.0" -I"$R/usr/lib/aarch64-linux-gnu/glib-2.0/include" -I/usr/include/srt \
   -l:libgstapp-1.0.so.0 -l:libgstbase-1.0.so.0 -l:libgstreamer-1.0.so.0 -l:libgobject-2.0.so.0 -l:libglib-2.0.so.0 -lsrt -ldl

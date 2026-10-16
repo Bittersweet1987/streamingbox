@@ -25,6 +25,10 @@ sys.path.insert(0, "/opt/pipbox")
 import server  # noqa: E402  (nur Prüf- und Erzeugungsfunktionen, startet nichts)
 import pipbox_always  # noqa: E402  (Zubringer und Auswahl im Modus "alle Kameras immer bereit")
 import pipbox_live  # noqa: E402  (Engine "immer bereit" mit Compositor und dynamischen Zweigen, Technik von streamingbox)
+try:
+    import pipbox_watch  # noqa: E402  (Wächter: erkennt Hänger von belacoder, sichert ein Diagnosepaket, startet neu)
+except ImportError:        # ein Update, das die Datei nicht mitbringt, darf die Sendung nie verhindern: dann gibt es nur keinen Wächter
+    pipbox_watch = None
 
 STATE = "/var/lib/pipbox"
 BELACODER = "/opt/pipbox/bin/belacoder"      # belacoder mit tolerantem Regler (belacoder/), sonst das Original aus dem Suchpfad
@@ -39,6 +43,13 @@ STATS_KEEP = 3000
 LISTEN_PORT = 9100
 VIEW_LIVE = False         # kann die gestartete Pipeline kleine Bilder ein-/ausblenden und stumm schalten (Ansicht im Betrieb)?
 AUDIO_LIVE = False        # und die Tonquelle wechseln (Ton-Umschalter)?
+SOFT_START_KBPS = 0           # Weicher Start AUS (Entscheidung des Nutzers, 13. Oktober 2026: er verlängerte den Start der Sendung deutlich). Mit 2000 startet belacoder mit dieser Bitrate (kbit/s) und behält sie als feste Bitrate (kleinste = größte), solange die Sendekette anläuft ...
+SOFT_FPS_MIN, SOFT_FPS_MAX, SOFT_STEADY = 15.0, 65.0, 1.25   # ... bis der Encoder SOFT_STABLE_S neue Sekunden hintereinander gleichmäßig Bilder liefert (nicht 4 bis 5 beim Anlauf, nicht 70 bis 90 beim Nachholen;
+SOFT_STABLE_S = 3             #     25, 30, 50 und 60 Bilder je Sekunde der Quelle zählen; "gleichmäßig": größter Wert höchstens SOFT_STEADY mal der kleinste) ...
+SOFT_FLOOR_S = 20.0           # ... dann darf der Regler steigen (rund 8 % je halbe Sekunde), und diese Zeit lang gilt die Startbitrate noch als Untergrenze: eine "starke Überlast" des Reglers wirft sie nicht auf 300 kbit/s
+SOFT_FILE_WAIT_S = 90.0       # so lange wartet der weiche Start auf die erste Kennzahlen-Datei (belacoder schreibt sie erst nach dem Aufbau der SRT-Verbindung; ohne Verbindung wartet er in einer Schleife) ...
+SOFT_DATA_WAIT_S = 60.0       # ... und danach so lange auf einen gleichmäßigen Bildfluss; zuletzt wird die Bitrate trotzdem freigegeben, damit sie nie dauerhaft gedeckelt bleibt
+BC_MIN_BPS = 300000           # kleinste Bitrate, die belacoder annimmt (MIN_BITRATE); darunter weist er die Datei ab
 DELAY_LIVE = False        # hat die gestartete Pipeline den Steuerbaustein pbctl?
 DELAY_LIVE_PIPS = False   # und kann er auch die kleinen Bilder verzögern?
 SWAP_BASE = None          # Tausch ohne Neustart: {"cams": [...], "group": n} der gestarteten Pipeline, sonst None
@@ -357,6 +368,8 @@ def prepare():
 class Sender:
     def __init__(self, sv, lat, ips, plan=None):
         self.sv, self.lat, self.ips = sv, lat, ips
+        self.bitrate_full = None                       # (kleinste, größte) Bitrate in bit/s aus der Einstellung, für den weichen Start
+        self.soft_lock = threading.Lock()
         plan = plan or {"cfg": {}, "layout": (), "auto": False}
         self.plan = plan
         self.fo = Failover(plan["cfg"], plan["layout"]) if plan["auto"] else None
@@ -367,7 +380,8 @@ class Sender:
         if self.live:
             self.always = pipbox_live.LiveController(
                 load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file, state_dir=STATE,
-                safe_cfg=server.PipelineStore._safe_cfg, view_values=server.PipelineStore.view_values, log=lambda m: print(m, flush=True))
+                safe_cfg=server.PipelineStore._safe_cfg, view_values=server.PipelineStore.view_values, log=lambda m: print(m, flush=True),
+                start_cfg=plan["cfg"])                 # Puffer und Verzögerungen vom Start (dieselben Werte wie belacoder -A)
         elif plan.get("always"):
             self.always = pipbox_always.Controller(
                 load_json=lambda name: load_json(f"{STATE}/{name}"), put_state_file=put_state_file,
@@ -383,6 +397,9 @@ class Sender:
         self.stats = collections.deque(maxlen=STATS_KEEP)    # (Zeit, Zeile)
         self.events = collections.deque(maxlen=120)          # Ereigniszeilen von belacoder (nur feste Meldungen ohne Adressen und Schlüssel)
         self.links = collections.deque(maxlen=300)           # Zustandszeilen der Wegewahl (srtla_send "links: ...")
+        self.watch = pipbox_watch.HangWatch() if pipbox_watch else None
+        self.hang_n = 0
+        self._hang_t = 0.0
         self.stop_ev = threading.Event()
         self.procs = {}
         self.lock = threading.Lock()
@@ -406,15 +423,165 @@ class Sender:
                     print(f"send: {msg}", flush=True)      # Grund des Encoder-Endes im Journal (nur dieser feste Text)
                 return
 
+    @staticmethod
+    def soft_rate(mn, mx):
+        """Startbitrate (bit/s) für den weichen Start oder None, wenn er nichts bringt (die größte Bitrate liegt nicht über der Startbitrate). Nie unter der kleinsten Bitrate.
+        Gemessen auf der Testbox (13. Oktober 2026): Start bei 12 Mbit/s, kurz nach dem Anlauf "starke Überlast" des Reglers und Absturz auf 0,3 bis 0,8 Mbit/s, erst nach 27 s wieder oben."""
+        if SOFT_START_KBPS <= 0 or int(mn) < BC_MIN_BPS:
+            return None                          # belacoder weist so eine Datei ab; dann bleibt es beim bisherigen Verhalten (er meldet den Fehler), statt dass der weiche Start ihn verdeckt
+        start = max(int(mn), SOFT_START_KBPS * 1000)
+        return start if start < int(mx) else None
+
+    def soft_start_begin(self):
+        """Vor dem Start von belacoder: die Bitrate-Datei bekommt als kleinste und größte Bitrate die Startbitrate (feste Bitrate). Die echten Werte stehen vorher in der Datei (aus prepare)
+        und werden gemerkt. Gibt die Startbitrate zurück, sonst None."""
+        try:
+            with self.soft_lock:
+                with open(f"{WORK}/bitrate") as f:
+                    a, b = f.read().split()[:2]
+                if self.bitrate_full is None:
+                    self.bitrate_full = (int(a), int(b))
+                mn, mx = self.bitrate_full
+                start = self.soft_rate(mn, mx)
+                if start is None:
+                    return None
+                self.write_bitrate(start, start)
+                return start
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def write_bitrate(mn, mx):
+        """Atomar (belacoder liest die Datei beim Start und bei SIGHUP): erst eine Nebendatei, dann umbenennen."""
+        tmp = f"{WORK}/bitrate.tmp"
+        with open(tmp, "w") as f:
+            f.write(f"{int(mn)}\n{int(mx)}")
+        os.replace(tmp, f"{WORK}/bitrate")
+
+    @staticmethod
+    def hup_ready(p):
+        """Hat der Prozess für SIGHUP schon eine Funktion eingetragen (belacoder tut das erst nach dem Aufbau der Pipeline, bei vier Kameras dauert das einige Sekunden)? Sonst beendet das Signal ihn.
+        Maske SigCgt in /proc/<pid>/status, Bit 0 = SIGHUP. Ist sie nicht lesbar (kein Linux, Prozess weg), gilt "bereit"."""
+        pid = getattr(p, "pid", None)
+        if not pid:
+            return True
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    key, _, val = line.partition(":")
+                    if key.lower() == "sigcgt":
+                        return bool(int(val.split()[0], 16) & 1)
+        except (OSError, ValueError, IndexError):
+            pass
+        return True
+
+    def bc_stats(self, t0):
+        """Kennzahlen dieses belacoder (gestartet um t0) aus seiner Datei (einmal je Sekunde; eine ältere Datei vom vorigen Lauf zählt nicht), sonst None."""
+        try:
+            with open(BC_STATS) as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) and int(d.get("time") or 0) >= int(t0) else None
+        except (OSError, ValueError, TypeError, OverflowError):
+            return None
+
+    def soft_alive(self, p):
+        return p.poll() is None and self.procs.get("belacoder") is p and not self.stop_ev.is_set()
+
+    @staticmethod
+    def soft_steady(win):
+        """Drei Werte (Bilder je Sekunde) hintereinander: alle im zulässigen Bereich und gleichmäßig."""
+        return len(win) >= SOFT_STABLE_S and min(win) >= SOFT_FPS_MIN and max(win) <= SOFT_FPS_MAX and max(win) <= SOFT_STEADY * min(win)
+
+    def soft_start_wait(self, p, t0):
+        """Wartet, bis der Encoder SOFT_STABLE_S neue Sekunden hintereinander gleichmäßig Bilder liefert. Die Fristen laufen erst ab der ersten frischen Kennzahlen-Datei (SOFT_DATA_WAIT_S), vorher
+        gilt die längere SOFT_FILE_WAIT_S. Gemessen auf der Testbox (13. Oktober 2026): beim Anlauf 4 bis 5 Bilder je Sekunde für bis zu 12 s, in der Zeit hob der Regler die Bitrate auf 7,5 Mbit/s an,
+        dann holte die Kette mit 70 bis 90 Bildern je Sekunde nach: Spitze von 17 bis 30 Mbit/s und "Überlast"."""
+        seen, win, pre, post = None, [], 0, 0
+        while self.soft_alive(p):
+            d = self.bc_stats(t0)
+            if d is None:
+                pre += 1
+                if pre * 0.5 >= SOFT_FILE_WAIT_S:
+                    return
+            else:
+                post += 1
+                if post * 0.5 >= SOFT_DATA_WAIT_S:
+                    return
+                t = d.get("time")
+                if t != seen:                                                   # nur neue Sekunden zählen
+                    win = win[-(SOFT_STABLE_S - 1):] if (seen is not None and isinstance(t, (int, float)) and 0 < t - seen <= 2) else []
+                    seen = t
+                    try:
+                        win.append(float(d.get("fps") or 0))
+                    except (TypeError, ValueError):
+                        win = []
+                    if self.soft_steady(win):
+                        return
+            if self.stop_ev.wait(0.5):
+                return
+
+    def soft_start_run(self, p, start, t0):
+        """Zeitplan des weichen Starts, im eigenen Thread: warten auf den gleichmäßigen Bildfluss, dann Phase 1 (die Bitrate darf steigen) und nach SOFT_FLOOR_S Phase 2 (auch die Untergrenze ist wieder die
+        echte). Ein unerwarteter Fehler gibt die Bitrate frei, statt sie bei der Startbitrate zu lassen."""
+        try:
+            self.soft_start_wait(p, t0)
+            if not self.soft_alive(p):
+                return
+            self.soft_start_phase(p, 1, start)
+            if self.stop_ev.wait(SOFT_FLOOR_S) or not self.soft_alive(p):
+                return
+            self.soft_start_phase(p, 2, start)
+        except Exception as e:
+            print(f"send: Weicher Start: Fehler im Zeitplan ({type(e).__name__}), die Bitrate wird freigegeben", flush=True)
+            try:
+                self.soft_start_phase(p, 1, start)
+                self.soft_start_phase(p, 2, start)
+            except Exception:
+                pass
+
+    def soft_start_phase(self, p, phase, start):
+        """Phase 1: kleinste Bitrate bleibt die Startbitrate, die größte ist die echte; Phase 2: auch die kleinste ist die echte. Danach liest belacoder die Datei neu (SIGHUP, so wie es auch die
+        BELABOX-Oberfläche bei geänderten Einstellungen tut), erst wenn er das Signal kennt (höchstens 20 s Wartezeit; sonst bekäme er es nicht und würde beendet). Läuft der Prozess nicht mehr oder
+        ist es ein neuerer, bleibt es bei der Datei."""
+        mn, mx = self.bitrate_full or (None, None)
+        if mx is None:
+            return
+        try:
+            waited, ready = 0.0, self.hup_ready(p)
+            while p.poll() is None and not ready and waited < 20.0 and not self.stop_ev.is_set():
+                self.stop_ev.wait(0.5)
+                waited += 0.5
+                ready = self.hup_ready(p)
+            with self.soft_lock:                                    # Prüfung und Schreiben zusammen: ein Neustart von belacoder schreibt dazwischen nicht die Datei des Weichstarts
+                if not self.soft_alive(p):
+                    return
+                self.write_bitrate(start if phase == 1 else mn, mx)
+            if ready:
+                p.send_signal(signal.SIGHUP)
+                if phase == 1:
+                    print(f"send: Weicher Start: Bitrate darf steigen (Untergrenze {start // 1000} kbit/s)", flush=True)
+                else:
+                    print(f"send: Weicher Start beendet, Bitrate {mn // 1000} bis {mx // 1000} kbit/s", flush=True)
+            else:
+                print("send: Weicher Start: belacoder kennt das Signal nach 20 s noch nicht, die Bitrate bleibt bis zum nächsten Start bei der Startbitrate", flush=True)
+        except (OSError, ValueError):
+            pass
+
     def spawn(self, name, args, env=None):
         # Python ignoriert SIGPIPE und setzt es im Kindprozess standardmäßig zurück (restore_signals=True). Gemessen: Jedes Code -13
         # des Encoders folgte 1 s auf einen Kamera-Rauswurf durch nginx, danach lehnte der Empfänger den schnellen Wiederanlauf ab
         # (ca. 4 s länger Ausfall); nach einem Code 0 nie. Vermutlich schreibt librtmp beim Schließen noch einmal in den toten Socket.
         # Bleibt SIGPIPE ignoriert (wie in diesem Dienst), endet belacoder über den normalen Fehlerweg (Code 0, SRT-Abmeldung).
+        soft = self.soft_start_begin() if name == "belacoder" else None
+        t0 = time.time()
         p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              errors="replace", env=env, restore_signals=(name != "belacoder"))
         with self.lock:
             self.procs[name] = p
+        if soft:
+            threading.Thread(target=self.soft_start_run, args=(p, soft, t0), daemon=True).start()
+        if name == "belacoder" and self.watch is not None:
+            self.watch.started_now()
         if name == "belacoder" and self.live and self.always is not None:
             self.always.on_restart()                  # der neue belacoder kennt die Live-Befehle des alten nicht
         threading.Thread(target=self.pump, args=(name, p), daemon=True).start()
@@ -482,7 +649,8 @@ class Sender:
                     "restarts": dict(self.restarts), "last": self.last, "last_age": int(time.time() - self.last_at) if self.last_at else None, "time": int(time.time()),
                     "delay_live": DELAY_LIVE, "delay_live_pips": DELAY_LIVE_PIPS, "swap": SWAP_BASE,
                     "view_live": VIEW_LIVE, "audio_live": AUDIO_LIVE,
-                    "applied": self.plan.get("sig"), "always_note": self.plan.get("always_note")}
+                    "applied": self.plan.get("sig"), "always_note": self.plan.get("always_note"), "hang_restarts": self.hang_n,
+                    "buffer_ms": pipbox_live.buffer_ms(server.PipelineStore._safe_cfg(self.plan["cfg"])) if self.live else None}      # Ausrichtungspuffer der laufenden Sendekette (belacoder -A)
         if self.always is not None:
             keys = configured_keys(self.plan["cfg"])
             st = self.always_state or {}
@@ -633,12 +801,75 @@ class Sender:
                     self.sync_swap_base()
                 except Exception as e:                  # die Auswahl darf die Übertragung nie beenden
                     print(f"send: Kameraauswahl: Fehler {type(e).__name__}", flush=True)
+                try:
+                    self.hang_check(env)
+                except Exception as e:                  # der Wächter darf die Übertragung nie beenden
+                    print(f"send: Wächter: Fehler {type(e).__name__}", flush=True)
                 if time.monotonic() - getattr(self, "_slow_t", 0) >= 2:
                     self._slow_t = time.monotonic()
                     self.write_status()
                     self.flush_stats()
                 self.stop_ev.wait(0.5)
         self.shutdown()
+
+    def hang_check(self, env):
+        """Wächter (Issue #51): steht belacoder still oder liefert eine sendende Kamera keine Bilder mehr, wird ein Diagnosepaket gesichert und belacoder neu gestartet.
+        Höchstens einmal je Sekunde geprüft, nur im Modus "alle Kameras immer bereit" mit Compositor (nur dort gibt es die Statistikdatei)."""
+        if self.watch is None or not (self.live and self.always is not None) or time.monotonic() - self._hang_t < 1.0:
+            return
+        self._hang_t = time.monotonic()
+        p = self.procs.get("belacoder")
+        if p is None or p.poll() is not None:
+            return
+        try:
+            mt = os.stat(pipbox_live.LIVE_STATS).st_mtime
+        except OSError:
+            mt = None
+        try:
+            with open(pipbox_live.LIVE_STATS, errors="replace") as f:
+                text = f.read(12000)
+        except OSError:
+            text = ""
+        a = self.always
+        expected = {}
+        for slot, key in enumerate(a.binder.slot_key):
+            info = a.pub.get(key) if key else None
+            if info and info.get("w", 0) > 0 and a.states.get(slot) == 3 and not (key in a.inactive and key != a.desired[0]):
+                expected[slot] = True
+        hit = self.watch.check(mt, text.split("\n", 1)[0], expected, pipbox_watch.d_state_threads(p.pid))
+        if hit is None:
+            return
+        soft = self.watch.soft_ok(hit)
+        if not soft and not self.watch.allow():
+            return
+        slots = []
+        for slot, key in enumerate(a.binder.slot_key):
+            info = a.pub.get(key) if key else None
+            slots.append((slot, ("Bild %dx%d, Ton %s" % (info.get("w", 0), info.get("h", 0), "ja" if info.get("audio") else "nein")) if info else "sendet nicht", a.states.get(slot, "?")))
+        report = pipbox_watch.build_report(hit, p.pid, time.monotonic() - (self.watch.started or time.monotonic()), text,
+                                           [f"{t} {e}" for t, e in list(self.events)], slots)
+        saved = pipbox_watch.write_report(STATE, report)
+        if soft:
+            # Ein einzelner Zweig ohne Bilder, die anderen laufen: nur seinen Zweig zurücksetzen. Der Regler startet ihn wieder, sobald er gestoppt ist und nginx die Kamera zeigt.
+            self.watch.soft_done(hit["slot"])
+            print(f"send: Hänger erkannt ({hit['text']}); Diagnosepaket {'gesichert (hang-diagnose.txt)' if saved else 'nicht speicherbar'}, nur dieser Zweig wird zurückgesetzt", flush=True)
+            try:
+                a.control([" ".join(("feed", "sbf%d", "off")) % hit["slot"]])      # Steuerbefehl an belacoder (kein Anzeigetext)
+            except OSError as e:
+                print(f"send: Zweig konnte nicht zurückgesetzt werden ({type(e).__name__})", flush=True)
+            return
+        self.watch.acted_now()
+        self.hang_n += 1
+        print(f"send: Hänger erkannt ({hit['text']}); Diagnosepaket {'gesichert (hang-diagnose.txt)' if saved else 'nicht speicherbar'}, belacoder wird neu gestartet", flush=True)
+        try:
+            if hit["kind"] != "feed":
+                p.kill()                       # steht belacoder, nimmt er SIGTERM nicht mehr an
+            self.stop_proc("belacoder")
+            self.spawn("belacoder", self.args("belacoder"), env=env)
+            with self.lock:
+                self.state = "running"
+        except OSError as e:
+            print(f"send: Neustart nach Hänger nicht möglich ({type(e).__name__})", flush=True)
 
     def sync_swap_base(self):
         """Die Kameras je Platz (für die Verzögerungsdatei der Oberfläche) im Zustand der Sendekette führen: sie können sich im Betrieb ändern."""

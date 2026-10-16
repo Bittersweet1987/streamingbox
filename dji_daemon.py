@@ -38,6 +38,8 @@ except ImportError:  # Protokoll und Befehle lassen sich auch ohne bleak testen
     BleakClient = BleakScanner = None
 
 import dji
+import controllers
+import phone_battery
 
 LISTEN_HOST, LISTEN_PORT = "127.0.0.1", 9101
 RTMP_PORT = 1935
@@ -184,8 +186,11 @@ ACTION2_NAME = "Osmo Action 2"                     # Fernsteuerung klappt laut M
 # int32 Little Endian), derselbe Verlauf: aus dem Akku etwa -600 bis -770 mA, beim Anstecken kurz um 0 (-54), am Kabel positiv (+700 bis +4400 mA; die Kamera
 # lädt dann). Dieselbe Schwelle (-100 mA) trennt beides. Je Modell nur ein Versuch; beim Abziehen wechselten außerdem Byte 28 (0x60 -> 0x20) und Byte 32
 # (2 -> 0, beim Anstecken 1, dann 2), das wird hier nicht benutzt.
+# Osmo Pocket 3 (10. Okt 2026, im Modus "Nur Akkustand", die Kamera sendet selbst per RTMP; Kabel einmal abgezogen und wieder angesteckt, Journal der Box):
+# dieselbe Stelle (Bytes 5 bis 8, int32 Little Endian): am Kabel bei vollem Akku 0 bis +1 mA, abgezogen -433 bis -552 mA (Bytes 1 bis 2 = Spannung, etwa 4120 bis 4150 mV).
+# Gemessen nur bei 100 % Akku; echtes Laden (positiver Strom) bei niedrigerem Stand wurde bei dieser Kamera nicht beobachtet.
 # Für andere Modelle (auch die Osmo 360, die ebenfalls "action5" heißt) ist es nicht bekannt: dort bleibt "lädt" unbekannt (None), nie geraten.
-POWER_FROM_CURRENT = {"action4": (5, -100), "action5": (5, -100), "action6": (5, -100)}      # (Byte der Stromangabe, Schwelle in mA): darüber hängt die Kamera am Strom (lädt oder wird versorgt)
+POWER_FROM_CURRENT = {"action4": (5, -100), "action5": (5, -100), "action6": (5, -100), "pocket3": (5, -100)}      # (Byte der Stromangabe, Schwelle in mA): darüber hängt die Kamera am Strom (lädt oder wird versorgt)
 POWER_NOT_KNOWN_MODELS = ("360",)                # Namensteile von Modellen, für die die Stelle nicht gemessen wurde (teilen sich die Art mit einem bekannten)
 
 
@@ -321,7 +326,7 @@ def nm_wifi_options():
         mode = run(["nmcli", "-g", "802-11-wireless.mode", "connection", "show", conn])
         psk = run(["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn])
         secured = bool(run(["nmcli", "-g", "802-11-wireless-security.key-mgmt", "connection", "show", conn]))
-        if mode == "ap" and secured and not psk and conn == "pipbox-hotspot-" + ifname:
+        if mode == "ap" and secured and not psk and conn.startswith("pipbox-hotspot-"):
             psk = hotspot_password(ifname, ssid)
         ip = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", ifname]).split("/")[0].split("\n")[0]
         if not ssid or not ip:
@@ -359,6 +364,18 @@ def preferred_adapter():
         return None
     names.sort(key=lambda n: (dji.usb_id_for_hci(n) == ONBOARD_USB_ID, int(n[3:])))
     return names[0]
+
+
+def adapter_address(hci):
+    """Bluetooth-Adresse des Adapters hciN (für den RFCOMM-Anschluss, damit die Abfrage über denselben Adapter läuft), sonst None."""
+    if not hci:
+        return None
+    try:
+        with open(os.path.join(dji.SYSFS_BT, hci, "address")) as f:
+            a = f.read().strip().upper()
+        return a if MAC_RE.match(a) else None
+    except OSError:
+        return None
 
 
 async def bluez_cleanup(addr, remove=True):
@@ -426,11 +443,24 @@ class Camera:
     """Zustand und BLE-Sitzung einer eingerichteten Kamera."""
 
     AFTER_LINK_SECONDS = 90     # so lange nach dem Ende einer Verbindung gilt ein Fehlschlag beim Verbinden als "die Kamera erholt sich noch"
+    OLD_STREAM_WAIT_S = 25            # so lange wartet die Kamera vor "Start", bis nginx den alten Stream mit demselben Namen beendet hat (sonst: "already publishing", nginx hält ihn bis zu 15 s)
     RETRY_SCHEDULE = (8, 8, 15, 30)   # Sekunden bis zum nächsten Versuch nach dem 1., 2., 3. ... Fehlversuch (Suchen stört die stehenden Verbindungen)
     SEARCH_SECONDS = 15
     STREAM_CHECK_SECONDS = 5    # so oft wird geprüft, ob der Stream noch ankommt
     STREAM_LOST_SECONDS = 30    # so lange darf er fehlen, bevor die Sitzung neu beginnt
     CONNECT_SETTLE = 1.0     # so lange bleibt das Verbinden nach dem Aufbau noch gesperrt (dem Funkchip einen Moment geben)
+
+    @property
+    def manual_off(self):
+        """"Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden". Steht in der Konfiguration, gilt also auch nach einem Neustart des Dienstes oder der Box."""
+        return bool(self.cfg.get("manual_off"))
+
+    @manual_off.setter
+    def manual_off(self, value):
+        if value:
+            self.cfg["manual_off"] = True
+        else:
+            self.cfg.pop("manual_off", None)
 
     def __init__(self, daemon, addr, cfg):
         self.daemon = daemon
@@ -445,12 +475,12 @@ class Camera:
         self._status_flips = {}       # Byte -> wie oft es sich geändert hat
         self.task = None
         self.stop_requested = False
-        self.manual_off = False      # "Trennen" wurde gedrückt: kein automatisches Wiederverbinden bis "Verbinden"
         self.last_seen = 0
         self.last_rx = 0
         self.fail_count = 0
         self.retry_at = 0
         self.wake = asyncio.Event()
+        self.switch_until = 0.0      # monotonic: bis dahin ist kein weiterer Wechsel möglich (SWITCH_LOCK_S)
         self.publishing = False      # die Kamera liefert ihren Stream (der Dienst prüft das), auch ohne Bluetooth
         self.force_cleanup = False   # "Verbinden" von Hand: erst einen hängenden BlueZ-Eintrag verwerfen
         self.typed_network = True
@@ -460,6 +490,7 @@ class Camera:
         self.link_ended = 0.0         # wann zuletzt eine Bluetooth-Verbindung zu dieser Kamera endete (danach nimmt sie etwa eine Minute lang keine neue an)
         self._reusing = False         # diese Sitzung nutzt eine Verbindung weiter, die BlueZ schon hält
         self.reuse_failed = False     # das Weiterverwenden hat nicht geklappt: der nächste Versuch räumt auf und verbindet neu
+        self._resume_sig = None       # Einstellungen des zuletzt gestarteten Streams; geht nur Bluetooth verloren, läuft er ungestört weiter (siehe _connect_and_stream)
         self.leaving = False          # der Dienst wird beendet: Sitzung ohne Stopp des Streams verlassen, Verbindung ordentlich trennen
 
     def locked(self):
@@ -472,10 +503,19 @@ class Camera:
         """Die Art (Stream oder nur Akku) lässt sich nur ändern, solange keine Sitzung läuft: die Sitzung hat sie beim Start gelesen."""
         return self.state not in ("idle", "error") or self.publishing
 
+    def switch_wait(self):
+        """Sekunden bis zum nächsten möglichen Wechsel (0 = jetzt). Ein Fehler hebt die Sperre auf: Eine Kamera, die nicht zurückgekommen ist, darf sofort erneut versucht werden."""
+        left = self.switch_until - time.monotonic()
+        return 0 if left <= 0 or self.state == "error" else int(left) + 1
+
     def set_state(self, state, detail=""):
         if state != self.state or detail != self.detail:
             log.info("%s: %s %s", self.addr, state, detail)
             self.state, self.detail = state, detail
+            if state == "streaming":
+                key = self.cfg.get("rtmp_key")
+                if key:
+                    self.daemon.feed_hold(key, 0)      # der neue Stream läuft: der Regler darf den Zweig wieder starten, sobald nginx die Kamera zeigt
 
     def public(self):
         c = dict(self.cfg)
@@ -488,9 +528,36 @@ class Camera:
         c.update({"addr": self.addr, "state": self.state, "detail": self.detail,
                   "battery": self.battery, "charging": self.charging,
                   "battery_age": int(time.time() - self.battery_at) if self.battery_at else None,
-                  "in_range": time.time() - self.last_seen < 30,
-                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked()})
+                  "in_range": time.time() - self.last_seen < 30, "manual_off": bool(self.manual_off),
+                  "retry_in": retry_in, "publishing": self.publishing, "locked": self.locked(), "mode_locked": self.mode_locked(),
+                  "switch_wait": self.switch_wait()})
         return c
+
+    def network_for_unreadable(self, o):
+        """WLAN-Name und Passwort für eine Verbindung der Box, deren Passwort der Dienst nicht aus NetworkManager lesen kann (Client-WLAN der Box).
+        Die Kamera muss dem Netz beitreten, in dem die Adresse der Box gilt. Beim Wechsel der Verbindung (zum Beispiel wlan1 -> wlan0) blieb früher der
+        zuletzt eingetragene Name stehen: die Kamera trat dem alten Netz bei und bekam die Adresse des neuen (12. Oktober 2026, Testbox: "wifi S23" mit Ziel 192.168.80.135).
+        Reihenfolge: 1. der eingetragene Name ist der des Netzes dieser Verbindung, 2. er wurde für diese Verbindung gewählt (zum Beispiel ein 2,4-GHz-Name des
+        Routers), 3. das gespeicherte Netz der Kamera mit dem Namen dieser Verbindung, 4. das zuletzt dort eingegebene Netz, 5. ältere Einstellung ohne Merker:
+        wie bisher der eingetragene Name, 6. sonst klare Meldung."""
+        cfg, ifname, want = self.cfg, o["ifname"], o["ssid"]
+        typed = cfg.get("ssid") and cfg.get("password")
+        if typed and cfg["ssid"] == want:
+            cfg["ssid_if"] = ifname
+            return cfg["ssid"], cfg["password"]
+        if typed and cfg.get("ssid_if") == ifname:
+            return cfg["ssid"], cfg["password"]
+        cands = [n for n in cfg.get("saved", []) if isinstance(n, dict) and n.get("ssid") == want and n.get("password")]
+        m = self.daemon.by_conn.get(ifname)
+        if not cands and isinstance(m, dict) and m.get("ssid") == want and m.get("password"):
+            cands = [m]
+        if cands:
+            cfg["ssid"], cfg["password"], cfg["ssid_if"] = cands[-1]["ssid"], cands[-1]["password"], ifname
+            return cfg["ssid"], cfg["password"]
+        if typed and not cfg.get("ssid_if"):
+            return cfg["ssid"], cfg["password"]
+        raise CameraError('Die Box ist über %s im WLAN "%s", dessen Passwort sich nicht aus NetworkManager lesen lässt. Die Kamera muss diesem Netz beitreten: '
+                          'Bitte in der DJI-Karte WLAN-Name und Passwort von Hand eintragen (oder ein gespeichertes Netz wählen).' % (ifname, want))
 
     def resolve_target(self):
         """SSID, Passwort und RTMP-Adresse aus der gewählten Verbindung ermitteln."""
@@ -511,11 +578,11 @@ class Camera:
         if ifname and ifname != "manual":
             for o in self.daemon.wifi_options():
                 if o["ifname"] == ifname:
-                    if o["type"] == "other" or o.get("secret_missing"):
-                        if o["type"] != "other" and not cfg.get("password"):
-                            raise CameraError("Das Passwort des WLANs %s lässt sich nicht aus NetworkManager lesen. "
-                                              "Bitte WLAN-Name und Passwort der Kamera von Hand eintragen." % o["ssid"])
+                    if o["type"] == "other":
                         ssid, pw, ip = cfg.get("ssid") or o["ssid"], cfg.get("password", ""), o["ip"]
+                    elif o.get("secret_missing"):
+                        ssid, pw = self.network_for_unreadable(o)
+                        ip = o["ip"]
                     else:
                         self.typed_network = False
                         ssid, pw, ip = o["ssid"], o["password"], o["ip"]
@@ -718,48 +785,76 @@ class Camera:
                 await self._status_only_loop(client, disconnected)
                 return
 
-            # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
-            self.set_state("preparing", "Stream wird vorbereitet")
-            await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
-            await wait_for(ID_STOP)
-            await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
-            await wait_for(ID_PREPARE)
-            if self.stop_requested:
-                return
+            async def setup_stream():
+                nonlocal ssid, password, rtmp_url
+                # 2. alten Stream aufräumen, vorbereiten, WLAN einrichten
+                self.set_state("preparing", "Stream wird vorbereitet")
+                await send(Message(T_STOP, ID_STOP, TY_STOP, STOP_PAYLOAD))
+                await wait_for(ID_STOP)
+                await send(Message(T_PREPARE, ID_PREPARE, TY_PREPARE, b"\x1a"))
+                await wait_for(ID_PREPARE)
+                if self.stop_requested:
+                    return False
 
-            if not cfg.get("status_only"):
-                # Netz, Passwort und Adresse jetzt noch einmal lesen: während des Suchens und Verbindens darf man sie ändern (siehe locked)
-                ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
-            self.set_state("wifi", ssid)
-            await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
-            resp = await wait_for(ID_WIFI, 30)
-            if resp.payload != bytes([0, 0]):
-                raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
-            if self.typed_network and ssid:
-                self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
-            if self.stop_requested:
-                return
+                if not cfg.get("status_only"):
+                    # Netz, Passwort und Adresse jetzt noch einmal lesen: während des Suchens und Verbindens darf man sie ändern (siehe locked)
+                    ssid, password, rtmp_url = await loop.run_in_executor(None, self.resolve_target)
+                self.set_state("wifi", ssid)
+                await send(Message(T_WIFI, ID_WIFI, TY_WIFI, pack_string(ssid) + pack_string(password)))
+                resp = await wait_for(ID_WIFI, 30)
+                if resp.payload != bytes([0, 0]):
+                    raise CameraError('Die Kamera konnte dem WLAN "%s" nicht beitreten (Name oder Passwort?)' % ssid)
+                if self.typed_network and ssid:
+                    self.daemon.remember_network(self, ssid, password)         # die Kamera hat das WLAN angenommen: merken
+                if self.stop_requested:
+                    return False
 
-            # 3. Bildstabilisierung bei den Modellen, die sie brauchen
-            if model_kind in CONFIGURE_KINDS:
-                self.set_state("configuring", "Bildstabilisierung wird eingestellt")
-                await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
-                                   build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
-                await wait_for(ID_CONFIGURE)
-            if self.stop_requested:
-                return
+                # 3. Bildstabilisierung bei den Modellen, die sie brauchen
+                if model_kind in CONFIGURE_KINDS:
+                    self.set_state("configuring", "Bildstabilisierung wird eingestellt")
+                    await send(Message(T_CONFIGURE, ID_CONFIGURE, TY_CONFIGURE,
+                                       build_configure_payload(model_kind, cfg.get("stabilization", "off"))))
+                    await wait_for(ID_CONFIGURE)
+                if self.stop_requested:
+                    return False
 
-            # 4. den RTMP-Stream starten
-            self.set_state("starting", "Stream wird gestartet")
-            payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
-                                          int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
-            await send(Message(T_START, ID_START, TY_START, payload))
-            if model_kind in NEW_PROTOCOL:
-                await send(Message(T_STOP, ID_STOP, TY_STOP, CONFIRM_PAYLOAD))
-            await wait_for(ID_START, 30)
-            self.set_state("streaming", rtmp_url)
-            self.fail_count = 0
-            self.reuse_failed = False
+                # 4. den RTMP-Stream starten
+                # Der alte Stream mit demselben Namen (die Kamera hat ihn beim Wechsel des Netzes nie geschlossen) bleibt bei nginx bis zu 15 s als "idle publisher" stehen; ein neuer
+                # Start in dieser Zeit wird mit "already publishing" abgelehnt und die Kamera kommt nicht zurück (12. Oktober 2026, Testbox). Darum erst starten, wenn er weg ist.
+                end = time.monotonic() + self.OLD_STREAM_WAIT_S
+                while time.monotonic() < end and not self.stop_requested:
+                    if (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is not True:
+                        break
+                    self.set_state("starting", "Wartet, bis der alte Stream beendet ist")
+                    await asyncio.sleep(1)
+                self.set_state("starting", "Stream wird gestartet")
+                payload = build_start_payload(model_kind, rtmp_url, cfg.get("resolution", "1080p"),
+                                              int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)))
+                await send(Message(T_START, ID_START, TY_START, payload))
+                if model_kind in NEW_PROTOCOL:
+                    await send(Message(T_STOP, ID_STOP, TY_STOP, CONFIRM_PAYLOAD))
+                await wait_for(ID_START, 30)
+                self.set_state("streaming", rtmp_url)
+                self.fail_count = 0
+                self.reuse_failed = False
+                return True
+
+            sig = (model_kind, rtmp_url, ssid, cfg.get("resolution", "1080p"), int(cfg.get("bitrate", 6000)), int(cfg.get("fps", 30)), cfg.get("stabilization", "off"))
+            # Ging eine laufende Sitzung nur durch einen Bluetooth-Verlust zu Ende, kommt der Stream der Kamera meist weiter an. Ihn mit "Stopp, Vorbereiten, Start"
+            # neu aufzubauen, unterbräche ihn grundlos (gemessen: 6 s Ausfall). Darum: kommt er an und sind die Einstellungen gleich geblieben, bleibt er unberührt.
+            resume = False
+            if self._resume_sig == sig:
+                resume = (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is True
+            if resume:
+                log.info("%s: Der Stream der Kamera läuft noch: Einrichtung übersprungen, nur die Verbindung wird wieder aufgenommen", self.addr)
+                self.set_state("streaming", rtmp_url)
+                self.fail_count = 0
+                self.reuse_failed = False
+            else:
+                self._resume_sig = None
+                if not await setup_stream():
+                    return
+                self._resume_sig = sig
 
             # 5. verbunden bleiben, bis gestoppt wird. Wächter: Der Stream muss weiter beim RTMP-Server ankommen. Geht nur die
             #    Bluetooth-Verbindung verloren, während der Stream noch ankommt, läuft er unverändert weiter (die frühere Version
@@ -788,8 +883,11 @@ class Camera:
                     last_check = now
                     publishing = await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)
                     if publishing is None and bt_lost:
-                        raise CameraError("Die Bluetooth-Verbindung ging verloren")     # ohne Statistik nicht zu beurteilen
-                    if publishing is None or publishing:
+                        # Ohne Statistik nicht zu beurteilen. Eine einzelne nicht lesbare Abfrage (kurze Last auf der Box, zum Beispiel durch apt-get update) darf einen gesunden
+                        # Stream nicht abbrechen: erst wenn sie so lange fehlt wie ein ausgebliebener Stream, endet die Sitzung (gemessen: sonst 6 s Ausfall).
+                        if now - last_ok > self.STREAM_LOST_SECONDS:
+                            raise CameraError("Die Bluetooth-Verbindung ging verloren")
+                    elif publishing is None or publishing:
                         last_ok = now
                         if bt_lost:
                             if time.time() - self.last_rx < 20:
@@ -798,8 +896,8 @@ class Camera:
                                 self.set_state("streaming", "Der Stream läuft, die Bluetooth-Verbindung ist getrennt")
                     elif now - last_ok > self.STREAM_LOST_SECONDS:
                         raise CameraError("Der Stream ist ausgefallen (Kamera außer Reichweite des WLANs?)")
-                if not bt_lost and now - self.last_rx > 180 and not (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)):
-                    raise CameraError("Die Bluetooth-Verbindung ging verloren")
+                if not bt_lost and now - self.last_rx > 180 and (await loop.run_in_executor(None, rtmp_publishing, key, self.daemon.stat_url)) is False:
+                    raise CameraError("Die Bluetooth-Verbindung ging verloren")             # nur bei einem wirklich ausbleibenden Stream; "nicht lesbar" (None) zählt nicht
 
             if self.stop_requested and client.is_connected and not bt_lost and not self.leaving:
                 self.set_state("stopping", "Stream wird beendet")
@@ -834,8 +932,10 @@ class Camera:
             try:
                 await self.session()
                 self.fail_count = 0
+                self._resume_sig = None
                 self.set_state("idle", "Getrennt")
             except asyncio.CancelledError:
+                self._resume_sig = None
                 self.set_state("idle")
                 raise
             except CameraError as e:
@@ -912,8 +1012,19 @@ class Camera:
             except Exception as e:
                 log.info("%s: Trennen beim Beenden fehlgeschlagen: %s", self.addr, e)
 
+    async def release_feed(self):
+        """Vor dem Beenden des Streams (Trennen, Neu verbinden, Wechsel des Netzes): den Zweig der Kamera aus der Sendekette nehmen lassen und kurz warten. Ein Zweig, dessen
+        Quelle mitten im Bild abbricht, hielt sonst alle Eingänge der Sendekette an (12. Oktober 2026, Testbox: 13 bis 25 s Stillstand, dann Neustart der Sendekette)."""
+        key = self.cfg.get("rtmp_key")
+        if not key or not (self.publishing or self.state in ("starting", "configuring", "streaming")):
+            return
+        if self.daemon.feed_hold(key, FEED_HOLD_S):
+            await asyncio.sleep(FEED_HOLD_WAIT_S)
+
     async def stop_session(self):
+        await self.release_feed()
         self.stop_requested = True
+        self._resume_sig = None                  # "Trennen" und "Neu verbinden" richten die Kamera immer von vorn ein
         self.wake.set()
         if self.running():
             try:
@@ -937,6 +1048,11 @@ class Camera:
 
 
 # ------------------------------------------------------------------ Dienst ---
+
+FEED_HOLD_FILE = "feed-hold.json"      # {"keys": {Schlüssel: Ablaufzeit}}: der Regler der Sendekette (pipbox_live) nimmt den Zweig dieser Kamera aus der Sendekette
+FEED_HOLD_S = 45                        # so lange gilt die Bitte höchstens (die Kamera meldet sich vorher mit "streaming" wieder und gibt sie frei)
+SWITCH_LOCK_S = 120                     # nach einem Wechsel (Neu verbinden einer laufenden Kamera) ist für diese Kamera zwei Minuten lang kein weiterer Wechsel möglich (Nutzerwunsch, 12. Oktober 2026)
+FEED_HOLD_WAIT_S = 4.5                  # Zeit für den Regler (Takt 1 s, 3 s Abkühlzeit je Zweig), den Zweig zu stoppen, bevor die Kamera ihren Stream beendet
 
 SETTINGS_ALLOWED = {"name": str, "wifi_ifname": str, "ssid": str, "password": str, "ip": str,
                     "resolution": str, "fps": int, "bitrate": int, "stabilization": str, "autoconnect": bool, "status_only": bool}
@@ -1045,6 +1161,10 @@ class Daemon:
         self.token = self._load_token()
         self._opts = (0.0, [])
         self._adapt = None
+        self.phones = phone_battery.Phones(state_dir, hci=preferred_adapter, adapter_mac=adapter_address,
+                                           busy=lambda: self.scanning, taken=lambda: list(self.cameras))
+        self.ctrl = controllers.Controllers(state_dir, hci=preferred_adapter,
+                                            taken=lambda: list(self.cameras) + list(self.phones.phones))
         self.load()
 
     # -- Dateien
@@ -1083,6 +1203,30 @@ class Daemon:
         if migrated:
             self.save()
 
+    def feed_hold(self, key, seconds):
+        """Den Zweig der Kamera `key` in der Sendekette für `seconds` Sekunden stoppen lassen (0 = freigeben). Der Regler liest die Datei jede Sekunde. Wahr, wenn sie
+        geschrieben wurde (ohne Sendekette ist sie harmlos)."""
+        path = os.path.join(self.state_dir, FEED_HOLD_FILE)
+        now = time.time()
+        keys = {k: t for k, t in (_read_json(path).get("keys") or {}).items()
+                if isinstance(k, str) and isinstance(t, (int, float)) and not isinstance(t, bool) and t > now}
+        if seconds > 0:
+            keys[key] = now + seconds
+        elif key not in keys:
+            return False                         # nichts zu tun, die Datei bleibt unberührt
+        else:
+            del keys[key]
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"keys": keys}, f)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+            return True
+        except OSError as e:
+            log.info("Zweig-Sperre nicht speicherbar: %s", e)
+            return False
+
     def pin_connection(self, cam):
         """Die gewählte Verbindung über ihre Hardware-Adresse festhalten (ein Name wie eth0 kann nach einem Neustart eine andere Karte meinen)."""
         name = cam.cfg.get("wifi_ifname")
@@ -1099,6 +1243,7 @@ class Daemon:
         saved = [n for n in cam.cfg.get("saved", []) if n["ssid"] != ssid]
         saved.append({"ssid": ssid, "password": password})
         cam.cfg["saved"] = saved[-20:]
+        cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")          # dieses WLAN gilt für die jetzt gewählte Verbindung
         self._note_connection(dict(cam.cfg, ssid=ssid, password=password))
         self.save()
 
@@ -1111,6 +1256,7 @@ class Daemon:
         if not m or cfg.get("ssid"):
             return False
         cfg["ssid"], cfg["password"] = m["ssid"], m["password"]
+        cfg["ssid_if"] = cfg.get("wifi_ifname")
         saved = [n for n in cfg.get("saved", []) if n["ssid"] != m["ssid"]]
         saved.append(dict(m))
         cfg["saved"] = saved[-20:]
@@ -1156,7 +1302,7 @@ class Daemon:
 
     def snapshot(self):
         return {"cameras": [c.public() for c in self.cameras.values()], "scan": self.scan_results,
-                "scanning": self.scanning, "scan_error": self.scan_error, "bleak": BleakScanner is not None}
+                "scanning": self.scanning, "scan_error": self.scan_error, "bleak": BleakScanner is not None, **self.phones.snapshot(), **self.ctrl.snapshot()}
 
     async def scan(self, seconds=8):
         self.scan_error = ""
@@ -1255,13 +1401,20 @@ class Daemon:
             self.pin_connection(cam)
             self.save()
             return {"ok": True, "key": cfg["rtmp_key"]}
+        if cmd in ("phone_pair", "phone_pair_stop", "phone_read", "phone_remove"):
+            return await self.handle_phone(cmd, req)
+        if cmd in ("ctrl_scan", "ctrl_pair", "ctrl_remove"):
+            return await self.handle_controller(cmd, req)
         addr = str(req.get("addr", "")).upper()
         cam = self.cameras.get(addr)
         if cam is None:
             return {"error": "Unbekannte Kamera"}
         if cmd == "update":
+            if "wifi_ifname" in req and req.get("wifi_ifname") != cam.cfg.get("wifi_ifname") and cam.switch_wait():
+                return {"error": "Die Kamera wechselt gerade. Der nächste Wechsel ist in %d Sekunden möglich." % cam.switch_wait()}
             if cam.mode_locked() and isinstance(req.get("status_only"), bool) and req["status_only"] != bool(cam.cfg.get("status_only")):
                 return {"error": "Der Modus lässt sich nicht ändern, solange die Kamera verbunden ist. Zuerst trennen."}
+            prev_if = cam.cfg.get("wifi_ifname")
             for k, t in SETTINGS_ALLOWED.items():
                 if k in req and isinstance(req[k], t) and not (t is int and isinstance(req[k], bool)):
                     if k == "password" and req[k] == "":
@@ -1270,9 +1423,12 @@ class Daemon:
             if "status_only" in req and isinstance(req["status_only"], bool):
                 self._apply_status_only(cam)
             if "wifi_ifname" in req:
+                if cam.cfg.get("wifi_ifname") != prev_if and cam.cfg.get("ssid") and "ssid" not in req:
+                    cam.cfg.setdefault("ssid_if", prev_if)             # der eingetragene Name gehörte zur bisherigen Verbindung
                 self.pin_connection(cam)
                 self.offer_connection_network(cam)
             if "ssid" in req or "password" in req:
+                cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")        # von Hand eingetragen: gilt für die gewählte Verbindung
                 self._note_connection(cam.cfg)
             self.sanitize(cam)
             if req.get("autoconnect") is True or req.get("status_only") is True:
@@ -1289,6 +1445,7 @@ class Daemon:
                 for n in cam.cfg.get("saved", []):
                     if n["ssid"] == ssid:
                         cam.cfg["ssid"], cam.cfg["password"] = n["ssid"], n["password"]
+                        cam.cfg["ssid_if"] = cam.cfg.get("wifi_ifname")
                         self._note_connection(cam.cfg)
             self.save()
             return {"ok": True}
@@ -1296,18 +1453,76 @@ class Daemon:
             await cam.stop()
             del self.cameras[addr]
             self.save()
+            await bluez_cleanup(addr, remove=True)           # wie bei Handys und Controllern: auch die Kopplung in BlueZ aufheben (sonst bleibt nach "Entfernen" und Zurücksetzen der Kamera ein alter Eintrag)
             return {"ok": True}
         if cmd == "connect":
             cam.start()                 # eine Verbindung jetzt; der Schalter "automatisch verbinden" bleibt unberührt
+            self.save()                 # "Trennen" gilt nicht mehr (auch nach einem Neustart)
             return {"ok": True}
         if cmd == "disconnect":
             await cam.stop()
             self.save()
             return {"ok": True}
         if cmd == "reconnect":
+            w = cam.switch_wait()
+            if w:
+                return {"error": "Die Kamera wechselt gerade. Der nächste Wechsel ist in %d Sekunden möglich." % w}
+            if cam.locked():                        # ein richtiger Wechsel (die Kamera sendet): ab jetzt zwei Minuten Ruhe
+                cam.switch_until = time.monotonic() + SWITCH_LOCK_S
             asyncio.ensure_future(cam.restart())    # sofort neu verbinden, ohne den Schalter anzufassen
             return {"ok": True}
         return {"error": "Unbekannter Befehl"}
+
+    async def handle_phone(self, cmd, req):
+        """Handys: koppeln (die Box ist zwei Minuten sichtbar), Akkustand jetzt lesen, Handy entfernen."""
+        if cmd == "phone_pair":
+            try:
+                await self.phones.start_pairing()
+            except phone_battery.PhoneError as e:
+                return {"error": str(e)}
+            return {"ok": True}
+        if cmd == "phone_pair_stop":
+            await self.phones.stop_pairing()
+            return {"ok": True}
+        addr = str(req.get("addr", ""))
+        if not MAC_RE.match(addr) or addr.upper() not in self.phones.phones:
+            return {"error": "Unbekanntes Handy"}
+        addr = addr.upper()
+        if cmd == "phone_read":
+            asyncio.ensure_future(self.phones.read(addr))
+            return {"ok": True}
+        self.phones.remove(addr)                  # phone_remove: aus der Liste nehmen und die Kopplung in BlueZ aufheben
+        await bluez_cleanup(addr, remove=True)
+        return {"ok": True}
+
+    async def handle_controller(self, cmd, req):
+        """Controller: in der Nähe suchen, ein Gerät aus der Liste koppeln, einen gekoppelten Controller entfernen."""
+        if cmd == "ctrl_scan":
+            try:
+                await self.ctrl.start_scan()
+            except controllers.ControllerError as e:
+                return {"error": str(e)}
+            return {"ok": True}
+        addr = str(req.get("addr", ""))
+        if not MAC_RE.match(addr):
+            return {"error": "Ungültige Geräteadresse"}
+        addr = addr.upper()
+        if cmd == "ctrl_pair":
+            if self.ctrl.pairing:
+                return {"error": "Es wird gerade ein anderes Gerät gekoppelt"}
+            asyncio.ensure_future(self._ctrl_pair(addr))      # dauert bis zu 40 s: im Hintergrund, die Oberfläche fragt den Zustand ab
+            return {"ok": True}
+        if addr not in self.ctrl.items:
+            return {"error": "Unbekannter Controller"}
+        self.ctrl.remove(addr)                                  # ctrl_remove: aus der Liste nehmen und die Kopplung in BlueZ aufheben
+        await bluez_cleanup(addr, remove=True)
+        return {"ok": True}
+
+    async def _ctrl_pair(self, addr):
+        try:
+            await self.ctrl.pair(addr)
+        except controllers.ControllerError as e:
+            self.ctrl.message = str(e)
 
     async def client(self, reader, writer):
         try:
@@ -1384,9 +1599,11 @@ class Daemon:
         log.info("bereit auf %s:%d, Kameras: %d", host, port, len(self.cameras))
         await asyncio.sleep(5)           # BlueZ nach dem Start kurz Zeit geben
         for cam in self.cameras.values():
-            if cam.cfg.get("autoconnect"):
+            if cam.cfg.get("autoconnect") and not cam.manual_off:      # eine mit "Trennen" ausgeschaltete Kamera bleibt auch nach dem Neustart aus
                 cam.start()
         asyncio.ensure_future(self.supervise())
+        asyncio.ensure_future(self.phones.run())
+        asyncio.ensure_future(self.ctrl.run())
         async with server:
             await server.serve_forever()
 

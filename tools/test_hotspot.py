@@ -145,14 +145,14 @@ class HelperHotspot(unittest.TestCase):
     def test_stop_disables_autostart_and_brings_it_down(self):
         self.names = ["pipbox-hotspot-wlan1"]
         nm = FakeNm()
-        with mock.patch.object(H, "nm", nm):
+        with mock.patch.object(H, "nm", nm), mock.patch.object(H, "wifi_devices", lambda: []):
             msg = H.do_hotspot_stop({"iface": "wlan1"})
         self.assertEqual(nm.calls[0], ("con", "modify", "id", "pipbox-hotspot-wlan1", "connection.autoconnect", "no"))
         self.assertEqual(nm.calls[1], ("con", "down", "id", "pipbox-hotspot-wlan1"))
         self.assertIn("beendet", msg)
 
     def test_stop_without_hotspot(self):
-        with mock.patch.object(H, "nm", FakeNm()), self.assertRaises(ValueError):
+        with mock.patch.object(H, "nm", FakeNm()), mock.patch.object(H, "wifi_devices", lambda: []), self.assertRaises(ValueError):
             H.do_hotspot_stop({"iface": "wlan1"})
 
     def test_camera_card_is_refused(self):
@@ -565,6 +565,200 @@ class LogsAndPage(unittest.TestCase):
         toggle = page[page.index("async function hsToggle("):page.index("async function hsSave(")]
         self.assertIn("if(!c.hotspot)", toggle)                                           # noch nie eingestellt: erst "Einstellen", nie ohne Passwort starten
         self.assertIn('{action:"hotspot_start",iface}', toggle)                           # Einschalten schickt nur die Karte: Werte kommen aus den gespeicherten
+
+
+class HotspotFollowsTheCard(unittest.TestCase):
+    """Der Hotspot bleibt auf seinem Stick, wenn die Namen wlan0, wlan1, wlan2 nach einem Neustart vertauscht sind (14. Oktober 2026: Das Profil hing am Namen
+    wlan1 und lief danach auf dem kleinen Stick statt auf dem Techkey)."""
+
+    MAC = {"wlan1": "aa:00:00:00:00:01", "wlan2": "aa:00:00:00:00:02"}
+
+    class Nm:
+        """nmcli nachgebaut mit Profilen {Name: {Eigenschaft: Wert}}; merkt sich Änderungen."""
+
+        def __init__(self, profiles):
+            self.profiles, self.calls = profiles, []
+
+        def __call__(self, *args, stdin=None, timeout=60):
+            self.calls.append(args)
+            out = ""
+            if args[:2] == ("-t", "-f") and args[3:5] == ("con", "show") and args[5] == "id":
+                p = self.profiles.get(args[6], {})
+                out = "\n".join("%s:%s" % (f, p.get(f, "")) for f in args[2].split(","))
+            elif args[:2] == ("con", "modify"):
+                p = self.profiles.setdefault(args[3], {})
+                kv = args[4:]
+                for i in range(0, len(kv), 2):
+                    if kv[i] == "connection.id":
+                        self.profiles[kv[i + 1]] = self.profiles.pop(args[3])
+                        break
+                    p[kv[i]] = kv[i + 1]
+            elif args[:2] == ("con", "delete"):
+                self.profiles.pop(args[3], None)
+            elif args[:2] == ("con", "add"):
+                self.profiles[args[args.index("con-name") + 1]] = {"connection.interface-name": args[args.index("ifname") + 1]}
+            return mock.Mock(returncode=0, stdout=out, stderr="")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.hs = os.path.join(self.d, "hotspot.json")
+        for patch in (mock.patch.multiple(H, HOTSPOT_FILE=self.hs, STATE=self.d),
+                      mock.patch.object(H, "hwaddr", lambda i: self.MAC.get(i, "")),
+                      mock.patch.object(H, "check_iface", lambda i: None),
+                      mock.patch.object(H, "wifi_caps", lambda i: {"ap": True, "2ghz": True, "5ghz": True}),
+                      mock.patch.object(H, "camera_iface", lambda: "")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def use(self, profiles, devices=()):
+        nm = self.Nm(profiles)
+        for patch in (mock.patch.object(H, "nm", nm),
+                      mock.patch.object(H, "connection_names", lambda: [[n, "802-11-wireless"] for n in nm.profiles]),
+                      mock.patch.object(H, "wifi_devices", lambda: list(devices))):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return nm
+
+    def test_new_hotspot_is_bound_to_the_hardware_address(self):
+        nm = self.use({})
+        H.do_hotspot_start({"iface": "wlan2", "ssid": "Box Netz", "password": "geheim1234", "band": "a", "channel": 36})
+        p = nm.profiles["pipbox-hotspot-wlan2"]
+        self.assertEqual(p["802-11-wireless.mac-address"], self.MAC["wlan2"])
+        self.assertEqual(p["connection.interface-name"], "")
+
+    def test_a_profile_of_another_card_with_the_same_name_is_kept(self):
+        nm = self.use({"pipbox-hotspot-wlan1": {"802-11-wireless.mac-address": self.MAC["wlan2"], "802-11-wireless.ssid": "Alt"}})
+        H.do_hotspot_start({"iface": "wlan1", "ssid": "Neu", "password": "geheim1234", "band": "bg", "channel": 6})
+        self.assertIn("pipbox-hotspot-wlan1", nm.profiles)                              # das alte Profil gehört der anderen Karte
+        self.assertEqual(nm.profiles["pipbox-hotspot-wlan1"]["802-11-wireless.ssid"], "Alt")
+        self.assertEqual(nm.profiles["pipbox-hotspot-wlan1-" + self.MAC["wlan1"].replace(":", "")]["802-11-wireless.mac-address"], self.MAC["wlan1"])
+
+    def test_hotspot_on_a_card_is_found_by_what_runs_there_not_by_its_name(self):
+        dev = [{"iface": "wlan1", "state": "connected", "connection": "pipbox-hotspot-wlan2"}]
+        self.use({"pipbox-hotspot-wlan2": {}}, dev)
+        self.assertTrue(H.hotspot_active("wlan1"))
+        self.assertFalse(H.hotspot_active("wlan2"))
+        self.assertEqual(H.hs_profile("wlan1"), "pipbox-hotspot-wlan2")
+
+    def test_stop_finds_the_profile_by_hardware_address(self):
+        nm = self.use({"pipbox-hotspot-alt": {"802-11-wireless.mac-address": self.MAC["wlan2"]}})
+        H.do_hotspot_stop({"iface": "wlan2"})
+        self.assertEqual(nm.calls[-1], ("con", "down", "id", "pipbox-hotspot-alt"))
+        self.assertEqual(nm.profiles["pipbox-hotspot-alt"]["connection.autoconnect"], "no")
+
+    def test_migration_binds_an_old_profile_to_the_card_the_settings_belong_to(self):
+        """Das Profil hängt am Namen wlan1 (läuft dort auf dem falschen Stick); hotspot.json sagt: Dieser Netzname gehört der Karte wlan2."""
+        json.dump({"wlan2": {"ssid": "IRL4YOU-BOX", "password": "geheim1234", "band": "a", "channel": 36}}, open(self.hs, "w"))
+        nm = self.use({"pipbox-hotspot-wlan1": {"connection.interface-name": "wlan1", "802-11-wireless.ssid": "IRL4YOU-BOX"}})
+        self.assertEqual(H.migrate_hotspots(), ["pipbox-hotspot-wlan2 -> wlan2"])
+        p = nm.profiles["pipbox-hotspot-wlan2"]                                         # umbenannt nach der Karte, an ihre Adresse gebunden
+        self.assertEqual(p["802-11-wireless.mac-address"], self.MAC["wlan2"])
+        self.assertNotIn("pipbox-hotspot-wlan1", nm.profiles)
+
+    def test_migration_without_settings_keeps_the_card_that_carries_the_name(self):
+        nm = self.use({"pipbox-hotspot-wlan1": {"connection.interface-name": "wlan1", "802-11-wireless.ssid": "X"}})
+        self.assertEqual(H.migrate_hotspots(), ["pipbox-hotspot-wlan1 -> wlan1"])
+        self.assertEqual(nm.profiles["pipbox-hotspot-wlan1"]["802-11-wireless.mac-address"], self.MAC["wlan1"])
+
+    def test_delete_removes_the_profile_and_the_saved_settings_of_that_card_only(self):
+        json.dump({"wlan2": {"ssid": "A", "password": "geheim1234", "band": "a", "channel": 0}, "wlan1": {"ssid": "B", "password": "geheim5678", "band": "bg", "channel": 6}},
+                  open(self.hs, "w"))
+        nm = self.use({"pipbox-hotspot-alt": {"802-11-wireless.mac-address": self.MAC["wlan2"]},
+                       "pipbox-hotspot-wlan1": {"802-11-wireless.mac-address": self.MAC["wlan1"]}})
+        msg = H.do_hotspot_delete({"iface": "wlan2"})
+        self.assertIn("wlan2", msg)
+        self.assertEqual(sorted(nm.profiles), ["pipbox-hotspot-wlan1"])                    # das Profil der anderen Karte bleibt
+        self.assertEqual(list(json.load(open(self.hs))), ["wlan1"])
+
+    def test_delete_is_refused_while_the_hotspot_runs_and_without_a_hotspot(self):
+        dev = [{"iface": "wlan2", "state": "connected", "connection": "pipbox-hotspot-wlan2"}]
+        nm = self.use({"pipbox-hotspot-wlan2": {"802-11-wireless.mac-address": self.MAC["wlan2"]}}, dev)
+        with self.assertRaises(ValueError) as e:
+            H.do_hotspot_delete({"iface": "wlan2"})
+        self.assertIn("ausschalten", str(e.exception))
+        self.assertIn("pipbox-hotspot-wlan2", nm.profiles)
+        self.use({})
+        with self.assertRaises(ValueError):
+            H.do_hotspot_delete({"iface": "wlan1"})
+
+    def test_delete_works_with_settings_only(self):
+        json.dump({"wlan1": {"ssid": "B", "password": "geheim5678", "band": "bg", "channel": 6}}, open(self.hs, "w"))
+        nm = self.use({})
+        H.do_hotspot_delete({"iface": "wlan1"})
+        self.assertEqual(json.load(open(self.hs)), {})
+        self.assertFalse(any(c[:2] == ("con", "delete") for c in nm.calls))
+
+    def test_migration_leaves_bound_profiles_and_missing_cards_alone(self):
+        nm = self.use({"pipbox-hotspot-a": {"802-11-wireless.mac-address": self.MAC["wlan1"]},
+                       "pipbox-hotspot-wlan9": {"connection.interface-name": "wlan9", "802-11-wireless.ssid": "Y"}})
+        self.assertEqual(H.migrate_hotspots(), [])
+        self.assertFalse(any(c[:2] == ("con", "modify") for c in nm.calls))
+
+
+class HotspotDeleteRequest(unittest.TestCase):
+    """Server: "Hotspot löschen" gibt es nur für eine Karte mit gespeichertem Hotspot, der nicht läuft; das Kameranetz bleibt unberührt."""
+
+    def make(self, cards):
+        d = tempfile.mkdtemp()
+        w = server.Wifi(d, False, mock.Mock(iface=""))
+        st = {"helper_installed": True, "state": "idle", "time": 0, "cards": cards}
+        patch = mock.patch.object(w, "status", lambda: st)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return w, d
+
+    CARD = {"iface": "wlan1", "camera_net": False, "ap": True, "band5": True, "ip": ""}
+
+    def sent(self, d):
+        with open(os.path.join(d, "wifi-request")) as f:
+            return json.load(f)
+
+    def test_delete_is_sent_to_the_helper(self):
+        w, d = self.make([dict(self.CARD, hotspot={"ssid": "Box", "running": False, "band": "bg", "channel": 0})])
+        w.request({"action": "hotspot_delete", "iface": "wlan1"})
+        self.assertEqual(self.sent(d), {"action": "hotspot_delete", "iface": "wlan1"})
+
+    def test_delete_is_refused_without_hotspot_while_running_and_on_the_camera_card(self):
+        for cards in ([dict(self.CARD, hotspot=None)],
+                      [dict(self.CARD, hotspot={"ssid": "Box", "running": True, "band": "bg", "channel": 0})],
+                      [dict(self.CARD, camera_net=True, hotspot={"ssid": "Box", "running": False, "band": "bg", "channel": 0})]):
+            w, d = self.make(cards)
+            with self.assertRaises(ValueError):
+                w.request({"action": "hotspot_delete", "iface": "wlan1"})
+            self.assertFalse(os.path.exists(os.path.join(d, "wifi-request")))
+
+    def test_page_has_a_delete_button_that_asks_first(self):
+        page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('class="sec hs-del"', page)
+        self.assertIn('hsPost({action:"hotspot_delete",iface}', page)
+        self.assertIn("Hotspot auf ${iface} löschen?", page)
+
+
+class CardsShowARunningHotspot(unittest.TestCase):
+    """Läuft ein Hotspot der Box auf einer Karte, zeigt die Karte "an", auch wenn ihr Profil den Namen einer anderen Karte trägt und nichts gespeichert ist."""
+
+    def test_running_hotspot_without_saved_settings_is_shown(self):
+        d = tempfile.mkdtemp()
+        w = server.Wifi(d, False, mock.Mock(iface="wlan2"))
+        def run(cmd, **kw):
+            key = next((cmd[i + 1] for i, x in enumerate(cmd) if x in ("-f", "-g")), "")
+            out = {"DEVICE,CONNECTION": "wlan1:pipbox-hotspot-wlan1\nwlan0:Heim\n",
+                   "802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel": "IRL4YOU-BOX\na\n36\n"}.get(key, "")
+            return mock.Mock(returncode=0, stderr="", stdout=out)
+        info = {"name": "Stick", "vendor": "Realtek", "usb_id": "0bda:c811", "driver": "x"}
+        with mock.patch.object(server.os, "listdir", lambda p: ["wlan0", "wlan1"]), \
+                mock.patch.object(server.os.path, "isdir", lambda p: True), \
+                mock.patch.object(server, "iface_ips", lambda: [{"iface": "wlan0", "ip": "192.168.1.2"}, {"iface": "wlan1", "ip": "10.42.0.1"}]), \
+                mock.patch.object(server.dji, "netdev_info", lambda n, *a: info), \
+                mock.patch.object(server, "read", lambda p, d=None: "up\n"), \
+                mock.patch.object(server.Wifi, "caps", staticmethod(lambda i: {"ap": True, "band24": True, "band5": True})), \
+                mock.patch.object(server.subprocess, "run", run):
+            cards = {c["iface"]: c for c in w.cards()}
+        self.assertTrue(cards["wlan1"]["hotspot"]["running"])
+        self.assertEqual(cards["wlan1"]["hotspot"]["ssid"], "IRL4YOU-BOX")
+        self.assertEqual((cards["wlan1"]["hotspot"]["band"], cards["wlan1"]["hotspot"]["channel"]), ("a", 36))
+        self.assertIsNone(cards["wlan0"]["hotspot"])
+        self.assertEqual(cards["wlan0"]["ssid"], "Heim")
 
 
 if __name__ == "__main__":

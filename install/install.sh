@@ -38,7 +38,10 @@ case "${1:-install}" in
     if ! python3 -c "import bleak" 2>/dev/null; then
       echo "Installiere die Bluetooth-Bibliothek bleak (pip)"
       dpkg -s python3-pip >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-pip || true
-      pip3 install --disable-pip-version-check "bleak>=0.22" || true
+      # pip 22.0.2 (Ubuntu 22.04) kennt "--root-user-action" nicht: Die harmlose Warnung "Running pip as the 'root' user" (die Installation läuft ohnehin als root)
+      # wird aus der Ausgabe gefiltert, alles andere bleibt sichtbar.
+      pipout=$(pip3 install --disable-pip-version-check "bleak>=0.22" 2>&1) || true
+      printf '%s\n' "$pipout" | grep -v "Running pip as the 'root' user" || true
       if ! python3 -c "import bleak" 2>/dev/null; then
         echo "FEHLER: Die Bluetooth-Bibliothek bleak konnte nicht installiert werden (Internet? pip3?). Der DJI-Dienst braucht sie." >&2
         echo "Von Hand: sudo apt-get install -y python3-pip && sudo pip3 install bleak, danach install.sh erneut ausführen." >&2
@@ -46,6 +49,7 @@ case "${1:-install}" in
       fi
     fi
     getent group bluetooth >/dev/null || groupadd --system bluetooth
+    getent group input >/dev/null || groupadd --system input        # Controller-Tasten: Lesezugriff auf /dev/input
     echo "PIPBOX-STEP dienst"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     systemctl stop pipbox.service 2>/dev/null || true
     # Fester, rechteloser Benutzer (der D-Bus-Daemon akzeptiert keine DynamicUser-Benutzer).
@@ -90,7 +94,7 @@ PY
     install -d /opt/pipbox/web
     # Bluetooth-Dienst nur neu starten, wenn sich seine Dateien ändern (sonst reißen die Kameras ab)
     dji_changed=0
-    for f in dji.py dji_daemon.py; do cmp -s "$HERE/$f" "/opt/pipbox/$f" || dji_changed=1; done
+    for f in dji.py dji_daemon.py phone_battery.py controllers.py; do cmp -s "$HERE/$f" "/opt/pipbox/$f" || dji_changed=1; done
     cmp -s "$HERE/install/pipbox-dji.service" /etc/systemd/system/pipbox-dji.service || dji_changed=1
     # HDMI-Dienst: ebenso nur neu starten, wenn sich seine Dateien ändern (er speist den HDMI-Eingang als Kamera ein)
     hdmi_changed=0
@@ -99,10 +103,17 @@ PY
     install -m 644 "$HERE/server.py" /opt/pipbox/server.py
     install -m 644 "$HERE/dji.py" /opt/pipbox/dji.py
     install -m 644 "$HERE/dji_daemon.py" /opt/pipbox/dji_daemon.py
+    install -m 644 "$HERE/phone_battery.py" /opt/pipbox/phone_battery.py
+    install -m 644 "$HERE/controllers.py" /opt/pipbox/controllers.py
+    install -m 644 "$HERE/controller_keys.py" /opt/pipbox/controller_keys.py
     install -m 644 "$HERE/hdmi_daemon.py" /opt/pipbox/hdmi_daemon.py
     install -m 644 "$HERE/pipbox_send.py" /opt/pipbox/pipbox_send.py
     install -m 644 "$HERE/pipbox_send_ctl.py" /opt/pipbox/pipbox_send_ctl.py
     install -m 644 "$HERE/pipbox_live.py" /opt/pipbox/pipbox_live.py       # Engine "alle Kameras immer bereit" mit Compositor und Kamera-Zweigen (braucht den belacoder mit -sb11)
+    install -m 644 "$HERE/pipbox_watch.py" /opt/pipbox/pipbox_watch.py       # Wächter der Sendekette: erkennt Hänger von belacoder, sichert ein Diagnosepaket und startet neu (Issue #51)
+    install -m 644 "$HERE/pipbox_preview.py" /opt/pipbox/pipbox_preview.py       # Vorschau des gesendeten Bildes: liest den lokalen SRT-Strom mit und dekodiert ihn (Issue #52)
+    install -m 644 "$HERE/install/pipbox-preview.socket" /etc/systemd/system/pipbox-preview.socket        # Vorschau: Socket, der Dienst startet erst bei Bedarf (nur Recht für rohe Pakete)
+    install -m 644 "$HERE/install/pipbox-preview.service" /etc/systemd/system/pipbox-preview.service
     install -m 644 "$HERE/pipbox_always.py" /opt/pipbox/pipbox_always.py       # Zubringer und Auswahl für "alle Kameras immer bereit" (nicht in der Pflichtliste des Update-Helfers: ein Rückweg auf ältere Versionen muss möglich bleiben)
     install -m 755 "$HERE/install/pipbox_health.py" /opt/pipbox/pipbox_health.py
     install -m 644 "$HERE/VERSION" /opt/pipbox/VERSION
@@ -121,7 +132,20 @@ PY
     install -m 755 "$HERE/install/pipbox-btdriver.py" /opt/pipbox/pipbox-btdriver.py
     install -m 644 "$HERE/install/pipbox-btdriver.service" /etc/systemd/system/pipbox-btdriver.service
     install -m 644 "$HERE/install/pipbox-btdriver.timer" /etc/systemd/system/pipbox-btdriver.timer
+    install -m 644 "$HERE/install/pipbox-btdriver.path" /etc/systemd/system/pipbox-btdriver.path
     install -m 644 "$HERE/install/80-pipbox-btdriver.rules" /etc/udev/rules.d/80-pipbox-btdriver.rules
+    # Bluetooth-Chip der ROCK 5B Plus (eingebautes Realtek-Modul): Helfer, Dienst, Auslöser und udev-Regel. Der Helfer tut nur auf dem Board "Radxa ROCK 5B Plus" etwas.
+    install -m 755 "$HERE/install/pipbox-btchip.py" /opt/pipbox/pipbox-btchip.py
+    install -m 644 "$HERE/install/pipbox-btchip.service" /etc/systemd/system/pipbox-btchip.service
+    install -m 644 "$HERE/install/pipbox-btchip.path" /etc/systemd/system/pipbox-btchip.path
+    install -m 644 "$HERE/install/81-pipbox-btchip.rules" /etc/udev/rules.d/81-pipbox-btchip.rules
+    # Adress-Wächter: hängen zwei Netzkarten im selben Netz, antwortet jede nur für ihre eigene Adresse (sonst verlieren Kameras ihren Stream); sonst tut er nichts
+    install -m 755 "$HERE/install/pipbox-arp.py" /opt/pipbox/pipbox-arp.py
+    install -m 644 "$HERE/install/pipbox-arp.service" /etc/systemd/system/pipbox-arp.service
+    install -m 755 "$HERE/install/pipbox-wlandriver.py" /opt/pipbox/pipbox-wlandriver.py
+    install -m 644 "$HERE/install/pipbox-wlandriver.service" /etc/systemd/system/pipbox-wlandriver.service
+    install -m 644 "$HERE/install/pipbox-wlandriver.timer" /etc/systemd/system/pipbox-wlandriver.timer
+    install -m 644 "$HERE/install/81-pipbox-wlandriver.rules" /etc/udev/rules.d/81-pipbox-wlandriver.rules
     udevadm control --reload-rules 2>/dev/null || true
     install -m 755 "$HERE/install/pipbox-wifi.py" /opt/pipbox/pipbox-wifi.py
     install -m 644 "$HERE/install/pipbox-wifi.service" /etc/systemd/system/pipbox-wifi.service
@@ -130,6 +154,11 @@ PY
     install -m 755 "$HERE/install/pipbox-logmode.py" /opt/pipbox/pipbox-logmode.py
     install -m 644 "$HERE/install/pipbox-logmode.service" /etc/systemd/system/pipbox-logmode.service
     install -m 644 "$HERE/install/pipbox-logmode.path" /etc/systemd/system/pipbox-logmode.path
+    install -m 644 "$HERE/install/pipbox-logrotate.service" /etc/systemd/system/pipbox-logrotate.service         # große Protokolle begrenzen (täglicher Timer)
+    install -m 644 "$HERE/install/pipbox-logrotate.timer" /etc/systemd/system/pipbox-logrotate.timer
+    install -m 755 "$HERE/install/pipbox-netaddr.py" /opt/pipbox/pipbox-netaddr.py
+    install -m 644 "$HERE/install/pipbox-netaddr.service" /etc/systemd/system/pipbox-netaddr.service
+    install -m 644 "$HERE/install/pipbox-netaddr.path" /etc/systemd/system/pipbox-netaddr.path
     install -m 755 "$HERE/install/pipbox-logs.py" /opt/pipbox/pipbox-logs.py
     install -m 644 "$HERE/install/pipbox-logs.service" /etc/systemd/system/pipbox-logs.service
     install -m 644 "$HERE/install/pipbox-logs.path" /etc/systemd/system/pipbox-logs.path
@@ -143,6 +172,7 @@ PY
       if [ -f /etc/systemd/journald.conf.d/pipbox-persistent.conf ]; then mode=ausfuehrlich; else mode=sparsam; fi
       python3 /opt/pipbox/pipbox-logmode.py --apply "$mode" || echo "WARNUNG: Protokoll-Modus konnte nicht gesetzt werden."
     fi
+    python3 /opt/pipbox/pipbox-logmode.py --apply-nginx || true       # Zugriffsprotokoll von nginx zum Protokoll-Modus (sparsam = aus; nginx wird nur neu geladen, wenn nicht gesendet wird)
     install -m 644 "$HERE/install/pipbox-power.service" /etc/systemd/system/pipbox-power.service
     install -m 644 "$HERE/install/pipbox-power.path" /etc/systemd/system/pipbox-power.path
     install -m 644 "$HERE/install/pipbox-health.service" /etc/systemd/system/pipbox-health.service
@@ -194,15 +224,17 @@ PY
     echo "PIPBOX-STEP belacoder"      # Fortschrittsanzeige des Update-Helfers (pipbox-swupdate.py liest diese Zeilen)
     install -d /opt/pipbox/belacoder
     bc_changed=0
-    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch; do
+    for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch belacoder-no-reconfigure.patch belacoder-audio-eos.patch; do
       cmp -s "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp" || bc_changed=1
     done
+    cmp -s "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh || bc_changed=1       # auch das Bauskript: Es trägt die Kennung ("-sb12-eos") und die Reihenfolge der Patches; ändert sich nur es, muss trotzdem neu gebaut werden (1.0.39 blieb sonst auf der Kennung sb13 von 1.0.38)
     [ -x /opt/pipbox/bin/belacoder ] || bc_changed=1
     if [ "$bc_changed" = 1 ]; then
       if sh "$HERE/belacoder/build.sh"; then
-        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch; do
+        for bp in belacoder-jitter-tolerant.patch belacoder-stall-output.patch belacoder-stats.patch belacoder-live-feeds.patch belacoder-frame-copy.patch belacoder-no-reconfigure.patch belacoder-audio-eos.patch; do
           install -m 644 "$HERE/belacoder/$bp" "/opt/pipbox/belacoder/$bp"
         done
+        install -m 644 "$HERE/belacoder/build.sh" /opt/pipbox/belacoder/build.sh
       else
         echo "WARNUNG: belacoder mit dem toleranten Regler konnte nicht gebaut werden (braucht git, gcc, patch, Internet). Es bleibt das Original."
       fi
@@ -224,20 +256,36 @@ PY
     if [ "$dji_changed" = 1 ] || ! systemctl is-active --quiet pipbox-dji.service; then systemctl restart pipbox-dji.service; fi
     if [ "$hdmi_changed" = 1 ] || ! systemctl is-active --quiet pipbox-hdmi.service; then systemctl restart pipbox-hdmi.service; fi
     systemctl restart pipbox-health.service 2>/dev/null || true
-    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer
+    systemctl enable --now pipbox-update.path pipbox-send-ctl.path pipbox-health.service pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-btchip.path pipbox-btchip.service pipbox-arp.service pipbox-logrotate.timer
+    systemctl enable --now pipbox-preview.socket
+    systemctl try-restart pipbox-preview.service 2>/dev/null || true       # neuer Programmstand (der Dienst endet sonst nach einer Minute ohne Zuschauer von selbst)
+    systemctl try-restart pipbox-arp.service 2>/dev/null || true       # neuer Programmstand; der Zustand bleibt (Merkzettel in /run)
     systemctl restart pipbox.service
-    systemctl start --no-block pipbox-btdriver.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
+    systemctl start --no-block pipbox-btdriver.service pipbox-wlandriver.service pipbox-btchip.service 2>/dev/null || true      # steckt schon ein passender Stick, gleich prüfen (sonst tut der Dienst nichts)
+    [ -x /opt/pipbox/pipbox-wifi.py ] && python3 /opt/pipbox/pipbox-wifi.py migrate || true                 # WLAN-Profile einmal an die Hardware-Adresse der Karte binden (die Namen wlan0, wlan1 wechseln, sobald ein Stick steckt oder fehlt)
     ts_snapshot "nach der Installation"
     echo "IRL4YOU BOX läuft auf Port 8780 im lokalen Netz. Ersteinrichtung im Browser."
     ;;
   uninstall)
+    [ -x /opt/pipbox/pipbox-netaddr.py ] && python3 /opt/pipbox/pipbox-netaddr.py --remove || true     # feste Zusatzadresse und ihr Skript in if-up.d entfernen
+    [ -x /opt/pipbox/pipbox-wlandriver.py ] && python3 /opt/pipbox/pipbox-wlandriver.py uninstall || true     # WLAN-Treiber (AIC8800D80) und seine Firmware entfernen
+    systemctl disable --now pipbox-arp.service 2>/dev/null || true       # zuerst den Wächter anhalten, damit er die Werte nicht gleich wieder setzt
+    [ -x /opt/pipbox/pipbox-arp.py ] && python3 /opt/pipbox/pipbox-arp.py uninstall || true     # eingestellte ARP-Werte zurücksetzen
+    [ -x /opt/pipbox/pipbox-btchip.py ] && python3 /opt/pipbox/pipbox-btchip.py uninstall || true     # Firmware-Verknüpfungen des Bluetooth-Chips der ROCK 5B Plus entfernen
     [ -x /opt/pipbox/pipbox-btdriver.py ] && python3 /opt/pipbox/pipbox-btdriver.py uninstall || true     # eingespieltes Bluetooth-Modul entfernen (Standardmodul gilt nach dem nächsten Neustart)
-    systemctl disable --now pipbox-btdriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service || true
-    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-hdmi.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/udev/rules.d/80-pipbox-btdriver.rules
+    systemctl disable --now pipbox-arp.service pipbox-btchip.path pipbox-btchip.service pipbox-btdriver.timer pipbox-btdriver.path pipbox-wlandriver.timer pipbox-funnel-guard.timer pipbox-send.service pipbox-hdmi.service pipbox-send-ctl.path pipbox-update.path pipbox-swupdate.path pipbox-remote.path pipbox-wifi.path pipbox-power.path pipbox-logmode.path pipbox-netaddr.path pipbox-logs.path pipbox-ssh.path pipbox-health.service pipbox.service pipbox-dji.service pipbox-logrotate.timer || true
+    rm -f /etc/systemd/system/pipbox-send.service /etc/systemd/system/pipbox-send-ctl.service /etc/systemd/system/pipbox-send-ctl.path /etc/systemd/system/pipbox.service /etc/systemd/system/pipbox-dji.service /etc/systemd/system/pipbox-hdmi.service /etc/systemd/system/pipbox-update.service /etc/systemd/system/pipbox-update.path /etc/systemd/system/pipbox-swupdate.service /etc/systemd/system/pipbox-swupdate.path /etc/systemd/system/pipbox-remote.service /etc/systemd/system/pipbox-remote.path /etc/systemd/system/pipbox-wifi.service /etc/systemd/system/pipbox-wifi.path /etc/systemd/system/pipbox-power.service /etc/systemd/system/pipbox-power.path /etc/systemd/system/pipbox-health.service /etc/systemd/system/pipbox-logmode.service /etc/systemd/system/pipbox-logmode.path /etc/systemd/system/pipbox-netaddr.service /etc/systemd/system/pipbox-netaddr.path /etc/systemd/system/pipbox-logs.service /etc/systemd/system/pipbox-logs.path /etc/systemd/system/pipbox-ssh.service /etc/systemd/system/pipbox-ssh.path /etc/systemd/system/pipbox-funnel-guard.service /etc/systemd/system/pipbox-funnel-guard.timer /etc/systemd/system/pipbox-btchip.service /etc/systemd/system/pipbox-btchip.path /etc/udev/rules.d/81-pipbox-btchip.rules /opt/pipbox/pipbox-btchip.py /etc/systemd/system/pipbox-arp.service /opt/pipbox/pipbox-arp.py /etc/systemd/system/pipbox-btdriver.service /etc/systemd/system/pipbox-btdriver.timer /etc/systemd/system/pipbox-btdriver.path /etc/udev/rules.d/80-pipbox-btdriver.rules
+    systemctl disable --now pipbox-preview.socket pipbox-preview.service 2>/dev/null || true
+    rm -f /etc/systemd/system/pipbox-preview.socket /etc/systemd/system/pipbox-preview.service
     rm -f /etc/apt/apt.conf.d/99pipbox-nginx
+    rm -f /etc/systemd/system/pipbox-logrotate.service /etc/systemd/system/pipbox-logrotate.timer
     NGX=/etc/nginx/modules-available/99-belabox-rtmp.conf
     if [ -f "$NGX.vor-pipbox" ]; then
       cp "$NGX.vor-pipbox" "$NGX" && rm -f "$NGX.vor-pipbox"
+      nginx -t >/dev/null 2>&1 && nginx -s reload 2>/dev/null || true
+    fi
+    if [ -f /etc/nginx/conf.d/pipbox-log.conf ]; then
+      rm -f /etc/nginx/conf.d/pipbox-log.conf
       nginx -t >/dev/null 2>&1 && nginx -s reload 2>/dev/null || true
     fi
     rm -f /usr/local/bin/srtla_send

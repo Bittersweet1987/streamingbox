@@ -1,5 +1,6 @@
 """Tests für den Bereich "Chat" (server.TwitchReader): Zerlegen der IRC-Zeilen von Twitch, Bereinigung, Abfrage mit Nummer, Vorschau-Modus und eine
 Verbindung gegen einen lokalen Fake-Server. Es wird nie eine Verbindung zu twitch.tv aufgebaut."""
+import json
 import os
 import socket
 import socketserver
@@ -34,6 +35,28 @@ class Parsing(unittest.TestCase):
         self.assertEqual(item["emotes"], [["25", 0, 4], ["1902", 6, 10], ["25", 12, 16]])
         self.assertEqual(item["bits"], 100)
         self.assertEqual(item["type"], "msg")
+
+    def test_new_twitch_emote_ids_with_41_characters_are_kept(self):
+        """Kanal-, Abo-, Follower- und bewegte Emotes haben Kennungen wie "emotesv2_" + 32 Zeichen (41): Bis 0.9.179 wurden sie wegen der Grenze von 40 verworfen."""
+        eid = "emotesv2_dcd06b30a5c24f6eb871e8f5edbd44f7"
+        self.assertEqual(len(eid), 41)
+        line = ("@display-name=Anna;emotes=%s:0-4,10-14/25:6-8 :anna!anna@anna.tmi.twitch.tv PRIVMSG #kanal :Hallo Kpa Hallo" % eid)
+        item = reader().parse(line)
+        self.assertEqual(item["emotes"], [[eid, 0, 4], ["25", 6, 8], [eid, 10, 14]])
+
+    def test_emote_id_limits(self):
+        r = reader()
+        ok = "a" * 64
+        self.assertEqual(r.parse("@emotes=%s:0-1 :a!a@a.tmi.twitch.tv PRIVMSG #kanal :hi" % ok)["emotes"], [[ok, 0, 1]])
+        self.assertEqual(r.parse("@emotes=%s:0-1 :a!a@a.tmi.twitch.tv PRIVMSG #kanal :hi" % ("a" * 65))["emotes"], [])         # zu lang
+        for bad in ("a.b", "a-b", "a%2Fb", "emotesv2_äö", ""):
+            self.assertEqual(r.parse("@emotes=%s:0-1 :a!a@a.tmi.twitch.tv PRIVMSG #kanal :hi" % bad)["emotes"], [], bad)
+
+    def test_page_builds_the_image_address_from_the_id(self):
+        page = open(os.path.join(os.path.dirname(HERE), "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('static-cdn.jtvnw.net/emoticons/v2/%s/default/dark/1.0', page)                  # "default" liefert bewegte Emotes als GIF
+        i = page.index("EMOTE.replace(")
+        self.assertIn("encodeURIComponent", page[i:i + 120])                                          # die Kennung wird für die Adresse kodiert
 
     def test_twitch_timestamp_is_used_for_the_time_of_the_message(self):
         r = reader()
@@ -121,6 +144,21 @@ class Polling(unittest.TestCase):
         out = r.poll(0)
         self.assertEqual(out["state"], "kein-kanal")
         self.assertIsNone(r.thread)
+
+    def test_the_channel_of_the_signed_in_account_is_used_when_none_is_entered(self):
+        import tempfile
+        import types
+        store = server.TwitchStore(os.path.join(tempfile.mkdtemp(), "twitch.json"))
+        store.account = types.SimpleNamespace(login=lambda: "meinkonto")       # per Geräte-Code angemeldet, im Feld steht nichts
+        r = server.TwitchReader(store)
+        r._ensure = lambda ch: setattr(r, "channel", ch)                       # keine Verbindung aufbauen
+        out = r.poll(0)
+        self.assertEqual((out["state"], out["channel"]), (r.state, "meinkonto"))
+        self.assertNotEqual(out["state"], "kein-kanal")
+        store.account = None
+        self.assertEqual(r.poll(0)["state"], "kein-kanal")                     # ohne Konto und ohne Eintrag weiter: kein Kanal
+        store.set({"channel": "Anderer_Kanal"})
+        self.assertEqual(r.poll(0)["channel"], "anderer_kanal")                 # der eingetragene Kanal geht vor
 
     def test_since_returns_only_new_items_and_numbers_restart_cleanly(self):
         r = reader()
@@ -410,6 +448,240 @@ class Paths(unittest.TestCase):
 
 
 import unittest.mock  # noqa: E402
+
+class ChatterEmotes(unittest.TestCase):
+    """Emotes aus der öffentlichen Liste des Schreibers (BTTV/7TV, ohne Anmeldung): catKISS stand in der Liste von Knochi, nicht in der des Kanals."""
+    BTTV, STV = "54fa8f1401e468494b85b537", "01FGH8NE3800064MEQW00DNBNG"
+
+    def fake(self, url):
+        if "betterttv.net/3/cached/users/twitch/501025597" in url:
+            return {"channelEmotes": [], "sharedEmotes": [{"id": self.BTTV, "code": "catKISS"}, {"id": "../x", "code": "Boese"}]}
+        if "7tv.io/v3/users/twitch/501025597" in url:
+            return {"emote_set": {"emotes": [{"id": self.STV, "name": "Mein7"}]}}
+        return None
+
+    def wait(self, tp):
+        for _ in range(100):
+            if tp.uthread is None:
+                return
+            time.sleep(0.05)
+
+    def test_list_of_the_chatter_is_loaded_once_and_marks_later_messages(self):
+        tp = server.ThirdPartyEmotes(fetch=self.fake)
+        first = {"text": "catKISS Mein7", "emotes": [], "uid": "501025597"}
+        tp.mark(first)
+        self.assertEqual(first["emotes"], [])                                                 # Liste wird erst geladen
+        self.wait(tp)
+        second = {"text": "catKISS Mein7 hallo", "emotes": [], "uid": "501025597"}
+        tp.mark(second)
+        self.assertEqual([(e[1], e[2]) for e in second["emotes"]], [(0, 6), (8, 12)])
+        self.assertTrue(second["emotes"][0][0].startswith("https://cdn.betterttv.net/emote/"))
+        self.assertTrue(second["emotes"][1][0].startswith("https://cdn.7tv.app/emote/"))
+        self.assertNotIn("Boese", tp.user_map("501025597"))                                   # ungültige Kennung
+
+    def test_other_chatters_do_not_get_it(self):
+        tp = server.ThirdPartyEmotes(fetch=self.fake)
+        tp.want_user("501025597"); self.wait(tp)
+        item = {"text": "catKISS", "emotes": [], "uid": "42"}
+        tp.mark(item)
+        self.assertEqual(item["emotes"], [])
+
+    def test_bad_uid_is_never_requested(self):
+        seen = []
+        tp = server.ThirdPartyEmotes(fetch=lambda u: seen.append(u))
+        for bad in ("", "abc", "1" * 13, "12/../x", None, 5):
+            tp.want_user(bad)
+        self.assertEqual(seen, [])
+        self.assertEqual(len(tp.uq), 0)
+
+    def test_failed_download_is_retried_later_not_every_message(self):
+        calls = []
+        tp = server.ThirdPartyEmotes(fetch=lambda u: calls.append(u))
+        tp.want_user("7"); self.wait(tp)
+        n = len(calls)
+        tp.want_user("7"); self.wait(tp)
+        self.assertEqual(len(calls), n)                                                       # nicht sofort wieder (RETRY)
+
+    def test_cache_and_queue_are_bounded(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: {})
+        tp.USER_MAX = 5
+        for i in range(12):
+            tp.want_user(str(i + 1)); self.wait(tp)
+        self.assertLessEqual(len(tp.users), 5)
+
+    def test_reader_patches_the_message_already_shown(self):
+        tp = server.ThirdPartyEmotes(fetch=self.fake)
+        r = server.TwitchReader(None, third=tp)
+        mid = "11111111-2222-4333-8444-555555555555"
+        it = r.parse("@room-id=55;user-id=501025597;id=%s;display-name=Knochi :k!k@k.tmi.twitch.tv PRIVMSG #kanal :catKISS" % mid)
+        self.assertEqual(it["emotes"], [])
+        r._add(it)
+        self.wait(tp)
+        for _ in range(100):
+            if any(i.get("type") == "emotes" for i in r.items):
+                break
+            time.sleep(0.05)
+        meta = [i for i in r.items if i.get("type") == "emotes"]
+        self.assertEqual(len(meta), 1)
+        self.assertTrue(meta[0]["meta"])
+        self.assertEqual(meta[0]["mid"], mid)
+        self.assertEqual((meta[0]["emotes"][0][1], meta[0]["emotes"][0][2]), (0, 6))
+        self.assertEqual(len(it["emotes"]), 1)                                                # auch der Speicher ist nachgeführt (wer neu lädt, sieht das Emote)
+
+    def test_page_redraws_the_row_from_the_meta_item(self):
+        page = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+        self.assertIn('if(m.type==="emotes")', page)
+        self.assertIn("fillText(x._mt,{text:x._txt,emotes:m.emotes})", page)
+
+
+class Links(unittest.TestCase):
+    def page(self):
+        with open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_links_open_in_a_new_tab_safely(self):
+        p = self.page()
+        self.assertIn('a.target="_blank"; for(const v of ["noopener","noreferrer","nofollow"]) a.relList.add(v);', p)
+        self.assertIn('if(u.protocol!=="https:"&&u.protocol!=="http:") return null; if(u.username||u.password) return null;', p)
+        self.assertIn("a.textContent=t", p)                                                   # Text, nie HTML
+        self.assertIn("u.hostname.replace(", p)                                               # echter Rechnername (Punycode) wird angezeigt
+
+    def test_text_between_emotes_goes_through_the_link_filter(self):
+        p = self.page()
+        self.assertIn("if(e[1]>pos) addText(mt,sl(pos,e[1]));", p)
+        self.assertIn("if(pos<cp.length) addText(mt,sl(pos));", p)
+
+    def test_no_regex_lookbehind_so_old_browsers_still_load_the_page(self):
+        self.assertNotIn("(?<", self.page())
+
+
+class FakeBttvSocket:
+    """Kleiner WebSocket-Server (ohne TLS) wie sockets.betterttv.net: nimmt join_channel an und schickt Ereignisse."""
+    def __init__(self, events, close_after=None):
+        self.events, self.received, self.close_after = events, [], close_after
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(2)
+        self.port = self.srv.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    @staticmethod
+    def frame(text, op=1):
+        d = text.encode() if isinstance(text, str) else text
+        n = len(d)
+        return bytes([0x80 | op]) + (bytes([n]) if n < 126 else bytes([126]) + n.to_bytes(2, "big")) + d
+
+    def _serve(self):
+        try:
+            c, _ = self.srv.accept()
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                buf += c.recv(4096)
+            c.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n")
+            c.settimeout(5)
+            d = c.recv(4096)                                                   # maskierter Rahmen vom Client
+            n = d[1] & 0x7F
+            m, body = d[2:6], d[6:6 + n]
+            self.received.append(json.loads(bytes(b ^ m[i % 4] for i, b in enumerate(body))))
+            for e in self.events:
+                c.sendall(self.frame(e if isinstance(e, str) else json.dumps(e)))
+            if self.close_after is not None:
+                time.sleep(self.close_after)
+                c.sendall(self.frame(b"", 8))
+            time.sleep(3)
+            c.close()
+        except OSError:
+            pass
+
+
+class PersonalEmotes(unittest.TestCase):
+    """BTTV Pro: persönliche Emotes kommen über BTTVs Live-Verbindung (lookup_user). Beispiel aus der Praxis: "DanceDanceDance" von Knochi3006 stand in keiner öffentlichen Liste."""
+    BTTV = "607f3f3239b5010444d03135"
+
+    def event(self, uid="501025597", pro=True, code="DanceDanceDance", id_=None):
+        return {"name": "lookup_user", "data": {"providerId": uid, "pro": pro, "emotes": [{"id": id_ or self.BTTV, "channel": "kittycatmatsu", "code": code, "animated": True}]}}
+
+    def make(self, events, **kw):
+        fake = FakeBttvSocket(events, **kw)
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        tp.sock_on, tp.sock_host, tp.sock_port, tp.sock_tls = True, "127.0.0.1", fake.port, False
+        return tp, fake
+
+    def wait_for(self, cond, sec=5.0):
+        end = time.time() + sec
+        while time.time() < end and not cond():
+            time.sleep(0.05)
+        return cond()
+
+    def test_personal_emote_from_the_live_connection_marks_the_word(self):
+        tp, fake = self.make([self.event()])
+        got = []
+        tp.on_user = got.append
+        tp.ensure("279326559")
+        self.assertTrue(self.wait_for(lambda: "501025597" in tp.personal))
+        self.assertEqual(fake.received, [{"name": "join_channel", "data": {"name": "twitch:279326559"}}])      # nur zuhören, nie broadcast_me
+        self.assertEqual(got, ["501025597"])
+        item = {"text": "DanceDanceDance", "emotes": [], "uid": "501025597"}
+        tp.mark(item)
+        self.assertEqual([(e[1], e[2]) for e in item["emotes"]], [(0, 14)])
+        self.assertEqual(item["emotes"][0][0], "https://cdn.betterttv.net/emote/%s/2x.webp" % self.BTTV)
+        other = {"text": "DanceDanceDance", "emotes": [], "uid": "42"}
+        tp.mark(other)
+        self.assertEqual(other["emotes"], [])                                                    # nur für diesen Schreiber
+
+    def test_ignored_events(self):
+        evs = [self.event(pro=False), self.event(uid="abc"), self.event(id_="../x"), {"name": "emote_create", "data": {}}, "kein json", self.event(uid="7", code="Gut")]
+        tp, _ = self.make(evs)
+        tp.ensure("1")
+        self.assertTrue(self.wait_for(lambda: "7" in tp.personal))
+        self.assertEqual(sorted(tp.personal), ["7"])                                              # nur das Gültige bleibt
+
+    def test_personal_list_is_merged_with_the_public_one(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        tp.users["5"] = (tp.clock() + 100, {"catKISS": "https://cdn.betterttv.net/emote/54fa8f1401e468494b85b537/2x.webp"})
+        tp._on_event(json.dumps(self.event(uid="5")))
+        m = tp.user_map("5")
+        self.assertIn("catKISS", m)
+        self.assertIn("DanceDanceDance", m)
+
+    def test_reader_patches_the_row_when_the_personal_emote_arrives(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        r = server.TwitchReader(None, third=tp)
+        mid = "11111111-2222-4333-8444-555555555555"
+        it = r.parse("@room-id=55;user-id=501025597;id=%s;display-name=Knochi :k!k@k.tmi.twitch.tv PRIVMSG #kanal :DanceDanceDance" % mid)
+        r._add(it)
+        self.assertEqual(it["emotes"], [])
+        tp._on_event(json.dumps(self.event()))
+        meta = [i for i in r.items if i.get("type") == "emotes"]
+        self.assertEqual(len(meta), 1)
+        self.assertEqual(meta[0]["mid"], mid)
+        self.assertEqual(len(it["emotes"]), 1)
+
+    def test_broken_connection_is_retried_later_with_longer_waits(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()        # niemand hört zu
+        tp.sock_on, tp.sock_host, tp.sock_port, tp.sock_tls = True, "127.0.0.1", port, False
+        tp.ensure("1")
+        self.assertTrue(self.wait_for(lambda: tp.sthread is None and tp.sfails == 1))
+        w1 = tp.sretry - tp.clock()
+        self.assertGreater(w1, 20)
+        threads = threading.active_count()
+        tp.ensure("1")                                                                             # innerhalb der Wartezeit: kein neuer Versuch
+        time.sleep(0.2)
+        self.assertEqual(tp.sfails, 1)
+        self.assertLessEqual(threading.active_count(), threads + 1)
+
+    def test_close_frame_ends_the_connection(self):
+        tp, _ = self.make([self.event()], close_after=0.2)
+        tp.ensure("1")
+        self.assertTrue(self.wait_for(lambda: tp.sfails == 1 and tp.sthread is None, 6))
+
+    def test_no_network_without_real_paths(self):
+        tp = server.ThirdPartyEmotes(fetch=lambda u: None)
+        self.assertFalse(tp.sock_on)
+        tp.ensure("1")
+        self.assertIsNone(tp.sthread)
+
 
 if __name__ == "__main__":
     unittest.main()
