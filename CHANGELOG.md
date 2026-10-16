@@ -2,6 +2,10 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.54
+- **Gerundete Ecken gehen jetzt auch bei „Alle Kameras immer bereit“ (Meldung von MyRealThailand, 16. Oktober 2026).** Die Compositor-Engine kannte keine Rundung: Radius und Rahmen wirkten dort nicht. Neu im Plugin `gstpbpip`: `pbtap` sichert die Ecken des Hauptbildes unter den gerundeten kleinen Bildern, `pbround` rundet hinter dem Compositor und zeichnet den Rahmen (Rundung mit oder ohne Rahmen und Beschnitt). Ein älteres Plugin ohne die Elemente läuft wie bisher. Gemessen auf der Box von Marco: Compositor und Encoder weiter bei rund 30 Bildern/s.
+- **Tailscale: öffentliche Freigabe nach einem Stromausfall (Meldung von MyRealThailand, 16. Oktober 2026).** Nach einem Stromausfall (die Box hat keine Echtzeituhr) blieb die Freigabe tot, bis man sie aus- und wieder einschaltete. (1) Selbstheilung: Ein Zeitgeber prüft jede Minute und wendet die öffentliche Freigabe neu an, aber nur wenn sie gewollt ist (Merkzettel nur für root), Tailscale „Running“ meldet und die Uhr stimmt: einmal nach dem Start, nach über 5 Minuten ohne Netz und bei fehlgeschlagener Prüfung von außen (höchstens alle 10 Minuten, 6 Mal je Stunde). Sprang die Uhr nach dem Start von tailscaled, startet er einmal neu. (2) Startreihenfolge: tailscaled startet nach Netz und Zeitsynchronisation. (3) Das Protokollpaket zeigt Tailscale-Start, Zustand, Uhr und Selbstheilung.
+
 ## 1.0.53
 - Übernommen aus IRL4YOU 1.0.53: Die Verzögerung der Kameras wirkte unter 450 ms nicht mehr (`hold_delays` in `pipbox_live.py`); jetzt bleiben die eingestellten Unterschiede erhalten. Neu: optionaler Helfer `install/optional/pipbox-88x2bu.py` (neuerer WLAN-Treiber für RTL8812BU/8822BU, nicht Teil von `install.sh`). Test `tools/test_live.py` angepasst.
 

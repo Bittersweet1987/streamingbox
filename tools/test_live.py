@@ -215,6 +215,70 @@ class Commands(unittest.TestCase):
         self.assertIn("set sbf1_vq min-threshold-time 0", lines)
 
 
+class RoundedFrames(unittest.TestCase):
+    """Gerundete kleine Bilder in der Compositor-Engine (Baustein pbtap/pbround): Der Compositor kann im NV12-Ausgang keine Bildpunkt-Deckkraft."""
+
+    def tearDown(self):
+        L.FRAME_BUILT = False
+
+    @staticmethod
+    def styled(radius, **extra):
+        st = {"visible": True, "opacity": 100, "crop": {"l": 0, "r": 0, "t": 0, "b": 0}, "radius": radius,
+              "border": {"enabled": True, "width": 3, "color": "#ffcc00", "opacity": 40}}
+        st.update(extra)
+        return safe({"styles": {"1": st, "2": dict(st, radius=0), "3": dict(st, radius=60, border={"enabled": False, "width": 3, "color": "#ffffff", "opacity": 100})}})
+
+    def cmds(self, c, roles, **kw):
+        args = dict(c=c, slot_key=["dji-a", "cam2", "cam3", "cam4"], roles=roles, dims={}, audio_ok={0, 1, 2}, hide=0, audio_pos=-1, mute=False, delay_ms={})
+        args.update(kw)
+        return L.Layout().commands(**args)
+
+    def test_pipeline_has_the_elements_only_with_the_new_plugin(self):
+        c = self.styled(60)
+        with_frame, without = L.build(c, frame=True), L.build(c, frame=False)
+        self.assertEqual(with_frame.count("pbtap name=sbf"), 4)
+        self.assertIn("pbround name=rnd !", with_frame)
+        self.assertNotIn("pbtap", without)
+        self.assertNotIn("pbround", without)
+        self.assertFalse(L.FRAME_BUILT)                         # build(frame=False) war zuletzt
+
+    def test_the_round_picture_gets_its_geometry_and_the_strips_go_off(self):
+        L.build(self.styled(60), frame=True)
+        lines = self.cmds(self.styled(60), {0: 0, 1: 1, 2: 2, 3: 3})
+        g = L.small_geometry(self.styled(60), 1)
+        want = f"set rnd pip1 {g['x']},{g['y']},{g['w']},{g['h']},3,ffcc00,40,60,100"
+        self.assertIn(want, lines)
+        self.assertIn("set rnd pip2 off", lines)               # Radius 0: der alte Weg mit den Streifen
+        g3 = L.small_geometry(self.styled(60), 3)
+        self.assertIn(f"set rnd pip3 {g3['x']},{g3['y']},{g3['w']},{g3['h']},0,ffffff,100,60,100", lines)       # Rundung ohne Rahmen
+        self.assertIn("pad pipcomp sink_4 alpha 0.00", lines)    # Streifen von Stelle 1 aus (der Rahmen kommt von pbround)
+        self.assertTrue(any(l.startswith("pad pipcomp sink_8 alpha 0.40") for l in lines))      # Stelle 2 ohne Rundung: Streifen wie bisher (40 % Rahmendeckkraft)
+
+    def test_only_the_big_branch_saves_the_corners(self):
+        L.build(self.styled(60), frame=True)
+        lines = self.cmds(self.styled(60), {0: 1, 1: 0, 2: 2})
+        self.assertIn("set sbf1_tap active true", lines)
+        self.assertIn("set sbf0_tap active false", lines)
+        self.assertIn("set sbf3_tap active false", lines)           # Platz ohne Kamera
+        swapped = L.Layout()
+        first = swapped.commands(self.styled(60), ["dji-a", "cam2", "cam3", "cam4"], {0: 0, 1: 1}, {}, {0, 1}, 0, -1, False, {})
+        again = swapped.commands(self.styled(60), ["dji-a", "cam2", "cam3", "cam4"], {1: 0, 0: 1}, {}, {0, 1}, 0, -1, False, {})
+        self.assertIn("set sbf0_tap active true", first)
+        self.assertIn("set sbf0_tap active false", again)
+        self.assertIn("set sbf1_tap active true", again)
+
+    def test_hidden_or_missing_picture_is_not_touched(self):
+        L.build(self.styled(60), frame=True)
+        self.assertIn("set rnd pip1 off", self.cmds(self.styled(60), {0: 0, 1: 1}, hide=1))
+        self.assertIn("set rnd pip1 off", self.cmds(self.styled(60), {0: 0}))
+
+    def test_no_commands_for_missing_elements(self):
+        L.build(self.styled(60), frame=False)
+        lines = self.cmds(self.styled(60), {0: 0, 1: 1})
+        self.assertFalse(any(" rnd " in l or "_tap" in l for l in lines))
+        self.assertIn("pad pipcomp sink_4 alpha 0.40", lines)       # alte Rahmenstreifen (ohne Baustein keine Rundung)
+
+
 class AudioQueues(unittest.TestCase):
     """Die Warteschlangen des Tons wachsen mit dem Puffer (Ton wartet bis zum Termin; fest 2 s + 1 s lief bei Puffern über 2,5 s über)."""
 
