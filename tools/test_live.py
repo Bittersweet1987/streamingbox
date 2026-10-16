@@ -385,7 +385,7 @@ class FrozenDelays(unittest.TestCase):
         self.make({"main_delay_ms": 450})                                    # Puffer 750
         self.assertEqual(self.delays(self.tick()), {"sbf0": 483, "sbf1": 183, "sbf2": 183, "sbf3": 183})   # alle mit der Untergrenze des Hauptbilds (750 - 600)
         self.f.cfg.update(main_delay_ms=300, pip_delay_ms=200)               # braucht 600: passt
-        self.assertEqual(self.delays(self.tick()), {"sbf0": 333, "sbf1": 233})
+        self.assertEqual(self.delays(self.tick()), {"sbf1": 383})            # ab 1.0.53: alle bekommen denselben Aufschlag (+150), die Unterschiede bleiben: Haupt 450 (unverändert), klein 1 350, die übrigen 150
         self.assertFalse(self.c.delays_frozen)
         self.assertEqual(self.logs, [])
 

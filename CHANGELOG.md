@@ -2,6 +2,9 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.53
+- Übernommen aus IRL4YOU 1.0.53: Die Verzögerung der Kameras wirkte unter 450 ms nicht mehr (`hold_delays` in `pipbox_live.py`); jetzt bleiben die eingestellten Unterschiede erhalten. Neu: optionaler Helfer `install/optional/pipbox-88x2bu.py` (neuerer WLAN-Treiber für RTL8812BU/8822BU, nicht Teil von `install.sh`). Test `tools/test_live.py` angepasst.
+
 ## 1.0.52
 - **Kameras: gleiche Reihenfolge in Kopfzeile, Übersicht und Kameraliste; eine sendende Kamera ist nie „aus (gewollt)“ (Meldung von Bittersweet, 15. Oktober 2026).** (1) Die Punkte in der Kopfzeile der Chat-Karte und die Übersicht „Kameras“ folgten der Reihenfolge der Anlage, die Kameraliste dagegen einer eigenen Sortierung (Kameras mit Signal zuerst, ohne Signal erst nach zwei Minuten nach unten, gewollt ausgeschaltete ganz unten). Jetzt gilt überall dieselbe Regel (`camSorted` in der Oberfläche). (2) `server.py` stufte eine DJI-Kamera als „aus (gewollt)“ ein, sobald ihr automatisches Verbinden aus war und der Bluetooth-Dienst sie nicht als streamend meldete. Nach einem Neustart des Dienstes (Update) kennt er eine weiterlaufende Kamera nicht mehr (`idle`), sie sendet aber weiter an die Box: Sie stand dann als „aus (gewollt)“ da und hatte keinen Punkt in der Kopfzeile. Jetzt gilt eine Kamera, die an die Box sendet (`publishing`), nie als „aus (gewollt)“, auch ohne automatisches Verbinden; wer „Trennen“ gedrückt hat, bleibt „aus“. Tests: `tools/test_dji_service.py` (Kamera sendet ohne automatisches Verbinden), `tools/test_ui_layout.py` (`CameraOrderEverywhere`).
 

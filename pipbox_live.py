@@ -262,7 +262,14 @@ def hold_delays(delays, buffer, big_key=None, big_lead=None, uniform=False):
     LEAD_MAX_BIG_MS nichts an der Einstellung."""
     floor = max(0, int(buffer) - LEAD_MAX_MS)
     floor_big = max(0, int(buffer) - (LEAD_MAX_BIG_MS if big_lead is None else int(big_lead)))
-    return {k: max(int(v), floor_big if (uniform or k == big_key) else floor) for k, v in delays.items()}
+    if uniform and delays:
+        # Alle Kameras bekommen dieselbe Mindesthaltezeit, aber die EINGESTELLTEN Unterschiede bleiben: Statt jede Verzögerung auf die Untergrenze anzuheben (0, 100 und 300 ms
+        # würden alle zu 450 ms, die Einstellung unter 450 ms wäre wirkungslos), wird allen derselbe Betrag aufgeschlagen. Höchstens so viel, dass die größte Haltezeit unter
+        # Puffer - 300 ms bleibt; reicht das nicht (sehr große Unterschiede), gilt für die kleinsten die Untergrenze wie bisher.
+        lo, hi = min(int(v) for v in delays.values()), max(int(v) for v in delays.values())
+        shift = max(0, min(floor_big - lo, int(buffer) - 300 - hi))
+        return {k: max(int(v) + shift, floor_big) for k, v in delays.items()}
+    return {k: max(int(v), floor_big if k == big_key else floor) for k, v in delays.items()}
 
 
 # ------------------------------------------------------------------------------------------------ Pipeline-Text
