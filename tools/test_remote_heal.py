@@ -3,6 +3,7 @@ Anlass (16. Oktober 2026): Nach einem Stromausfall blieb die Freigabe tot, obwoh
 Es wird nie eine Verbindung zu Tailscale oder ins Internet aufgebaut: alles Äußere ist ersetzt."""
 import importlib.machinery
 import importlib.util
+import json
 import os
 import shutil
 import socket
@@ -55,8 +56,13 @@ class Heal(unittest.TestCase):
         m.tailscale_state = lambda: self.state
         m.clock_synced = lambda: self.synced
         m.tailscaled_clock_jumped = lambda: self.jumped
-        m.probe = lambda dns: (self.calls.append(("probe", dns)), self.probe_result)[1]
+        m.STATS_INTENT = os.path.join(m.INTENT_DIR, "stats-wanted")
+        self.stats_funnel = True
+        self.stats_probe = True
+        m.stats_active = lambda cfg=None: self.stats_funnel
+        m.probe = lambda dns, port=443, path=None: (self.calls.append(("probe", dns) if port == 443 else ("probe_stats", dns, port, path)), self.probe_result if port == 443 else self.stats_probe)[1]
         m.reapply_funnel = lambda: (self.calls.append(("reapply",)), self.reapply_ok)[1]
+        m.reapply_stats = lambda: (self.calls.append(("reapply_stats",)), self.reapply_ok)[1]
         self.sub = mock.patch.object(m.subprocess, "run", lambda cmd, **kw: (self.calls.append(tuple(cmd)), subprocess.CompletedProcess(cmd, 0, "", ""))[1])
         self.sub.start()
         self.addCleanup(self.sub.stop)
@@ -187,6 +193,155 @@ class Heal(unittest.TestCase):
         s = json.load(open(self.m.STATUS))
         self.assertEqual(s["state"], "idle")
         self.assertIn("öffentlich", s["message"])
+
+
+class HealStats(Heal):
+    """Die öffentliche Statistik (Port 8443) hat ihren eigenen Merkzettel und wird unabhängig von der Oberfläche geprüft und neu angewendet."""
+
+    def setUp(self):
+        super().setUp()
+        self.m.set_intent(False)                                    # nur die Statistik ist gewollt
+        self.funnel = False
+        self.m.set_intent(True, self.m.STATS_INTENT)
+
+    def test_a_reachable_statistics_funnel_is_left_alone_and_checked_on_its_port(self):
+        self.assertEqual(self.m.heal(1000), "ok")
+        self.assertIn(("probe_stats", "box.tail1234.ts.net", 8443, "/health"), self.calls)
+        self.assertNotIn(("reapply",), self.calls)
+        self.assertNotIn(("reapply_stats",), self.calls)
+
+    def test_an_unreachable_statistics_funnel_is_applied_again_without_touching_the_interface(self):
+        self.stats_probe = False
+        self.assertEqual(self.m.heal(1000), "neu angewendet")
+        self.assertEqual(self.calls.count(("reapply_stats",)), 1)
+        self.assertNotIn(("reapply",), self.calls)
+        self.assertTrue(os.path.exists(self.m.STATS_INTENT))
+
+    def test_a_missing_statistics_funnel_is_set_again(self):
+        self.stats_funnel = False
+        self.assertEqual(self.m.heal(1000), "neu angewendet")
+        self.assertEqual(self.calls.count(("reapply_stats",)), 1)
+
+    def test_both_are_independent(self):
+        self.m.set_intent(True)                                     # Oberfläche öffentlich gewollt
+        self.funnel = True
+        self.probe_result = True
+        self.stats_probe = False
+        self.m.heal(1000)
+        self.assertEqual(self.calls.count(("reapply_stats",)), 1)
+        self.assertEqual(self.calls.count(("reapply",)), 0)        # die Oberfläche war erreichbar: unberührt
+        st = json.load(open(self.m.HEAL_STATE))
+        self.assertTrue(st["boot_done"])                           # Oberfläche: Zustand oben
+        self.assertTrue(st["stats"]["fixes"])                       # Statistik: eigener Zustand
+
+    def test_the_interface_funnel_wanted_but_broken_does_not_trigger_the_statistics_fix(self):
+        self.m.set_intent(True)
+        self.funnel = False                                         # Oberfläche gewollt, aber fehlt
+        self.stats_probe = True
+        self.m.heal(1000)
+        self.assertEqual(self.calls.count(("reapply",)), 1)
+        self.assertEqual(self.calls.count(("reapply_stats",)), 0)
+
+    def test_nothing_wanted_nothing_happens(self):
+        self.m.set_intent(False, self.m.STATS_INTENT)
+        self.assertEqual(self.m.heal(1000), "Freigabe nicht gewollt")
+        self.assertEqual(self.calls, [])
+
+
+for _name in [n for n in dir(Heal) if n.startswith("test_")]:
+    setattr(HealStats, _name, None)                                 # die Prüfungen der Oberfläche laufen nur in Heal selbst
+
+
+class Commands(unittest.TestCase):
+    """Die Befehle: Oberfläche und Statistik berühren sich nie (kein "reset", das alle Freigaben löschen würde)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        m = self.m = load()
+        m.RUN = os.path.join(self.dir, "run")
+        m.STATUS = os.path.join(m.RUN, "status.json")
+        m.LOG = os.path.join(self.dir, "remote.log")
+        m.INTENT_DIR = os.path.join(self.dir, "intent")
+        m.INTENT = os.path.join(m.INTENT_DIR, "funnel-wanted")
+        m.STATS_INTENT = os.path.join(m.INTENT_DIR, "stats-wanted")
+        self.cmds = []
+        m.ts = lambda *a, timeout=60: (self.cmds.append(["tailscale", *a]), subprocess.CompletedProcess(a, 0, "", ""))[1]
+        self.stats = False
+        self.ui = False
+        m.funnel_active = lambda cfg=None: self.ui
+        m.stats_active = lambda cfg=None: self.stats
+        self.rc, self.out, self.to = 0, "", False
+
+        def cap(cmd, timeout):
+            self.cmds.append(cmd)
+            return self.rc, self.out, self.to
+        m.run_capture = cap
+        sub = mock.patch.object(m.subprocess, "run", lambda cmd, **kw: (self.cmds.append(list(cmd)), subprocess.CompletedProcess(cmd, 0, "", ""))[1])
+        sub.start()
+        self.addCleanup(sub.stop)
+
+    def flat(self):
+        return [" ".join(c) for c in self.cmds]
+
+    def test_stats_on_exposes_only_the_statistics_server_on_8443(self):
+        self.stats = True
+        self.m.do_stats_on()
+        cmd = next(c for c in self.flat() if "funnel" in c and "--bg" in c)
+        self.assertIn("--https=8443", cmd)
+        self.assertIn("http://127.0.0.1:8781", cmd)
+        self.assertNotIn("8780", cmd)
+        self.assertTrue(os.path.exists(self.m.STATS_INTENT))
+        self.assertFalse(os.path.exists(self.m.INTENT))               # die Oberfläche wird nie mit freigegeben
+
+    def test_stats_on_failing_keeps_no_intent_and_explains(self):
+        self.rc, self.out = 1, "Funnel is not enabled on your tailnet. Visit https://login.tailscale.com/f/funnel?node=abc to enable"
+        self.m.do_stats_on()                                          # needs_funnel: kein Fehler, aber Hinweis
+        self.assertFalse(os.path.exists(self.m.STATS_INTENT))
+        st = json.load(open(self.m.STATUS))
+        self.assertEqual(st["state"], "needs_funnel")
+        self.assertIn("login.tailscale.com", st["hint_url"])
+        self.rc, self.out = 1, "boom"
+        with self.assertRaises(RuntimeError):
+            self.m.do_stats_on()
+
+    def test_stats_off_removes_only_port_8443(self):
+        self.stats = False
+        self.m.set_intent(True, self.m.STATS_INTENT)
+        self.m.do_stats_off()
+        self.assertIn("tailscale funnel --https=8443 off", self.flat())
+        self.assertFalse(any("reset" in c for c in self.flat()))
+        self.assertFalse(os.path.exists(self.m.STATS_INTENT))
+
+    def test_interface_funnel_off_and_serve_off_keep_the_statistics(self):
+        self.m.set_intent(True)
+        self.m.do_funnel_off()
+        self.assertIn("tailscale funnel --https=443 off", self.flat())
+        self.assertFalse(any("reset" in c or "8443" in c for c in self.flat()))
+        self.cmds.clear()
+        self.m.do_serve_off()
+        self.assertFalse(any("reset" in c or "8443" in c for c in self.flat()))
+        self.assertIn("tailscale serve --https=443 off", self.flat())
+
+    def test_logout_forgets_both_intents(self):
+        src = open(os.path.join(ROOT, "install", "pipbox-remote.py"), encoding="utf-8").read()
+        block = src.split('elif mode == "logout":', 1)[1].split("log(f", 1)[0]
+        self.assertIn("set_intent(False)", block)
+        self.assertIn("set_intent(False, STATS_INTENT)", block)
+
+    def test_new_words_are_known(self):
+        self.assertIn("stats_on", self.m.MODES)
+        self.assertIn("stats_off", self.m.MODES)
+
+    def test_active_checks_are_per_target(self):
+        m = load()
+        cfg = {"Web": {"b.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8780"}}}, "b.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8781"}}}},
+               "AllowFunnel": {"b.ts.net:8443": True}}
+        self.assertTrue(m.stats_active(cfg))
+        self.assertFalse(m.funnel_active(cfg))                        # nur die Statistik ist öffentlich
+        cfg["AllowFunnel"] = {"b.ts.net:443": True}
+        self.assertFalse(m.stats_active(cfg))
+        self.assertTrue(m.funnel_active(cfg))
 
 
 class ClockJump(unittest.TestCase):
