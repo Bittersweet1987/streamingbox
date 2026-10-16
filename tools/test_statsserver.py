@@ -504,6 +504,104 @@ class MeasuredFpsInStatus(unittest.TestCase):
         self.assertIn("pipbox_live.read_fps()", send)
 
 
+class ProbedFps(unittest.TestCase):
+    """Bildrate von Handys, bevor die Sendung läuft: der Stream wird kurz gelesen und es werden Bilder gezählt."""
+
+    OUT = ("/GstPipeline:pipeline0/GstFPSDisplaySink:fpsdisplaysink0: last-message = rendered: 31, dropped: 0, current: 31.96, average: 31.96" + chr(10) +
+           "/GstPipeline:pipeline0/GstFPSDisplaySink:fpsdisplaysink0: last-message = rendered: 62, dropped: 0, current: 28.99, average: 30.48" + chr(10) +
+           "/GstPipeline:pipeline0/GstFPSDisplaySink:fpsdisplaysink0: last-message = rendered: 93, dropped: 0, current: 30.99, average: 30.65" + chr(10))
+
+    def wait(self, pr, key, fps):
+        for _ in range(100):
+            time.sleep(0.02)
+            v = pr.get(key)
+            if v == fps:
+                return v
+        return pr.get(key)
+
+    def test_parse_averages_the_seconds_after_the_first_and_rounds_to_a_common_rate(self):
+        self.assertEqual(server.FpsProbe.parse(self.OUT), 30.0)                    # (28,99 + 30,99) / 2 = 29,99; die erste Sekunde zählt das Anlaufen mit
+        line = "rendered: %d, dropped: 0, current: %s, average: 1.0" + chr(10)
+        self.assertEqual(server.FpsProbe.parse(line % (20, "25.0") + line % (80, "59.2") + line % (140, "59.6")), 60.0)
+        self.assertEqual(server.FpsProbe.parse(line % (20, "25.0") + line % (44, "24.1") + line % (68, "24.2")), 24.0)
+        self.assertEqual(server.FpsProbe.parse(line % (20, "25.0") + line % (35, "15.0") + line % (50, "15.04")), 15.0)
+        self.assertEqual(server.FpsProbe.parse(line % (20, "25.0") + line % (41, "20.5") + line % (62, "20.5")), 20.5)
+
+    def test_too_few_frames_or_garbage_give_nothing(self):
+        line = "rendered: %d, dropped: 0, current: %s, average: 1.0" + chr(10)
+        self.assertIsNone(server.FpsProbe.parse(line % (10, "30.0")))               # nur eine Messung
+        self.assertIsNone(server.FpsProbe.parse(line % (10, "30.0") + line % (20, "30.0")))     # zu wenige Bilder
+        self.assertIsNone(server.FpsProbe.parse(line % (50, "30.0") + line % (50, "0.0")))      # steht
+        self.assertIsNone(server.FpsProbe.parse(""))
+        self.assertIsNone(server.FpsProbe.parse(None))
+        self.assertIsNone(server.FpsProbe.parse("kein Stream da"))
+
+    def test_get_measures_in_the_background_and_caches(self):
+        calls = []
+        pr = server.FpsProbe(runner=lambda k: calls.append(k) or self.OUT)
+        self.assertIsNone(pr.get("cam2"))                                  # blockiert nie: der erste Aufruf liefert noch nichts
+        self.assertEqual(self.wait(pr, "cam2", 30.0), 30.0)
+        for _ in range(5):
+            self.assertEqual(pr.get("cam2"), 30.0)
+        self.assertEqual(calls, ["cam2"])                                  # innerhalb der Gültigkeit keine neue Messung
+
+    def test_only_one_measurement_at_a_time(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow(k):
+            started.set()
+            release.wait(3)
+            return self.OUT
+        pr = server.FpsProbe(runner=slow)
+        pr.get("cam2")
+        self.assertTrue(started.wait(2))
+        pr.get("cam3")                                                      # läuft schon eine: diese Kamera wartet auf die nächste Runde
+        self.assertEqual(pr.cache.get("cam3"), None)
+        release.set()
+        self.assertEqual(self.wait(pr, "cam2", 30.0), 30.0)
+
+    def test_a_failed_measurement_keeps_a_young_value_and_is_retried_soon(self):
+        outs = [self.OUT, "nichts"]
+        pr = server.FpsProbe(runner=lambda k: outs.pop(0))
+        pr.get("cam2")
+        self.assertEqual(self.wait(pr, "cam2", 30.0), 30.0)
+        pr.cache["cam2"] = (time.monotonic() - pr.TTL_S - 1, 30.0)           # abgelaufen: wird neu gemessen
+        pr.get("cam2")
+        deadline = time.time() + 2
+        while pr.busy and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(pr.get("cam2"), 30.0)                              # die Messung scheiterte, der junge Wert bleibt
+
+    def test_keep_forgets_cameras_that_are_not_live(self):
+        pr = server.FpsProbe(runner=lambda k: self.OUT)
+        pr.cache = {"cam2": (time.monotonic(), 30.0), "cam3": (time.monotonic(), 25.0)}
+        pr.keep({"cam2"})
+        self.assertEqual(list(pr.cache), ["cam2"])
+
+    def test_unsafe_keys_and_demo_are_never_measured(self):
+        calls = []
+        pr = server.FpsProbe(runner=lambda k: calls.append(k) or self.OUT)
+        for bad in ("../x", "a b", "", None, 5, "cam2; rm -rf /"):
+            self.assertIsNone(pr.get(bad))
+        self.assertIsNone(server.FpsProbe(demo=True, runner=lambda k: calls.append(k) or self.OUT).get("cam2"))
+        time.sleep(0.2)
+        self.assertEqual(calls, [])
+
+    def test_the_command_reads_one_stream_without_a_shell_and_counts_frames_only(self):
+        src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read().split("class FpsProbe", 1)[1].split("class LayoutStore", 1)[0]
+        self.assertIn('"fpsdisplaysink"', src)
+        self.assertIn('"h264parse"', src)
+        self.assertNotIn("shell=True", src)
+        self.assertNotIn("avdec", src)                                      # kein Dekodieren
+
+    def test_status_uses_it_for_cameras_without_a_rate(self):
+        body = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read().split("def metrics_data", 1)[1].split("return m", 1)[0]
+        self.assertIn("self.fpsprobe.get(", body)
+        self.assertIn("self.fpsprobe.keep(", body)
+        self.assertLess(body.index("measured_fps()"), body.index("fps_for_key"))
+        self.assertLess(body.index("fps_for_key"), body.index("self.fpsprobe.get("))      # erst nginx, dann belacoder, dann die eingestellte Rate der DJI-Kamera, zuletzt die Messung
+
+
 class RemoteSplit(unittest.TestCase):
     """Die öffentliche Statistik (Port 8443) und die Oberfläche (Port 443) sind getrennt: jede hat ihren eigenen Zustand."""
 
