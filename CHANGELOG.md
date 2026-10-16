@@ -2,6 +2,13 @@
 
 Ältere Versionen (0.1.0 bis 0.9.199) stehen in [CHANGELOG-Archiv.md](CHANGELOG-Archiv.md).
 
+## 1.0.57
+- Die Verzögerung der Kameras verschiebt jetzt wirklich Bild und Ton (bis 3000 ms, vorher ohne Wirkung, höchstens 750). Nötig: belacoder wird beim Update neu gebaut.
+
+## 1.0.56
+- Behoben: Bei starkem Bitratenabfall konnten Bild und Ton aussetzen. Der Regler reagiert jetzt früher (Meldung von Bittersweet, Issue #1).
+- Behoben: Die DJI Osmo Action 6 riss etwa jede Minute ab und war nie als sendend erkannt. Die Kamera hängt dem Streamnamen ein Leerzeichen an, das wird jetzt abgefangen.
+
 ## 1.0.55
 - **Öffentliche Statistik für OBS und Homepage (Wunsch von Bittersweet, 16. Oktober 2026).** Neuer Abschnitt „Statistik öffentlich“ in der Karte „Fernzugriff“: Ein Schalter gibt **nur die Statistik** (Sendewege, Bitrate, Verlust, Temperaturen, Kameras, Meldungen; auswählbar) über Tailscale Funnel auf Port 8443 frei. Die Oberfläche der Box (Port 443) bleibt davon unberührt und kann privat bleiben. Die Adresse ist fest, auch wenn die Box ihr Netz wechselt (Mobilfunk), und der Betrachter braucht kein Tailscale. Die Seite `statistik.html` (zum Herunterladen mit eingetragener Adresse, oder als Seitenadresse direkt in OBS) verbindet sich per WebSocket und zeigt jede Sekunde den Stand; Farben, Schwellen, Namen der Sendewege und Teile lassen sich in der Adresse einstellen (`?every=2&bg=transparent&show=net,temp&names=eth1:Vodafone`). Zugriff nur mit einem geheimen Schlüssel in der Adresse (erneuerbar), höchstens 3 Betrachter gleichzeitig, Zugriffsbegrenzung je Absender; im Schnappschuss stehen nie IP-/MAC-Adressen, Stream-ID, Serveradresse oder WLAN-Namen. Technik: kleiner eigener Statistik-Server auf `127.0.0.1:8781` im Webserver der Box (`/ws`, `/stats`, `/health`, die Seite); alles andere antwortet mit 404. Last: auf der Box von Bittersweet mit 3 Betrachtern über die öffentliche Adresse zusammen nur wenige Prozent eines Kerns.
 - **Freigaben getrennt:** „Freigabe beenden“ und „Öffentliche Freigabe beenden“ entfernen nur noch die eigene Freigabe (je Port, vorher setzte `funnel reset` alle zurück). Die Selbstheilung nach Stromausfall (1.0.54) prüft Oberfläche und Statistik getrennt, mit eigenem Merkzettel.

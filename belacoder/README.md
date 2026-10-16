@@ -4,6 +4,8 @@ Fünf Patches für `belacoder.c`, in dieser Reihenfolge angewendet von `build.sh
 
 Sechster Patch `belacoder-audio-eos.patch`: Das Ende einer Kamera (EOS, zum Beispiel das Handy hört auf zu senden) wird am letzten Puffer des Ton-Zweigs abgefangen und erreicht den Ton-Umschalter `asel` nicht. Der Umschalter gibt das EOS seines aktiven Pads sonst an Opus-Encoder und Muxer weiter, und dort ist es endgültig: Nach dem Ausfall der Hauptkamera blieb der Ton der ganzen Sendung weg (Testbox, 15. Oktober 2026; Bild und Ton standen in OBS). Abschaltbar mit `SB_FEED_AUDIO_EOS=0`.
 
+Siebter Patch `belacoder-feed-shift.patch`: Neuer Steuerbefehl `shift <Zweig> <ms>` verschiebt Bild und Ton einer Kamera um die eingestellte Verzögerung. Kennung: `-sb12-eos-sh`.
+
 `belacoder-jitter-tolerant.patch` ändert die Funktion `update_bitrate()` in `belacoder.c` aus
 [BELABOX/belacoder](https://github.com/BELABOX/belacoder) (Commit `ccce9ca33c8e425b33353500b95795101e847964`, Lizenz **GPL-3.0**). Alle
 Patches stehen unter derselben Lizenz (GPL-3.0, nicht MIT wie der Rest dieses Pakets); der Quelltext des gebauten Programms ist:
